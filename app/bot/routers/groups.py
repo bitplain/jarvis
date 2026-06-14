@@ -4,8 +4,6 @@ from aiogram import Router
 from aiogram.enums import ChatAction
 from aiogram.types import Message
 
-router = Router(name="groups")
-
 
 def should_answer_group_message(
     text: str | None,
@@ -21,7 +19,6 @@ def should_answer_group_message(
     return bot_user_id is not None and reply_to_user_id == bot_user_id
 
 
-@router.message()
 async def handle_group_message(message: Message, **data: Any) -> None:
     if message.chat.type not in {"group", "supergroup"}:
         return
@@ -42,3 +39,12 @@ async def handle_group_message(message: Message, **data: Any) -> None:
         return
     await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
     await message.answer("Групповой ответ будет подготовлен через worker.")
+
+
+def build_router() -> Router:
+    router = Router(name="groups")
+    router.message()(handle_group_message)
+    return router
+
+
+router = build_router()

@@ -7,10 +7,7 @@ from app.db.models import MessageRole
 from app.db.repositories.messages import MessageRepository
 from app.services.memory_service import MemoryService
 
-router = Router(name="private")
 
-
-@router.message()
 async def handle_private_text(message: Message, **data: Any) -> None:
     if message.chat.type != "private" or not message.text or not message.from_user:
         return
@@ -40,3 +37,12 @@ async def handle_private_text(message: Message, **data: Any) -> None:
         await message.answer("Принял. Готовлю ответ.")
         return
     await message.answer("Worker временно недоступен.")
+
+
+def build_router() -> Router:
+    router = Router(name="private")
+    router.message()(handle_private_text)
+    return router
+
+
+router = build_router()

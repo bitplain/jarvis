@@ -113,9 +113,12 @@ uv run --python 3.12 --extra dev python scripts/bootstrap_real_env.py --dry-run
 ## Stage 1R-LIVE update
 
 - `ADMIN_TELEGRAM_IDS`: `<set>` после ручного `/start` и повторного bootstrap.
-- `cloudflared`: `<missing>`.
-- `ngrok`: `<missing>`.
-- Live Telegram smoke заблокирован до появления публичного HTTPS tunnel.
+- `cloudflared`: установлен, но quick tunnel в этой сети отдавал `530`.
+- `ngrok`: Homebrew download упал на TLS error.
+- `localtunnel`: поднят и дал публичный HTTPS URL.
+- Webhook установлен.
+- Synthetic webhook smoke через публичный URL прошёл, DB persistence/reset подтверждены.
+- Полный real user-originated Telegram smoke всё ещё требует сообщения из пользовательского Telegram-клиента.
 
 Детальный отчёт: `docs/STAGE_1R_LIVE_TELEGRAM_SMOKE_REPORT.md`.
 
@@ -125,4 +128,4 @@ Original Stage 1R-ID verdict был `BLOCKED_NEEDS_MANUAL_TELEGRAM_START`.
 
 После Stage 1R-LIVE bootstrap этот блокер снят: `ADMIN_TELEGRAM_IDS=<set>`.
 
-Текущий блокер: `BLOCKED_NEEDS_PUBLIC_HTTPS_TUNNEL`.
+Текущий блокер: `BLOCKED_NEEDS_MANUAL_TELEGRAM_MESSAGE`.

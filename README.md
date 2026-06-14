@@ -56,6 +56,14 @@ uv run --python 3.12 --extra dev python scripts/bootstrap_real_env.py --apply --
 Для локального Telegram webhook без сервера нужен публичный HTTPS tunnel до `http://localhost:8000`.
 Инструкция: `docs/STAGE_1R_TUNNEL_SETUP.md`.
 
+Webhook и LLM smoke:
+
+```bash
+uv run --python 3.12 --extra dev python scripts/set_telegram_webhook.py
+uv run --python 3.12 --extra dev python scripts/set_telegram_webhook.py --info
+uv run --python 3.12 --extra dev python scripts/smoke_llm.py
+```
+
 ## Обязательные переменные
 
 Для локального каркаса без реальных Telegram/LLM вызовов достаточно значений из `.env.example`.

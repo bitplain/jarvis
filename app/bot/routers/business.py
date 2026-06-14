@@ -1,6 +1,5 @@
 from aiogram import Router
 
-router = Router(name="business")
 BUSINESS_UPDATE_KEYS = {
     "business_connection",
     "business_message",
@@ -11,3 +10,10 @@ BUSINESS_UPDATE_KEYS = {
 
 async def secretary_mode_not_implemented() -> None:
     raise NotImplementedError("Secretary Mode переносится на Stage 3.")
+
+
+def build_router() -> Router:
+    return Router(name="business")
+
+
+router = build_router()

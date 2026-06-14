@@ -19,6 +19,16 @@ logger = logging.getLogger(__name__)
 USER_ERROR_MESSAGE = "Не получилось подготовить ответ. Попробуйте позже."
 
 
+async def try_send_chat_action(bot: Bot, *, chat_id: int) -> None:
+    try:
+        await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+    except Exception as exc:
+        logger.warning(
+            "telegram_chat_action_failed",
+            extra={"error_type": type(exc).__name__},
+        )
+
+
 async def process_llm_message(ctx: dict[str, Any], payload: dict[str, Any]) -> None:
     del ctx
     settings = get_settings()
@@ -44,12 +54,12 @@ async def process_llm_message(ctx: dict[str, Any], payload: dict[str, Any]) -> N
                             await draft.publish(chat_id=chat_id, text=final_text)
                             buffer.mark_flushed(now=time.monotonic())
                         except TelegramDraftNotAvailable:
-                            await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+                            await try_send_chat_action(bot, chat_id=chat_id)
                 if not final_text:
                     response = await provider.complete(messages)
                     final_text = response.content
             else:
-                await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+                await try_send_chat_action(bot, chat_id=chat_id)
                 response = await provider.complete(messages)
                 final_text = response.content
         except LLMProviderError as exc:

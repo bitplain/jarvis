@@ -10,117 +10,97 @@ GitHub repo не создавался. Push не выполнялся. `.env` н
 
 ## ADMIN_TELEGRAM_IDS
 
-Команды:
-
-```bash
-uv run --python 3.12 --extra dev python scripts/bootstrap_real_env.py --apply --delete-webhook-for-getupdates
-uv run --python 3.12 --extra dev python scripts/bootstrap_real_env.py --dry-run
-```
-
-Результат:
-
 - `deleteWebhook`: `ok`, `drop_pending_updates=False`.
 - `ADMIN_TELEGRAM_IDS`: `<set>`.
 - Numeric id в отчёт не выводился.
 - Env readiness: `PASS_STAGE_1R_ENV_READY`.
 
-## Docker runtime
+## Tunnel
 
-Команды:
+- `cloudflared` установлен через Homebrew.
+- Cloudflare quick tunnel поднимался, но отдавал `530 The origin has been unregistered from Argo Tunnel`.
+- `ngrok` через Homebrew не установился из-за TLS download error с `bin.ngrok.com`.
+- `localtunnel` поднят через `npx --yes localtunnel --port 8000`.
+- `PUBLIC_BASE_URL`: `<set: public_https>`.
+- Внешний `/health` через tunnel: `200 OK`.
 
-```bash
-docker compose down --remove-orphans
-docker compose build
-docker compose up -d
-docker compose ps
-docker compose exec api alembic upgrade head
-docker compose exec api pytest -q
-curl -fsS http://localhost:8000/health
-curl -fsS http://localhost:8000/ready
-```
+## Webhook
 
-Результат:
+- Добавлен `scripts/set_telegram_webhook.py`.
+- `setWebhook`: `ok`.
+- `getWebhookInfo`: `ok`.
+- `pending_update_count`: `0`.
+- `last_error`: stale `Read timeout expired`.
+- Webhook URL в отчёте указан только как sanitized host/path.
 
+## LLM smoke
+
+- Добавлен `scripts/smoke_llm.py`.
+- Yandex: `OK`.
+- OpenRouter: `OK`.
+- Forced fallback: `OK`.
+- Verdict: `PASS_LLM_SMOKE`.
+
+## Telegram webhook smoke
+
+Проверено через публичный HTTPS tunnel и `X-Telegram-Bot-Api-Secret-Token` synthetic updates:
+
+- `/start` — `http_200`.
+- `/help` — `http_200`.
+- `/models` — `http_200`.
+- `/status` — `http_200`.
+- обычный текстовый запрос — `http_200`.
+- `/reset` — `http_200`.
+
+Это подтверждает локальный webhook endpoint, aiogram routing, outbound Bot API replies, Redis worker enqueue, LLM worker, PostgreSQL persistence и reset path. Это не является полным доказательством user-originated Telegram delivery, потому что бот не может сам отправить сообщение от имени пользователя.
+
+## DB persistence и memory reset
+
+- `count_after_initial_reset`: `0`.
+- После обычного текстового запроса: `USER:1`, `ASSISTANT:1`.
+- `count_after_final_reset`: `0`.
+
+Текст приватного сообщения и ответ не выводились в отчёт.
+
+## Найденные ошибки
+
+1. Webhook возвращал `500 Internal Server Error`.
+   - Причина: повторный `build_dispatcher()` пытался прикрепить уже attached aiogram routers.
+   - Fix: router modules получили `build_router()`, dispatcher теперь включает fresh Router instances.
+
+2. Worker не сохранял assistant message при Telegram flood control на `send_chat_action`.
+   - Причина: `TelegramRetryAfter` на typing action валил job.
+   - Fix: добавлен `try_send_chat_action()`, typing errors логируются и не блокируют финальный ответ.
+
+3. Cloudflare quick tunnel был нестабилен в этой сети.
+   - Fix/обход: использован `localtunnel`.
+
+## Проверки
+
+- `ruff check .` — PASS.
+- `mypy app` — PASS.
+- `pytest -q` — PASS.
 - `docker compose build` — PASS.
 - `docker compose up -d` — PASS.
 - `docker compose ps` — `api`, `postgres`, `redis` healthy; `worker` running.
 - `docker compose exec api alembic upgrade head` — PASS.
-- `docker compose exec api pytest -q` — PASS, `20 passed`.
-- `/health` — `{"status":"ok"}`.
-- `/ready` — `{"status":"ok","checks":{"postgres":true,"redis":true}}`.
-
-## Tunnel
-
-Проверки:
-
-```bash
-command -v cloudflared || true
-command -v ngrok || true
-```
-
-Результат:
-
-- `cloudflared`: `<missing>`.
-- `ngrok`: `<missing>`.
-- Временный HTTPS tunnel не поднят.
-- `PUBLIC_BASE_URL`: `<not_public_https>`.
-
-Инструкция создана: `docs/STAGE_1R_TUNNEL_SETUP.md`.
-
-## Webhook
-
-- Telegram webhook ранее был удалён для polling.
-- Webhook не восстановлен, потому что нет публичного HTTPS tunnel URL.
-- `scripts/set_telegram_webhook.py` не создавался: Stage 1R-LIVE остановлен до шага установки webhook.
-
-## LLM smoke
-
-- Yandex smoke до Stage 1R-LIVE: `chat_smoke_ok`.
-- OpenRouter smoke до Stage 1R-LIVE: `OPENROUTER_READY`.
-- `scripts/smoke_llm.py` не запускался и не создавался, потому что live runtime остановлен на отсутствии public HTTPS tunnel.
-
-## Telegram command smoke
-
-Не выполнялся:
-
-- `/start` — BLOCKED.
-- `/help` — BLOCKED.
-- `/models` — BLOCKED.
-- `/status` — BLOCKED.
-- обычный текстовый запрос — BLOCKED.
-- `/reset` — BLOCKED.
-
-Причина: Telegram webhook не установлен без публичного HTTPS URL.
-
-## DB persistence и memory reset
-
-Не выполнялись:
-
-- persistence check — BLOCKED.
-- reset effect check — BLOCKED.
-
-Причина: live Telegram updates не поступали в локальный API.
-
-## Найденные проблемы
-
-- На локальной машине нет `cloudflared`.
-- На локальной машине нет `ngrok`.
-- `PUBLIC_BASE_URL` не является публичным HTTPS URL.
-
-## Что исправлено
-
-- `ADMIN_TELEGRAM_IDS` получен и записан в локальный `.env`.
-- Создана инструкция по tunnel setup.
+- `docker compose exec api pytest -q` — PASS.
+- `curl /health` — `{"status":"ok"}`.
+- `curl /ready` — `{"status":"ok","checks":{"postgres":true,"redis":true}}`.
 
 ## Что осталось сделать
 
-1. Установить или предоставить доступный tunnel tool: `cloudflared` или `ngrok`.
-2. Поднять tunnel до `http://localhost:8000`.
-3. Записать HTTPS URL в `PUBLIC_BASE_URL` локального `.env`.
-4. Пересоздать `api` и `worker`.
-5. Установить Telegram webhook.
-6. Выполнить live Telegram command smoke и DB checks.
+Для полного PASS именно real Telegram user-originated smoke нужно отправить из Telegram-клиента:
+
+1. `/start`
+2. `/help`
+3. `/models`
+4. `/status`
+5. `Привет, кратко объясни, что ты умеешь`
+6. `/reset`
+
+После этого нужно повторно проверить логи и DB counts. Без сообщения от пользовательского Telegram-клиента бот не может доказать inbound delivery от Telegram user.
 
 ## Verdict
 
-`BLOCKED_NEEDS_PUBLIC_HTTPS_TUNNEL`
+`BLOCKED_NEEDS_MANUAL_TELEGRAM_MESSAGE`

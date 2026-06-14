@@ -54,6 +54,22 @@ ngrok http 8000
 
 Взять HTTPS URL из вывода и записать его в `PUBLIC_BASE_URL` локального `.env`.
 
+## Вариант C: localtunnel
+
+Если `cloudflared` нестабилен, а `ngrok` недоступен, можно использовать `localtunnel`:
+
+```bash
+npx --yes localtunnel --port 8000
+```
+
+В выводе будет URL вида:
+
+```text
+https://xxxxx.loca.lt
+```
+
+Записать его в `PUBLIC_BASE_URL` локального `.env`, затем пересоздать API и worker.
+
 ## После tunnel
 
 Когда `PUBLIC_BASE_URL` указывает на публичный HTTPS URL:
