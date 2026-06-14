@@ -12,7 +12,6 @@ from app.bot.routers.business import BUSINESS_UPDATE_KEYS
 from app.core.config import Settings, get_settings
 from app.db.session import get_session
 from app.services.business_service import BusinessService
-from app.services.guest_service import GuestService
 
 router = APIRouter(prefix="/telegram")
 
@@ -36,9 +35,6 @@ async def telegram_webhook(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Telegram token is not configured",
         )
-    if "guest_message" in payload:
-        await GuestService().record_guest_message(payload)
-        return {"status": "accepted"}
     for key in BUSINESS_UPDATE_KEYS:
         if key in payload:
             await BusinessService().record_business_event(key, payload)

@@ -79,6 +79,8 @@ Stage 1R-LIVE tunnel/live smoke status: `docs/STAGE_1R_LIVE_TELEGRAM_SMOKE_REPOR
 
 Stage 1R-FINAL-LIVE user-originated Telegram smoke: `docs/STAGE_1R_FINAL_LIVE_TELEGRAM_REPORT.md`.
 
+Stage 2 Guest Mode code/report: `docs/STAGE_2_GUEST_MODE_REPORT.md`.
+
 ## Куда вставить секреты
 
 Только в локальный `.env`:
@@ -113,7 +115,6 @@ Model IDs и Telegram IDs также только в `.env`:
 
 ## Отложено
 
-- Guest Mode — Stage 2: `answerGuestQuery`, `guest_query_id`, полноценный guest response.
 - Secretary / Business Mode — Stage 3: права Business API, `business_connection_id`, ответы через business connection.
 - Mini App — отдельный этап.
 

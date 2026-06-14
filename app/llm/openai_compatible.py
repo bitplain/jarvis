@@ -38,14 +38,23 @@ class OpenAICompatibleProvider(LLMProvider):
             **self.extra_headers,
         }
 
-    def _payload(self, messages: list[LLMMessage], *, stream: bool) -> dict[str, Any]:
-        return {
+    def _payload(
+        self,
+        messages: list[LLMMessage],
+        *,
+        stream: bool,
+        max_tokens: int | None = None,
+    ) -> dict[str, Any]:
+        payload = {
             "model": self.model,
             "messages": [
                 {"role": message.role, "content": message.content} for message in messages
             ],
             "stream": stream,
         }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        return payload
 
     def _raise_for_status(self, response: httpx.Response) -> None:
         if response.status_code < 400:
@@ -62,14 +71,19 @@ class OpenAICompatibleProvider(LLMProvider):
             code = "server_error"
         raise LLMProviderError(code, retryable=retryable)
 
-    async def complete(self, messages: list[LLMMessage]) -> LLMResponse:
+    async def complete(
+        self,
+        messages: list[LLMMessage],
+        *,
+        max_tokens: int | None = None,
+    ) -> LLMResponse:
         self._ensure_configured()
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.post(
                     f"{self.base_url}/chat/completions",
                     headers=self._headers(),
-                    json=self._payload(messages, stream=False),
+                    json=self._payload(messages, stream=False, max_tokens=max_tokens),
                 )
             self._raise_for_status(response)
             payload = response.json()

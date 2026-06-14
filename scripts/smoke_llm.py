@@ -16,7 +16,12 @@ from app.llm.yandex import YandexAIStudioProvider
 class Completer(Protocol):
     name: str
 
-    async def complete(self, messages: list[LLMMessage]) -> LLMResponse:
+    async def complete(
+        self,
+        messages: list[LLMMessage],
+        *,
+        max_tokens: int | None = None,
+    ) -> LLMResponse:
         ...
 
 
@@ -36,7 +41,13 @@ class SmokeResult:
 class RetryableFailingProvider:
     name = "forced-yandex"
 
-    async def complete(self, messages: list[LLMMessage]) -> LLMResponse:
+    async def complete(
+        self,
+        messages: list[LLMMessage],
+        *,
+        max_tokens: int | None = None,
+    ) -> LLMResponse:
+        del max_tokens
         raise LLMProviderError("forced_failure", retryable=True)
 
 

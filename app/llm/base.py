@@ -14,7 +14,12 @@ class LLMProvider(ABC):
     name: str
 
     @abstractmethod
-    async def complete(self, messages: list[LLMMessage]) -> LLMResponse:
+    async def complete(
+        self,
+        messages: list[LLMMessage],
+        *,
+        max_tokens: int | None = None,
+    ) -> LLMResponse:
         raise NotImplementedError
 
     @abstractmethod

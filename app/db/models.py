@@ -26,6 +26,13 @@ class LLMRequestStatus(StrEnum):
     FAILED = "failed"
 
 
+class GuestMessageStatus(StrEnum):
+    RECEIVED = "received"
+    ANSWERED = "answered"
+    FAILED = "failed"
+    IGNORED = "ignored"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -106,12 +113,34 @@ class BusinessConnectionStub(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-class GuestMessageStub(Base):
+class GuestMessageRecord(Base):
     __tablename__ = "guest_messages_stub"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    telegram_update_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
+    guest_query_id_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    caller_user_id_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    caller_chat_id_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    request_text: Mapped[str] = mapped_column(Text, default="")
+    replied_text: Mapped[str | None] = mapped_column(Text)
+    response_text: Mapped[str | None] = mapped_column(Text)
+    provider: Mapped[str | None] = mapped_column(String(64))
+    model: Mapped[str | None] = mapped_column(String(255))
+    status: Mapped[GuestMessageStatus] = mapped_column(
+        Enum(
+            GuestMessageStatus,
+            name="guest_message_status",
+            values_callable=lambda enum_class: [status.value for status in enum_class],
+        ),
+        default=GuestMessageStatus.RECEIVED,
+    )
+    error_code: Mapped[str | None] = mapped_column(String(128))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+GuestMessageStub = GuestMessageRecord
 
 
 Index("ix_messages_chat_created", Message.chat_id, Message.created_at)

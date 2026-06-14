@@ -24,6 +24,20 @@
 
 Бот отвечает только если его явно упомянули через `@bot_username` или сообщение является reply на сообщение бота. Streaming в группах не используется.
 
+## Guest Mode
+
+Guest Mode обрабатывает Telegram update type `guest_message` через отдельный aiogram router.
+Роутер извлекает `guest_query_id`, текст guest-вызова, caller user/chat и replied message, если Telegram их передал.
+Если `guest_query_id` отсутствует, бот не отвечает и сохраняет диагностический `ignored` record.
+
+Guest Mode по умолчанию выключен: `GUEST_MODE_ENABLED=false`.
+При `GUEST_MODE_ADMIN_ONLY=true` LLM вызывается только для caller user из `ADMIN_TELEGRAM_IDS`; если Telegram не передал caller user id, возвращается отказ владельца.
+Ответ отправляется только одним финальным `answerGuestQuery` через typed aiogram method.
+Streaming, `sendMessageDraft`, обычная chat memory и постоянная память чужого guest-чата в этом потоке не используются.
+
+Guest prompt содержит только текст guest-вызова и replied message.
+Если replied message недоступен, prompt требует честно сказать, что контекста не видно, когда пользователь ссылается на "это", "выше" или "предыдущее".
+
 ## LLM
 
 Публичный контракт:
@@ -41,7 +55,8 @@ Yandex и OpenRouter используют OpenAI-compatible HTTP API. Base URL, 
 
 ## Stubs
 
-Guest Mode и Secretary Mode имеют отдельные router/service stubs. Они логируют/сохраняют факт события, но не отвечают пользователю и не имитируют готовые права.
+Secretary Mode имеет отдельные router/service stubs. Они логируют/сохраняют факт события, но не отвечают пользователю и не имитируют готовые права.
+Guest Mode реализован в Stage 2 и хранит записи в совместимой таблице `guest_messages_stub`.
 
 ## Безопасность
 

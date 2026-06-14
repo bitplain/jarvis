@@ -14,9 +14,14 @@ class FallbackLLMProvider(LLMProvider):
         self.primary = primary
         self.fallback = fallback
 
-    async def complete(self, messages: list[LLMMessage]) -> LLMResponse:
+    async def complete(
+        self,
+        messages: list[LLMMessage],
+        *,
+        max_tokens: int | None = None,
+    ) -> LLMResponse:
         try:
-            return await self.primary.complete(messages)
+            return await self.primary.complete(messages, max_tokens=max_tokens)
         except LLMProviderError as exc:
             if not exc.retryable:
                 raise
@@ -24,7 +29,7 @@ class FallbackLLMProvider(LLMProvider):
                 "primary_llm_failed_trying_fallback",
                 extra={"provider": self.primary.name, "error_code": exc.code},
             )
-            return await self.fallback.complete(messages)
+            return await self.fallback.complete(messages, max_tokens=max_tokens)
 
     async def stream(self, messages: list[LLMMessage]) -> AsyncIterator[LLMStreamChunk]:
         try:

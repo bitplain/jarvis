@@ -24,7 +24,13 @@ class WorkingProvider:
         self.name = name
         self.model = f"{name}-model"
 
-    async def complete(self, messages: list[LLMMessage]) -> LLMResponse:
+    async def complete(
+        self,
+        messages: list[LLMMessage],
+        *,
+        max_tokens: int | None = None,
+    ) -> LLMResponse:
+        del max_tokens
         return LLMResponse(content="тест", provider=self.name, model=self.model)
 
     async def stream(self, messages: list[LLMMessage]):
@@ -35,7 +41,13 @@ class WorkingProvider:
 
 
 class FailingProvider(WorkingProvider):
-    async def complete(self, messages: list[LLMMessage]) -> LLMResponse:
+    async def complete(
+        self,
+        messages: list[LLMMessage],
+        *,
+        max_tokens: int | None = None,
+    ) -> LLMResponse:
+        del max_tokens
         raise LLMProviderError("rate_limited", retryable=True)
 
 

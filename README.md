@@ -76,6 +76,9 @@ uv run --python 3.12 --extra dev python scripts/smoke_llm.py
 - `TELEGRAM_WEBHOOK_SECRET`
 - `ADMIN_TELEGRAM_IDS`
 - `ADMIN_API_TOKEN`
+- `GUEST_MODE_ENABLED`
+- `GUEST_MODE_ADMIN_ONLY`
+- `GUEST_MODE_MAX_TOKENS`
 - `YANDEX_AI_BASE_URL`
 - `YANDEX_AI_API_KEY`
 - `YANDEX_AI_MODEL`
@@ -97,8 +100,20 @@ Model IDs не заданы в коде намеренно. Их нужно за
 - `POST /telegram/webhook` — вход Telegram updates.
 - `GET /admin/models` — диагностика моделей Yandex/OpenRouter, требует `Authorization: Bearer ${ADMIN_API_TOKEN}`.
 
+## Guest Mode
+
+Stage 2 реализует Telegram Guest Mode через update type `guest_message`.
+
+- Включается только через `GUEST_MODE_ENABLED=true`.
+- По умолчанию доступен только владельцу из `ADMIN_TELEGRAM_IDS`: `GUEST_MODE_ADMIN_ONLY=true`.
+- Отвечает одним финальным `answerGuestQuery`, без streaming и без `sendMessageDraft`.
+- Не использует обычную память личного/группового чата и не сохраняет постоянную память чужого guest-чата.
+- Учитывает только текст вызова и replied message, если Telegram его передал.
+
+Ручной smoke: `docs/STAGE_2_GUEST_MODE_REAL_SMOKE.md`.
+Итоговый отчёт: `docs/STAGE_2_GUEST_MODE_REPORT.md`.
+
 ## Отложенные части
 
-- Guest Mode — Stage 2.
 - Secretary / Business Mode — Stage 3.
 - Mini App — отдельный будущий этап.

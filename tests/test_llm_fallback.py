@@ -8,7 +8,13 @@ from app.llm.types import LLMMessage, LLMResponse
 class FailingProvider:
     name = "yandex"
 
-    async def complete(self, messages: list[LLMMessage]) -> LLMResponse:
+    async def complete(
+        self,
+        messages: list[LLMMessage],
+        *,
+        max_tokens: int | None = None,
+    ) -> LLMResponse:
+        del max_tokens
         raise LLMProviderError("rate_limited", retryable=True)
 
     async def stream(self, messages: list[LLMMessage]):
@@ -24,7 +30,13 @@ class WorkingProvider:
     def __init__(self) -> None:
         self.called = False
 
-    async def complete(self, messages: list[LLMMessage]) -> LLMResponse:
+    async def complete(
+        self,
+        messages: list[LLMMessage],
+        *,
+        max_tokens: int | None = None,
+    ) -> LLMResponse:
+        del max_tokens
         self.called = True
         return LLMResponse(content="ответ", provider=self.name, model="model")
 

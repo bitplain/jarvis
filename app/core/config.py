@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     memory_max_messages: int = Field(default=20, ge=1, le=200)
     llm_primary_provider: str = "yandex"
     llm_fallback_provider: str = "openrouter"
+    guest_mode_enabled: bool = False
+    guest_mode_admin_only: bool = True
+    guest_mode_max_tokens: int = Field(default=512, ge=1, le=4096)
 
     yandex_ai_base_url: str = ""
     yandex_ai_api_key: str = ""

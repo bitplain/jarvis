@@ -16,8 +16,15 @@ async def cmd_help(message: Message) -> None:
     await message.answer("/reset — очистить память\n/models — модели\n/status — статус")
 
 
-async def cmd_status(message: Message) -> None:
-    await message.answer("Статус: каркас Stage 1 активен.")
+async def cmd_status(message: Message, **data: Any) -> None:
+    settings = data["settings"]
+    guest_status = "enabled" if settings.guest_mode_enabled else "disabled"
+    guest_access = "admin-only" if settings.guest_mode_admin_only else "open"
+    await message.answer(
+        "Статус: Stage 2 активен.\n"
+        f"Guest Mode: {guest_status}\n"
+        f"Guest access: {guest_access}"
+    )
 
 
 async def cmd_models(message: Message, **data: Any) -> None:
