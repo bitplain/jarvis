@@ -214,6 +214,8 @@ Jarvis вернёт черновик. Пользователь сам копир
 
 Если бот добавлен в группу, он отвечает только на mention `@bot_username` или reply на сообщение бота.
 Если privacy mode Telegram ограничивает updates, Jarvis честно работает только с теми сообщениями, которые Telegram передал боту.
+Вызов `@bot_username`, который Telegram доставляет как `guest_message`, относится к Guest Mode и не доказывает работу Group Assistant.
+Для live smoke group mention/reply должны появиться как обычные group/supergroup `message` updates, создать regular memory запись и worker job.
 
 ### Guest Mode
 

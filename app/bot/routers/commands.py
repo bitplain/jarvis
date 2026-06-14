@@ -14,6 +14,17 @@ from app.llm.types import LLMMessage
 from app.services.memory_service import MemoryService
 
 
+def _command_argument(message: Message) -> str | None:
+    text = message.text or message.caption
+    if not text:
+        return None
+    parts = text.strip().split(maxsplit=1)
+    if len(parts) < 2 or not parts[0].startswith("/"):
+        return None
+    argument = parts[1].strip()
+    return argument or None
+
+
 async def cmd_start(message: Message) -> None:
     await message.answer("Jarvis готов. Пишите вопрос на русском языке.")
 
@@ -69,21 +80,36 @@ async def _handle_context_command(
     if session is None:
         await message.answer("Контекст доступен только в runtime с БД.")
         return
-    memory = MemoryService(MessageRepository(session), max_messages=settings.memory_max_messages)
-    recent = await memory.recent_messages(chat_id=message.chat.id)
-    if not recent:
+    inline_context = _command_argument(message)
+    if inline_context is None:
+        memory = MemoryService(
+            MessageRepository(session),
+            max_messages=settings.memory_max_messages,
+        )
+        recent = await memory.recent_messages(chat_id=message.chat.id)
+        if not recent:
+            await message.answer(
+                "Не вижу переданного контекста. Перешли сообщение боту или пришли текст."
+            )
+            return
+        context = "\n".join(item.content for item in recent[-5:])
+    else:
+        context = inline_context
+    if not context.strip():
         await message.answer(
             "Не вижу переданного контекста. Перешли сообщение боту или пришли текст."
         )
         return
-    context = "\n".join(item.content for item in recent[-5:])
     provider = data.get("llm_provider") or build_llm_provider(settings)
     prompts = {
         "summary": "Кратко перескажи переданный контекст на русском.",
         "draft_reply": (
             "Подготовь вежливый черновик ответа на русском. Не утверждай, что отправил его."
         ),
-        "translate": "Переведи переданный текст нормально на русский, сохрани смысл и тон.",
+        "translate": (
+            "Выполни перевод по запросу пользователя. Если целевой язык указан, "
+            "используй его; иначе переведи на русский. Не добавляй лишних пояснений."
+        ),
         "factcheck": "Проверь факты в тексте. Если не уверен, честно отметь, что нужна проверка.",
     }
     try:

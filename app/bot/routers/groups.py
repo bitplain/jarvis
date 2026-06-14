@@ -1,8 +1,12 @@
 from typing import Any
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.enums import ChatAction
 from aiogram.types import Message
+
+from app.db.models import MessageRole
+from app.db.repositories.messages import MessageRepository
+from app.services.memory_service import MemoryService
 
 
 def should_answer_group_message(
@@ -20,7 +24,7 @@ def should_answer_group_message(
 
 
 async def handle_group_message(message: Message, **data: Any) -> None:
-    if message.chat.type not in {"group", "supergroup"}:
+    if message.chat.type not in {"group", "supergroup"} or not message.from_user:
         return
     settings = data["settings"]
     if not settings.group_assistant_enabled:
@@ -39,13 +43,42 @@ async def handle_group_message(message: Message, **data: Any) -> None:
         bot_user_id=bot_user_id,
     ):
         return
+    memory = data.get("memory_service")
+    if not isinstance(memory, MemoryService):
+        session = data.get("db_session")
+        if session is None:
+            await message.answer("База данных временно недоступна.")
+            return
+        memory = MemoryService(
+            MessageRepository(session),
+            max_messages=settings.memory_max_messages,
+        )
+    await memory.add_message(
+        chat_id=message.chat.id,
+        user_id=message.from_user.id,
+        role=MessageRole.USER,
+        text=message.text or "",
+        telegram_message_id=message.message_id,
+    )
+    redis = data.get("redis")
+    if redis is None:
+        await message.answer("Worker временно недоступен.")
+        return
+    await redis.enqueue_job(
+        "process_llm_message",
+        {
+            "chat_id": message.chat.id,
+            "user_id": message.from_user.id,
+            "private": False,
+        },
+    )
     await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
-    await message.answer("Групповой ответ будет подготовлен через worker.")
+    await message.answer("Принял. Готовлю групповой ответ.")
 
 
 def build_router() -> Router:
     router = Router(name="groups")
-    router.message()(handle_group_message)
+    router.message(F.chat.type.in_({"group", "supergroup"}))(handle_group_message)
     return router
 
 

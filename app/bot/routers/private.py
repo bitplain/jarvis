@@ -1,6 +1,6 @@
 from typing import Any
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.types import Message
 
 from app.db.models import MessageRole
@@ -126,7 +126,7 @@ async def handle_private_text(message: Message, **data: Any) -> None:
 
 def build_router() -> Router:
     router = Router(name="private")
-    router.message()(handle_private_text)
+    router.message(F.chat.type == "private")(handle_private_text)
     return router
 
 

@@ -64,6 +64,15 @@
 - Group Assistant отвечает только на mention или reply на сообщение бота; не обещать чтение всей истории группы.
 - Readiness script `scripts/smoke_regular_readiness.py` не требует Business account и должен считать Business Mode optional/disabled нормальным состоянием.
 
+## Stage 3A-R-LIVE Regular Assistant Smoke
+
+- Live smoke для group assistant засчитывается только в настоящей Telegram group/supergroup, где бот добавлен участником.
+- Вызов `@bot_username` в чужом чате, который приходит как Telegram `guest_message`, относится к Guest Mode и не засчитывается как group assistant smoke.
+- Group plain message без mention/reply должен быть проигнорирован без LLM job и без записи в regular memory.
+- Group mention/reply smoke должен подтверждаться обычным `message` update, записью regular memory и worker job `process_llm_message(private=false)`.
+- Если BotFather Privacy Mode не доставляет обычный group mention в Bot API, mention smoke считается blocked до отключения privacy mode или другой настройки доставки updates; это нельзя засчитывать как PASS.
+- Команды `/summary`, `/draft_reply`, `/translate`, `/factcheck` должны принимать inline-аргумент после команды, включая форму `/command@bot_username`, а при пустом аргументе использовать доступный сохранённый контекст или честно просить контекст.
+
 ## Проверки
 
 Перед финальным отчётом выполнять:
