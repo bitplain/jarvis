@@ -81,6 +81,19 @@
 - Сообщение, состоящее только из `@bot_username`, должно отвечать коротко: `Напиши запрос после упоминания бота.`
 - `scripts/smoke_group_readiness.py` не должен вызывать `getUpdates` и не должен съедать ручные group updates.
 
+## Stage 3A-S Streaming UX
+
+- Release-hardening запрещён, пока Stage 3A-S не получил отдельный verified verdict.
+- Streaming включается только через env flags: `STREAMING_ENABLED`, `STREAMING_PRIVATE_DRAFT_ENABLED`, `STREAMING_GROUP_FALLBACK_ENABLED`.
+- Private chat path использует Telegram `sendMessageDraft` с non-zero `draft_id`, throttled `StreamBuffer`, затем финальный `sendMessage`.
+- Draft preview не считается постоянным сообщением; в БД сохраняется только финальный assistant response.
+- Если draft API недоступен или падает, текущий job должен перейти на sanitized fallback без вывода token/key/header.
+- Group/supergroup path не использует `sendMessageDraft`; fallback использует `sendChatAction typing`, provisional `Думаю...`, throttled `editMessageText` и финальный edit/send.
+- Guest Mode остаётся final-only: `guest_message -> LLM final answer -> answerGuestQuery`, без streaming, draft и group edit sink.
+- Business / Secretary auto-reply в Stage 3A-S не включается; разрешена только fallback abstraction с учётом `business_connection_id` для `sendChatAction`.
+- Readiness script `scripts/smoke_streaming_readiness.py` не должен вызывать `getUpdates` и не должен съедать ручные private/group/guest updates.
+- Live smoke Stage 3A-S засчитывается только по фактическим Telegram/logs/DB evidence; нельзя писать “должно работать”.
+
 ## Проверки
 
 Перед финальным отчётом выполнять:
@@ -101,6 +114,8 @@ curl -fsS http://localhost:8000/ready
 uv run --python 3.12 --extra dev python scripts/smoke_llm.py
 uv run --python 3.12 --extra dev python scripts/smoke_polling_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_regular_readiness.py
+uv run --python 3.12 --extra dev python scripts/smoke_group_readiness.py
+uv run --python 3.12 --extra dev python scripts/smoke_streaming_readiness.py
 git status --short
 ```
 

@@ -1,7 +1,11 @@
+import logging
+import secrets
 from collections.abc import Awaitable, Callable
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
-import httpx
+from app.bot.adapters.message_draft_api import TelegramMessageDraftApi
+
+logger = logging.getLogger(__name__)
 
 
 class TelegramDraftNotAvailable(Exception):
@@ -22,36 +26,88 @@ class TelegramPrivateDraftSink:
         self,
         bot: BotLike,
         *,
+        draft_id: int | None = None,
         raw_call: RawTelegramCall | None = None,
         timeout: float = 15.0,
+        raw_api_fallback: bool = True,
     ) -> None:
         self.bot = bot
+        self.draft_id = draft_id or self.generate_draft_id()
         self.raw_call = raw_call
         self.timeout = timeout
+        self.raw_api_fallback = raw_api_fallback
+        self.available = True
 
-    async def publish(self, *, chat_id: int, text: str) -> None:
+    @staticmethod
+    def generate_draft_id() -> int:
+        return max(1, secrets.randbits(31))
+
+    async def start(self, *, chat_id: int, message_thread_id: int | None = None) -> None:
+        await self.publish(chat_id=chat_id, text="", message_thread_id=message_thread_id)
+
+    async def publish(
+        self,
+        *,
+        chat_id: int,
+        text: str,
+        message_thread_id: int | None = None,
+    ) -> None:
+        if not self.available:
+            raise TelegramDraftNotAvailable("draft_disabled_for_job")
         typed_method = getattr(self.bot, "send_message_draft", None)
         if callable(typed_method):
             try:
-                await typed_method(chat_id=chat_id, text=text)
+                payload: dict[str, object] = {
+                    "chat_id": chat_id,
+                    "draft_id": self.draft_id,
+                    "text": text,
+                }
+                if message_thread_id is not None:
+                    payload["message_thread_id"] = message_thread_id
+                await typed_method(**payload)
                 return
             except Exception as exc:
+                self._disable("typed_draft_failed", exc)
                 raise TelegramDraftNotAvailable("typed_draft_failed") from exc
+        if not self.raw_api_fallback:
+            self._disable("typed_draft_missing", None)
+            raise TelegramDraftNotAvailable("typed_draft_missing")
         try:
-            result = await self._raw("sendMessageDraft", {"chat_id": chat_id, "text": text})
+            payload = {"chat_id": chat_id, "draft_id": self.draft_id, "text": text}
+            if message_thread_id is not None:
+                payload["message_thread_id"] = message_thread_id
+            result = await self._raw("sendMessageDraft", payload)
         except Exception as exc:
+            self._disable("raw_draft_failed", exc)
             raise TelegramDraftNotAvailable("raw_draft_failed") from exc
         if result.get("ok") is not True:
+            self._disable("raw_draft_not_ok", None)
             raise TelegramDraftNotAvailable("raw_draft_not_ok")
+
+    async def final(self, *, chat_id: int, text: str) -> None:
+        await self.bot.send_message(chat_id=chat_id, text=text)  # type: ignore[attr-defined]
 
     async def _raw(self, method: str, payload: dict[str, object]) -> dict[str, Any]:
         if self.raw_call is not None:
             return await self.raw_call(method, payload)
-        url = f"https://api.telegram.org/bot{self.bot.token}/{method}"
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(url, json=payload)
-        response.raise_for_status()
-        payload_json = response.json()
-        if isinstance(payload_json, dict):
-            return payload_json
-        return {"ok": False}
+        if method != "sendMessageDraft":
+            return {"ok": False}
+        adapter = TelegramMessageDraftApi(self.bot, timeout=self.timeout)
+        message_thread_id = payload.get("message_thread_id")
+        return await adapter.send_message_draft(
+            chat_id=int(cast(int | str, payload["chat_id"])),
+            draft_id=int(cast(int | str, payload["draft_id"])),
+            text=str(payload.get("text", "")),
+            message_thread_id=(
+                int(cast(int | str, message_thread_id))
+                if message_thread_id is not None
+                else None
+            ),
+        )
+
+    def _disable(self, reason: str, exc: BaseException | None) -> None:
+        self.available = False
+        logger.warning(
+            "telegram_draft_disabled_for_job",
+            extra={"reason": reason, "error_type": type(exc).__name__ if exc else None},
+        )

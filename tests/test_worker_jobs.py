@@ -112,7 +112,11 @@ async def test_worker_group_job_uses_send_message_without_private_streaming(
     monkeypatch.setattr(
         jobs,
         "get_settings",
-        lambda: Settings(telegram_bot_token="123456:secret-token", memory_max_messages=5),
+        lambda: Settings(
+            telegram_bot_token="123456:secret-token",
+            memory_max_messages=5,
+            streaming_group_fallback_enabled=False,
+        ),
     )
     monkeypatch.setattr(jobs, "SessionLocal", FakeSessionLocal())
     monkeypatch.setattr(jobs, "MessageRepository", lambda session: object())

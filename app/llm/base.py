@@ -26,6 +26,16 @@ class LLMProvider(ABC):
     def stream(self, messages: list[LLMMessage]) -> LLMStream:
         raise NotImplementedError
 
+    def stream_chat(
+        self,
+        messages: list[LLMMessage],
+        *,
+        model: str | None = None,
+        max_tokens: int | None = None,
+    ) -> LLMStream:
+        del model, max_tokens
+        return self.stream(messages)
+
     @abstractmethod
     async def list_models(self) -> list[str]:
         raise NotImplementedError

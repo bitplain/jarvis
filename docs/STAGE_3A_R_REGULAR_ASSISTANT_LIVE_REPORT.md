@@ -184,3 +184,16 @@ GitHub repo не создавался, push не выполнялся.
 `PASS_STAGE_3A_R_GROUP_ROUTING_READY`
 
 Причина: private/command/draft/forwarded/reset paths прошли или были исправлены и повторно подтверждены. Повторный Stage 3A-R-GROUP smoke подтвердил настоящий group/supergroup path с sanitized diagnostics, DB memory rows, worker job `private=false` и ответом в группе.
+
+## Следующий обязательный stage
+
+Release-hardening не начинается после Stage 3A-R, пока отдельно не закрыт Stage 3A-S Streaming UX.
+
+Stage 3A-S проверяет:
+
+- private draft streaming через Telegram `sendMessageDraft`;
+- throttled `StreamBuffer`;
+- финальный `sendMessage` и сохранение только final assistant response;
+- group fallback через `sendChatAction`, provisional `Думаю...` и throttled `editMessageText`;
+- Guest Mode final-only без streaming;
+- provider streaming/fallback behavior.

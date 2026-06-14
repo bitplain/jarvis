@@ -42,6 +42,15 @@ class Settings(BaseSettings):
     business_memory_max_messages: int = Field(default=10, ge=0, le=100)
     business_allowed_connection_ids: str = ""
     business_allowed_chat_ids: str = ""
+    streaming_enabled: bool = True
+    streaming_private_draft_enabled: bool = True
+    streaming_group_fallback_enabled: bool = True
+    streaming_draft_update_interval_ms: int = Field(default=800, ge=100, le=30_000)
+    streaming_group_edit_interval_ms: int = Field(default=1000, ge=100, le=30_000)
+    streaming_min_chars_delta: int = Field(default=120, ge=1, le=5000)
+    streaming_max_draft_seconds: int = Field(default=25, ge=1, le=300)
+    streaming_send_chat_action_interval_seconds: int = Field(default=4, ge=1, le=30)
+    streaming_draft_raw_api_fallback: bool = True
 
     yandex_ai_base_url: str = ""
     yandex_ai_api_key: str = ""

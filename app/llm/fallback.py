@@ -42,8 +42,23 @@ class FallbackLLMProvider(LLMProvider):
                 "primary_llm_stream_failed_trying_fallback",
                 extra={"provider": self.primary.name, "error_code": exc.code},
             )
-            async for chunk in self.fallback.stream(messages):
-                yield chunk
+            try:
+                async for chunk in self.fallback.stream(messages):
+                    yield chunk
+            except LLMProviderError as fallback_exc:
+                if not fallback_exc.retryable:
+                    raise
+                logger.warning(
+                    "fallback_llm_stream_failed_using_completion",
+                    extra={"provider": self.fallback.name, "error_code": fallback_exc.code},
+                )
+                response = await self.fallback.complete(messages)
+                yield LLMStreamChunk(
+                    content=response.content,
+                    provider=response.provider,
+                    model=response.model,
+                    done=True,
+                )
 
     async def list_models(self) -> list[str]:
         primary = await self.primary.list_models()

@@ -96,6 +96,15 @@ uv run --python 3.12 --extra dev python scripts/smoke_llm.py
 - `GUEST_MODE_ENABLED`
 - `GUEST_MODE_ADMIN_ONLY`
 - `GUEST_MODE_MAX_TOKENS`
+- `STREAMING_ENABLED`
+- `STREAMING_PRIVATE_DRAFT_ENABLED`
+- `STREAMING_GROUP_FALLBACK_ENABLED`
+- `STREAMING_DRAFT_UPDATE_INTERVAL_MS`
+- `STREAMING_GROUP_EDIT_INTERVAL_MS`
+- `STREAMING_MIN_CHARS_DELTA`
+- `STREAMING_MAX_DRAFT_SECONDS`
+- `STREAMING_SEND_CHAT_ACTION_INTERVAL_SECONDS`
+- `STREAMING_DRAFT_RAW_API_FALLBACK`
 - `YANDEX_AI_BASE_URL`
 - `YANDEX_AI_API_KEY`
 - `YANDEX_AI_MODEL`
@@ -216,6 +225,25 @@ Jarvis вернёт черновик. Пользователь сам копир
 Если privacy mode Telegram ограничивает updates, Jarvis честно работает только с теми сообщениями, которые Telegram передал боту.
 Вызов `@bot_username`, который Telegram доставляет как `guest_message`, относится к Guest Mode и не доказывает работу Group Assistant.
 Для live smoke group mention/reply должны появиться как обычные group/supergroup `message` updates, создать regular memory запись и worker job.
+
+### Streaming UX
+
+Stage 3A-S добавляет streaming UX для обычного assistant path.
+
+- Private chat: worker пробует Telegram `sendMessageDraft` с non-zero `draft_id`, обновляет draft через `StreamBuffer` с throttling, а после завершения отправляет финальный `sendMessage`. В БД сохраняется только финальный assistant response.
+- Private fallback: если draft API недоступен или вернул ошибку, текущий LLM job переключается на provisional/edit path без вывода token/key/header в logs.
+- Group chat: `sendMessageDraft` не используется. Worker отправляет `sendChatAction typing`, provisional `Думаю...`, затем throttled `editMessageText` и финальный edit. Если финальный edit не прошёл, отправляется финальный `sendMessage`.
+- Guest Mode: остаётся final-only через `answerGuestQuery`, без streaming, draft и group edit sink.
+- Business / Secretary: auto-reply не включается; streaming слой только подготовлен к fallback path с `business_connection_id` для `sendChatAction`.
+
+Readiness без получения Telegram updates:
+
+```bash
+uv run --python 3.12 --extra dev python scripts/smoke_streaming_readiness.py
+```
+
+Отчёт Stage 3A-S: `docs/STAGE_3A_S_STREAMING_UX_REPORT.md`.
+Live smoke checklist: `docs/STAGE_3A_S_STREAMING_LIVE_SMOKE.md`.
 
 ### Guest Mode
 

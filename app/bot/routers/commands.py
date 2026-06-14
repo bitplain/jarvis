@@ -86,6 +86,16 @@ async def cmd_status(message: Message, **data: Any) -> None:
     business_mode = "enabled" if settings.business_mode_enabled else "optional/disabled"
     business_reply = "enabled" if settings.business_reply_enabled else "disabled"
     business_admin_only = "true" if settings.business_admin_only else "false"
+    streaming = "enabled" if settings.streaming_enabled else "disabled"
+    private_draft_streaming = (
+        "enabled" if settings.streaming_private_draft_enabled else "disabled"
+    )
+    group_fallback_streaming = (
+        "enabled" if settings.streaming_group_fallback_enabled else "disabled"
+    )
+    draft_raw_api_fallback = (
+        "enabled" if settings.streaming_draft_raw_api_fallback else "disabled"
+    )
     business_count, business_active_count = await resolve_business_counts(data)
     await message.answer(
         "Статус: Regular Assistant Mode активен.\n"
@@ -99,7 +109,11 @@ async def cmd_status(message: Message, **data: Any) -> None:
         f"Business Reply: {business_reply}\n"
         f"Business Admin Only: {business_admin_only}\n"
         f"Business Connections: {business_count}\n"
-        f"Business Active Connections: {business_active_count}"
+        f"Business Active Connections: {business_active_count}\n"
+        f"Streaming: {streaming}\n"
+        f"Private Draft Streaming: {private_draft_streaming}\n"
+        f"Group Fallback Streaming: {group_fallback_streaming}\n"
+        f"Draft Raw API Fallback: {draft_raw_api_fallback}"
     )
 
 
