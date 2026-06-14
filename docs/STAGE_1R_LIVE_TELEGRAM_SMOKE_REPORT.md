@@ -88,19 +88,21 @@ GitHub repo не создавался. Push не выполнялся. `.env` н
 - `curl /health` — `{"status":"ok"}`.
 - `curl /ready` — `{"status":"ok","checks":{"postgres":true,"redis":true}}`.
 
-## Что осталось сделать
+## Stage 1R-FINAL-LIVE update
 
-Для полного PASS именно real Telegram user-originated smoke нужно отправить из Telegram-клиента:
+После partial run выполнен настоящий user-originated Telegram live smoke из Telegram-клиента пользователя.
 
-1. `/start`
-2. `/help`
-3. `/models`
-4. `/status`
-5. `Привет, кратко объясни, что ты умеешь`
-6. `/reset`
+- `/start` — webhook update получен и обработан.
+- `/help` — webhook update получен и обработан.
+- `/models` — webhook update получен и обработан.
+- `/status` — webhook update получен и обработан.
+- Обычное текстовое сообщение — webhook update получен, worker LLM job завершён успешно.
+- `/reset` — webhook update получен и обработан.
+- DB до reset: `USER:1`, `ASSISTANT:1`.
+- DB после reset: `0`.
 
-После этого нужно повторно проверить логи и DB counts. Без сообщения от пользовательского Telegram-клиента бот не может доказать inbound delivery от Telegram user.
+Детальный отчёт: `docs/STAGE_1R_FINAL_LIVE_TELEGRAM_REPORT.md`.
 
 ## Verdict
 
-`BLOCKED_NEEDS_MANUAL_TELEGRAM_MESSAGE`
+`PASS_STAGE_1R_REAL_RUNTIME_READY`

@@ -77,6 +77,8 @@ Stage 1R-ID диагностика admin id и OpenRouter smoke: `docs/STAGE_1R_
 
 Stage 1R-LIVE tunnel/live smoke status: `docs/STAGE_1R_LIVE_TELEGRAM_SMOKE_REPORT.md`.
 
+Stage 1R-FINAL-LIVE user-originated Telegram smoke: `docs/STAGE_1R_FINAL_LIVE_TELEGRAM_REPORT.md`.
+
 ## Куда вставить секреты
 
 Только в локальный `.env`:
@@ -125,4 +127,4 @@ Stage 1 выполняется до создания сервера/live project
 
 `PASS_STAGE_1_CORE_READY`
 
-Реальные Telegram/Yandex/OpenRouter smoke tests требуют заполненного `.env`; это не блокирует core readiness, но остаётся runtime-шагом после ручной проверки секретов.
+Реальные Telegram/Yandex/OpenRouter smoke tests выполнены в Stage 1R после заполнения локального `.env`; итоговый live Telegram отчёт находится в `docs/STAGE_1R_FINAL_LIVE_TELEGRAM_REPORT.md`.
