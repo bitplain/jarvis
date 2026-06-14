@@ -83,12 +83,38 @@ uv run --python 3.12 --extra dev python scripts/smoke_llm.py
 Настоящий Guest Mode smoke требует ручного вызова через Telegram-клиент и, возможно, включения Guest Mode в BotFather или настройках Telegram.
 
 Инструкция: `docs/STAGE_2_GUEST_MODE_REAL_SMOKE.md`.
+Локальный polling-вариант без tunnel: `docs/STAGE_2R_GUEST_MODE_POLLING_SMOKE.md`.
 
 Не засчитывать как Stage 2 real smoke:
 
 - обычное сообщение в личке;
 - обычное сообщение в группе, где бот добавлен участником;
 - group mention без update type `guest_message`.
+
+## Stage 2R polling path
+
+Webhook/tunnel smoke был заблокирован на tunnel layer:
+
+- localtunnel возвращал `502 Bad Gateway`;
+- Cloudflare quick tunnel возвращал `530`;
+- локальный API при этом отвечал на `/health` и `/ready`.
+
+Для локального Mac добавлен polling path:
+
+- `scripts/smoke_polling_readiness.py` — удаляет webhook, проверяет `getMe`, Guest Mode env, Postgres, Redis и LLM smoke, но не вызывает `getUpdates`;
+- `scripts/run_polling.py` — запускает общий aiogram Dispatcher через polling с `allowed_updates`, включая `guest_message`;
+- `.env.polling.example` — host-side overrides без секретов;
+- `docker-compose.override.yml` — публикует Postgres `5432` и Redis `6379` для host-side polling runner.
+
+Stage 2R polling readiness на локальном Mac:
+
+- `deleteWebhook` — OK, `drop_pending_updates=false`;
+- Telegram `getMe` — OK;
+- Guest Mode env — enabled/admin-only;
+- Postgres — OK;
+- Redis — OK;
+- LLM smoke — `PASS_LLM_SMOKE`;
+- verdict — `PASS_POLLING_READINESS`.
 
 ## Remote AGENTS sync
 

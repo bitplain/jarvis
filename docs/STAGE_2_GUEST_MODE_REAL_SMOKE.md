@@ -25,6 +25,20 @@ uv run --python 3.12 --extra dev python scripts/set_telegram_webhook.py --info
 
 5. Если Telegram требует отдельного включения Guest Mode, включить его в BotFather или настройках Telegram-клиента для бота.
 
+## Локальный Mac без tunnel
+
+Если публичный HTTPS tunnel недоступен, использовать polling вместо webhook:
+
+```bash
+uv run --python 3.12 --extra dev python scripts/smoke_polling_readiness.py
+uv run --python 3.12 --extra dev python scripts/run_polling.py
+```
+
+Подробная инструкция: `docs/STAGE_2R_GUEST_MODE_POLLING_SMOKE.md`.
+
+Polling удаляет webhook через `deleteWebhook` и не требует tunnel.
+Readiness script не вызывает `getUpdates`, чтобы не съесть ручной `guest_message`.
+
 ## Вызов без reply
 
 В другом чате, где бот не добавлен как обычный участник, вызвать:

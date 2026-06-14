@@ -113,6 +113,42 @@ Stage 2 реализует Telegram Guest Mode через update type `guest_mes
 Ручной smoke: `docs/STAGE_2_GUEST_MODE_REAL_SMOKE.md`.
 Итоговый отчёт: `docs/STAGE_2_GUEST_MODE_REPORT.md`.
 
+### Локальный polling smoke на Mac
+
+Если публичный HTTPS tunnel недоступен, Guest Mode можно проверять через Telegram polling.
+Polling удаляет webhook и получает updates через `getUpdates`, поэтому tunnel не нужен.
+
+Host-side overrides без секретов:
+
+```bash
+cp .env.polling.example /tmp/jarvis-polling-env-example
+```
+
+В локальном `.env` для Mac обычно нужны:
+
+```env
+POSTGRES_HOST=localhost
+REDIS_URL=redis://localhost:6379/0
+GUEST_MODE_ENABLED=true
+GUEST_MODE_ADMIN_ONLY=true
+```
+
+Локальный `docker-compose.override.yml` публикует Postgres `5432` и Redis `6379` для host-side polling runner.
+
+Readiness без получения updates:
+
+```bash
+uv run --python 3.12 --extra dev python scripts/smoke_polling_readiness.py
+```
+
+Запуск polling:
+
+```bash
+uv run --python 3.12 --extra dev python scripts/run_polling.py
+```
+
+Подробности: `docs/STAGE_2R_GUEST_MODE_POLLING_SMOKE.md`.
+
 ## Отложенные части
 
 - Secretary / Business Mode — Stage 3.

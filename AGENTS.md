@@ -33,6 +33,14 @@
 - Обычный private/group бот остаётся доступен только `ADMIN_TELEGRAM_IDS`.
 - Обычное сообщение в личке или группе не считается Guest Mode smoke.
 
+## Stage 2R Polling Smoke
+
+- Для локального Mac real smoke без публичного HTTPS URL используется polling через `scripts/run_polling.py`.
+- Перед polling webhook обязательно удаляется через Telegram `deleteWebhook`.
+- `drop_pending_updates` по умолчанию должен быть `false`; включать drop можно только явным флагом `--drop-pending-updates`.
+- Readiness script `scripts/smoke_polling_readiness.py` не должен вызывать `getUpdates`, чтобы не съесть ручной `guest_message`.
+- Polling smoke не использует tunnel и не засчитывает обычные `message`/group mention updates как Guest Mode.
+
 ## Проверки
 
 Перед финальным отчётом выполнять:
