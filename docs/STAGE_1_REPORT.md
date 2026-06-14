@@ -75,6 +75,8 @@ curl -fsS http://localhost:8000/ready
 
 Stage 1R-ID диагностика admin id и OpenRouter smoke: `docs/STAGE_1R_ADMIN_ID_AND_OPENROUTER_REPORT.md`.
 
+Stage 1R-LIVE tunnel/live smoke status: `docs/STAGE_1R_LIVE_TELEGRAM_SMOKE_REPORT.md`.
+
 ## Куда вставить секреты
 
 Только в локальный `.env`:

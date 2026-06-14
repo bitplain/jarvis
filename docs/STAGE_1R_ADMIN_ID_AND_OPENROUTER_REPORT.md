@@ -110,6 +110,19 @@ uv run --python 3.12 --extra dev python scripts/bootstrap_real_env.py --dry-run
 
 5. Настроить `PUBLIC_BASE_URL` на публичный HTTPS URL и восстановить webhook перед Telegram live smoke.
 
+## Stage 1R-LIVE update
+
+- `ADMIN_TELEGRAM_IDS`: `<set>` после ручного `/start` и повторного bootstrap.
+- `cloudflared`: `<missing>`.
+- `ngrok`: `<missing>`.
+- Live Telegram smoke заблокирован до появления публичного HTTPS tunnel.
+
+Детальный отчёт: `docs/STAGE_1R_LIVE_TELEGRAM_SMOKE_REPORT.md`.
+
 ## Verdict
 
-`BLOCKED_NEEDS_MANUAL_TELEGRAM_START`
+Original Stage 1R-ID verdict был `BLOCKED_NEEDS_MANUAL_TELEGRAM_START`.
+
+После Stage 1R-LIVE bootstrap этот блокер снят: `ADMIN_TELEGRAM_IDS=<set>`.
+
+Текущий блокер: `BLOCKED_NEEDS_PUBLIC_HTTPS_TUNNEL`.
