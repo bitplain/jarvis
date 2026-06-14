@@ -19,6 +19,7 @@
 - Guest Mode, Secretary Mode и Mini App в Stage 1 не реализуются полностью.
 - Guest/Business код должен оставаться явным stub/no-op или выбрасывать `NotImplementedError`, чтобы его нельзя было принять за готовую функцию.
 - Реальный Telegram/LLM smoke без настоящих env-секретов считается `BLOCKED_NEEDS_REAL_ENV`, а не успехом.
+- Stage 1R env bootstrap может генерировать только локальные секреты в `.env`, выводить только sanitized status и никогда не коммитить реальные значения `.env`.
 
 ## Проверки
 

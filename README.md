@@ -38,6 +38,15 @@ docker compose exec api pytest -q
 
 Не вставляйте секреты в код, README, AGENTS, workflow-файлы или отчёты.
 
+Для безопасной подготовки реального `.env` можно использовать Stage 1R bootstrap:
+
+```bash
+uv run --python 3.12 --extra dev python scripts/bootstrap_real_env.py --dry-run
+uv run --python 3.12 --extra dev python scripts/bootstrap_real_env.py --apply
+```
+
+Подробности: `docs/STAGE_1R_ENV_BOOTSTRAP.md`.
+
 ## Обязательные переменные
 
 Для локального каркаса без реальных Telegram/LLM вызовов достаточно значений из `.env.example`.

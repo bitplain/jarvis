@@ -67,6 +67,12 @@ curl -fsS http://localhost:8000/health
 curl -fsS http://localhost:8000/ready
 ```
 
+## Stage 1R env bootstrap
+
+Для подготовки реального локального `.env` без вывода секретов используется `scripts/bootstrap_real_env.py`.
+
+Инструкция: `docs/STAGE_1R_ENV_BOOTSTRAP.md`.
+
 ## Куда вставить секреты
 
 Только в локальный `.env`:
