@@ -116,6 +116,16 @@ Stage 2R polling readiness на локальном Mac:
 - LLM smoke — `PASS_LLM_SMOKE`;
 - verdict — `PASS_POLLING_READINESS`.
 
+Stage 2R real polling smoke:
+
+- отчёт: `docs/STAGE_2R_GUEST_MODE_REAL_POLLING_REPORT.md`;
+- polling получил настоящие guest records через `guest_message` path;
+- свежие DB records: `3`;
+- `status=answered`: `3`;
+- `error_code` пустой: `3`;
+- ответы получены пользователем в Telegram;
+- verdict — `PASS_STAGE_2_GUEST_MODE_REAL_READY`.
+
 ## Remote AGENTS sync
 
 В репозитории есть только локальный `AGENTS.md`.
