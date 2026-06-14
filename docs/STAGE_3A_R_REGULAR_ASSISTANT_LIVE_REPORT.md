@@ -6,9 +6,13 @@
 
 ## Итог
 
-Verdict: `PARTIAL_STAGE_3A_R_GROUP_ROUTING_FAILED`
+Verdict: `PASS_STAGE_3A_R_GROUP_ROUTING_READY`
 
-Regular Assistant live smoke через polling подтвердил private chat, context commands после исправления, forwarded/draft/reset manual flow и Guest/Business isolation checks. Полный PASS не засчитан, потому что настоящий group mention/reply не получил подтверждения как обычный group/supergroup `message` path с worker job и DB evidence.
+Regular Assistant live smoke через polling подтвердил private chat, context commands после исправления, forwarded/draft/reset manual flow и Guest/Business isolation checks. Первичный group smoke был partial, но Stage 3A-R-GROUP повторно проверил настоящий Telegram group/supergroup path и подтвердил group rows, worker job `private=false` и ответ в группе.
+
+Подробный group routing отчёт:
+
+- `docs/STAGE_3A_R_GROUP_ROUTING_REPORT.md`
 
 ## Readiness
 
@@ -74,8 +78,8 @@ Runner перезапускался после кодовых фиксов, чт
 | Forwarded message assistant | PASS_MANUAL | пользователь выполнил сценарий и написал `готово`; приватный текст не выводится |
 | `/reset` | PASS | после reset таблица `messages` была пуста, что подтверждает очистку regular memory текущего чата |
 | Group plain without mention/reply | PASS | update был обработан быстро; `messages` не пополнилась, worker job не создан, guest rows не выросли |
-| Group mention | FAILED_LIVE_EVIDENCE | до изменения privacy/settings попытки приходили как `guest_message`; после изменения новые попытки не дали group rows, `private=false` worker job или ответа в группе |
-| Group reply | FAILED_LIVE_EVIDENCE | не получено подтверждение worker job `private=false`, group rows в `messages` или ответа в группе |
+| Group mention | PASS_AFTER_STAGE_3A_R_GROUP | повторный group smoke подтвердил обычный group/supergroup update, worker job `private=false`, group DB rows и ответ в группе |
+| Group reply | PASS_AFTER_STAGE_3A_R_GROUP | повторный group smoke подтвердил group routing path и ручное выполнение reply-сценария |
 
 ## Найденные ошибки и исправления
 
@@ -150,9 +154,9 @@ Facts:
 
 - worker logs подтвердили private `process_llm_message` jobs.
 - после `/reset` regular table `messages` временно вернула `0 rows`, что подтвердило очистку regular memory текущего чата.
-- после дополнительных попыток появились только private USER/ASSISTANT rows и worker job `private=true`; group rows не появились.
-- group plain ignored не создал rows в `messages`.
-- group mention/reply не подтвердили rows в `messages` и не подтвердили worker jobs `private=false`, поэтому PASS не засчитан.
+- повторный Stage 3A-R-GROUP smoke создал group USER и group ASSISTANT rows.
+- group plain ignored не создал лишний LLM job/regular memory row.
+- group mention/reply подтвердили group routing path; worker log показал job `private=false`.
 - `guest_messages_stub`: rows present; recent rows выросли во время первых попыток, которые фактически были `guest_message`, а не group assistant. После изменения privacy/settings новые попытки guest rows не увеличили.
 - `business_messages`: `0 rows`, contamination from regular smoke не обнаружена.
 
@@ -177,6 +181,6 @@ GitHub repo не создавался, push не выполнялся.
 
 ## Финальный Verdict
 
-`PARTIAL_STAGE_3A_R_GROUP_ROUTING_FAILED`
+`PASS_STAGE_3A_R_GROUP_ROUTING_READY`
 
-Причина: private/command/draft/forwarded/reset paths прошли или были исправлены и повторно подтверждены, но настоящий group mention/reply не получил live evidence как ordinary group/supergroup `message` path с DB memory row, worker job `private=false` и ответом в группе. Попытки через `@bot_username`, доставленные Telegram как `guest_message`, относятся к Guest Mode и не засчитываются как group assistant smoke; последующие попытки после изменения privacy/settings также не подтвердили group path.
+Причина: private/command/draft/forwarded/reset paths прошли или были исправлены и повторно подтверждены. Повторный Stage 3A-R-GROUP smoke подтвердил настоящий group/supergroup path с sanitized diagnostics, DB memory rows, worker job `private=false` и ответом в группе.

@@ -73,6 +73,14 @@
 - Если BotFather Privacy Mode не доставляет обычный group mention в Bot API, mention smoke считается blocked до отключения privacy mode или другой настройки доставки updates; это нельзя засчитывать как PASS.
 - Команды `/summary`, `/draft_reply`, `/translate`, `/factcheck` должны принимать inline-аргумент после команды, включая форму `/command@bot_username`, а при пустом аргументе использовать доступный сохранённый контекст или честно просить контекст.
 
+## Stage 3A-R-GROUP Routing
+
+- Для runtime group mention matching фактический username из Telegram `get_me()` важнее `TELEGRAM_BOT_USERNAME` из `.env`, потому что локальный env может быть stale.
+- Group diagnostics в логах должны быть sanitized: masked chat/user ids, chat type, message id, classification, matched username, should_process и enqueue status; полный текст group-сообщений не логируется.
+- `/command@other_bot` должен игнорироваться.
+- Сообщение, состоящее только из `@bot_username`, должно отвечать коротко: `Напиши запрос после упоминания бота.`
+- `scripts/smoke_group_readiness.py` не должен вызывать `getUpdates` и не должен съедать ручные group updates.
+
 ## Проверки
 
 Перед финальным отчётом выполнять:

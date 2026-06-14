@@ -23,6 +23,15 @@ class FakeMessage:
         self.answers.append(text)
 
 
+class FakeBotUser:
+    username = "Home_ai_my_bot"
+
+
+class FakeBot:
+    async def get_me(self) -> FakeBotUser:
+        return FakeBotUser()
+
+
 class FakeRepository:
     async def recent_messages(
         self,
@@ -97,7 +106,7 @@ async def test_factcheck_command_with_bot_username_uses_inline_argument(
 
     await commands.cmd_factcheck(
         message,  # type: ignore[arg-type]
-        settings=Settings(),
+        settings=Settings(telegram_bot_username="Home_ai_my_bot"),
         db_session=object(),
         llm_provider=provider,
     )
@@ -105,3 +114,62 @@ async def test_factcheck_command_with_bot_username_uses_inline_argument(
     assert "Проверь факт: PostgreSQL - это реляционная СУБД" in provider.rendered_prompt
     assert "старый контекст из памяти" not in provider.rendered_prompt
     assert message.answers == ["готово"]
+
+
+@pytest.mark.asyncio
+async def test_summary_command_with_bot_username_uses_inline_argument(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = CapturingProvider()
+    monkeypatch.setattr(commands, "MessageRepository", lambda session: FakeRepository())
+    message = FakeMessage("/summary@Home_ai_my_bot кратко перескажи, зачем нужен DNS")
+
+    await commands.cmd_summary(
+        message,  # type: ignore[arg-type]
+        settings=Settings(telegram_bot_username="Home_ai_my_bot"),
+        db_session=object(),
+        llm_provider=provider,
+    )
+
+    assert "кратко перескажи, зачем нужен DNS" in provider.rendered_prompt
+    assert "старый контекст из памяти" not in provider.rendered_prompt
+    assert message.answers == ["готово"]
+
+
+@pytest.mark.asyncio
+async def test_summary_command_uses_runtime_bot_username_when_env_username_is_stale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = CapturingProvider()
+    monkeypatch.setattr(commands, "MessageRepository", lambda session: FakeRepository())
+    message = FakeMessage("/summary@Home_ai_my_bot кратко перескажи, зачем нужен DNS")
+
+    await commands.cmd_summary(
+        message,  # type: ignore[arg-type]
+        settings=Settings(telegram_bot_username="59144850"),
+        db_session=object(),
+        llm_provider=provider,
+        bot=FakeBot(),
+    )
+
+    assert "кратко перескажи, зачем нужен DNS" in provider.rendered_prompt
+    assert message.answers == ["готово"]
+
+
+@pytest.mark.asyncio
+async def test_summary_command_for_other_bot_is_ignored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = CapturingProvider()
+    monkeypatch.setattr(commands, "MessageRepository", lambda session: FakeRepository())
+    message = FakeMessage("/summary@OtherBot кратко перескажи, зачем нужен DNS")
+
+    await commands.cmd_summary(
+        message,  # type: ignore[arg-type]
+        settings=Settings(telegram_bot_username="Home_ai_my_bot"),
+        db_session=object(),
+        llm_provider=provider,
+    )
+
+    assert provider.rendered_prompt == ""
+    assert message.answers == []

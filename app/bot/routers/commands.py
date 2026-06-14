@@ -25,6 +25,37 @@ def _command_argument(message: Message) -> str | None:
     return argument or None
 
 
+def _command_target_username(message: Message) -> str | None:
+    text = getattr(message, "text", None) or getattr(message, "caption", None)
+    if not text:
+        return None
+    command = text.strip().split(maxsplit=1)[0]
+    if "@" not in command:
+        return None
+    return str(command.rsplit("@", maxsplit=1)[1]).lower()
+
+
+def _is_command_for_other_bot(message: Message, bot_username: str) -> bool:
+    target = _command_target_username(message)
+    if target is None or not bot_username:
+        return False
+    return target != bot_username.strip().lstrip("@").lower()
+
+
+async def _resolve_bot_username(data: dict[str, Any], fallback: str) -> str:
+    bot = data.get("bot")
+    if bot is not None:
+        try:
+            me = await bot.get_me()
+        except Exception:
+            pass
+        else:
+            username = getattr(me, "username", None)
+            if username:
+                return str(username)
+    return fallback
+
+
 async def cmd_start(message: Message) -> None:
     await message.answer("Jarvis готов. Пишите вопрос на русском языке.")
 
@@ -43,6 +74,9 @@ async def cmd_help(message: Message) -> None:
 
 async def cmd_status(message: Message, **data: Any) -> None:
     settings = data["settings"]
+    bot_username = await _resolve_bot_username(data, settings.telegram_bot_username)
+    if _is_command_for_other_bot(message, bot_username):
+        return
     personal_chat = "enabled" if settings.regular_assistant_enabled else "disabled"
     group_assistant = "enabled" if settings.group_assistant_enabled else "disabled"
     guest_status = "enabled" if settings.guest_mode_enabled else "disabled"
@@ -77,6 +111,9 @@ async def _handle_context_command(
 ) -> None:
     session = data.get("db_session")
     settings = data["settings"]
+    bot_username = await _resolve_bot_username(data, settings.telegram_bot_username)
+    if _is_command_for_other_bot(message, bot_username):
+        return
     if session is None:
         await message.answer("Контекст доступен только в runtime с БД.")
         return
@@ -163,6 +200,9 @@ async def resolve_business_counts(data: dict[str, Any]) -> tuple[int, int]:
 
 async def cmd_models(message: Message, **data: Any) -> None:
     settings = data["settings"]
+    bot_username = await _resolve_bot_username(data, settings.telegram_bot_username)
+    if _is_command_for_other_bot(message, bot_username):
+        return
     current = settings.selected_model or "не задана"
     await message.answer(f"Текущая модель: {current}")
 
@@ -170,6 +210,9 @@ async def cmd_models(message: Message, **data: Any) -> None:
 async def cmd_reset(message: Message, **data: Any) -> None:
     session = data.get("db_session")
     settings = data["settings"]
+    bot_username = await _resolve_bot_username(data, settings.telegram_bot_username)
+    if _is_command_for_other_bot(message, bot_username):
+        return
     if session is None:
         await message.answer("Память очищается только в runtime с БД.")
         return

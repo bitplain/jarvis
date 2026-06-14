@@ -7,7 +7,9 @@ from app.core.config import Settings
 
 
 class FakeMessage:
-    def __init__(self) -> None:
+    def __init__(self, text: str = "/status") -> None:
+        self.text = text
+        self.caption = None
         self.answers: list[str] = []
 
     async def answer(self, text: str, **kwargs: Any) -> None:
@@ -37,3 +39,16 @@ async def test_status_command_shows_business_flags_and_counts_without_ids() -> N
     assert "Business Connections: 3" in rendered
     assert "Business Active Connections: 1" in rendered
     assert "100500" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_status_command_for_other_bot_is_ignored() -> None:
+    message = FakeMessage("/status@OtherBot")
+
+    await cmd_status(
+        message,  # type: ignore[arg-type]
+        settings=Settings(telegram_bot_username="Home_ai_my_bot"),
+        business_status_counts=(0, 0),
+    )
+
+    assert message.answers == []
