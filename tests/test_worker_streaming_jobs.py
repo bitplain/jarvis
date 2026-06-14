@@ -1,5 +1,8 @@
+import logging
+
 import pytest
 
+from app.bot.streaming.text_limits import TELEGRAM_TEXT_LIMIT
 from app.core.config import Settings
 from app.llm.base import LLMProviderError
 from app.llm.types import LLMMessage, LLMResponse, LLMStreamChunk
@@ -130,8 +133,10 @@ def patch_worker(
 @pytest.mark.asyncio
 async def test_private_streaming_uses_draft_then_final_and_saves_only_final(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     provider = FakeProvider(chunks=["Первый фрагмент. ", "Второй фрагмент."])
+    caplog.set_level(logging.INFO)
     patch_worker(
         monkeypatch,
         provider=provider,
@@ -147,19 +152,25 @@ async def test_private_streaming_uses_draft_then_final_and_saves_only_final(
 
     bot = FakeBot.instances[0]
     memory = FakeMemoryService.instances[0]
+    messages = [record.message for record in caplog.records]
     assert provider.stream_called is True
     assert provider.complete_called is False
     assert bot.drafts[0]["draft_id"] != 0
     assert bot.drafts[0]["text"] == ""
     assert bot.sent_messages == [{"chat_id": 100, "text": "Первый фрагмент. Второй фрагмент."}]
     assert [item["text"] for item in memory.added] == ["Первый фрагмент. Второй фрагмент."]
+    assert "streaming_private_draft_selected" in messages
+    assert "telegram_send_message_draft_called" in messages
+    assert "telegram_final_send_message_called" in messages
 
 
 @pytest.mark.asyncio
 async def test_group_streaming_uses_fallback_edit_without_draft_and_private_false(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     provider = FakeProvider(chunks=["DNS нужен. ", "Он помогает находить серверы."])
+    caplog.set_level(logging.INFO)
     patch_worker(
         monkeypatch,
         provider=provider,
@@ -175,6 +186,7 @@ async def test_group_streaming_uses_fallback_edit_without_draft_and_private_fals
 
     bot = FakeBot.instances[0]
     memory = FakeMemoryService.instances[0]
+    messages = [record.message for record in caplog.records]
     assert provider.stream_called is True
     assert bot.drafts == []
     assert bot.sent_messages[0] == {"chat_id": -100, "text": "Думаю..."}
@@ -185,6 +197,10 @@ async def test_group_streaming_uses_fallback_edit_without_draft_and_private_fals
     }
     assert memory.added[0]["chat_id"] == -100
     assert memory.added[0]["text"] == "DNS нужен. Он помогает находить серверы."
+    assert "streaming_group_fallback_selected" in messages
+    assert "telegram_group_provisional_sent" in messages
+    assert "telegram_group_edit_message_text_called" in messages
+    assert "telegram_group_final_edit_called" in messages
 
 
 @pytest.mark.asyncio
@@ -265,3 +281,30 @@ async def test_stream_provider_error_falls_back_to_completion(
     assert provider.complete_called is True
     assert bot.sent_messages == [{"chat_id": 100, "text": "Обычный финальный ответ"}]
     assert [item["text"] for item in memory.added] == ["Обычный финальный ответ"]
+
+
+@pytest.mark.asyncio
+async def test_private_final_response_splits_long_telegram_messages_and_saves_one_full_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    long_text = "я" * (TELEGRAM_TEXT_LIMIT + 100)
+    provider = FakeProvider(chunks=[long_text])
+    patch_worker(
+        monkeypatch,
+        provider=provider,
+        settings=Settings(
+            telegram_bot_token="123456:secret-token",
+            streaming_enabled=True,
+            streaming_private_draft_enabled=True,
+            streaming_min_chars_delta=10,
+        ),
+    )
+
+    await process_llm_message({}, {"chat_id": 100, "user_id": 456, "private": True})
+
+    bot = FakeBot.instances[0]
+    memory = FakeMemoryService.instances[0]
+    assert len(bot.sent_messages) == 2
+    assert all(len(str(item["text"])) <= TELEGRAM_TEXT_LIMIT for item in bot.sent_messages)
+    assert "".join(str(item["text"]) for item in bot.sent_messages) == long_text
+    assert [item["text"] for item in memory.added] == [long_text]

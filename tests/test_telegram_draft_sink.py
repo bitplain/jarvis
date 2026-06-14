@@ -1,6 +1,7 @@
 import pytest
 
 from app.bot.streaming.telegram_draft import TelegramDraftNotAvailable, TelegramPrivateDraftSink
+from app.bot.streaming.text_limits import TELEGRAM_TEXT_LIMIT
 
 
 class FakeDraftBot:
@@ -14,6 +15,13 @@ class FakeDraftBot:
 
     async def send_message(self, **kwargs: object) -> None:
         self.calls.append({"method": "send_message", **kwargs})
+
+
+class FakeDraftBotRejectingEmpty(FakeDraftBot):
+    async def send_message_draft(self, **kwargs: object) -> None:
+        if kwargs.get("text") == "":
+            raise RuntimeError("empty draft rejected")
+        await super().send_message_draft(**kwargs)
 
 
 class BotWithoutDraft:
@@ -32,6 +40,18 @@ async def test_private_draft_uses_non_zero_draft_id_and_placeholder() -> None:
         {"chat_id": 100, "draft_id": 42, "text": ""},
         {"chat_id": 100, "draft_id": 42, "text": "Черновик"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_private_draft_keeps_job_available_when_empty_placeholder_fails() -> None:
+    bot = FakeDraftBotRejectingEmpty()
+    sink = TelegramPrivateDraftSink(bot, draft_id=42)
+
+    await sink.start(chat_id=100)
+    await sink.publish(chat_id=100, text="Черновик")
+
+    assert sink.available is True
+    assert bot.calls == [{"chat_id": 100, "draft_id": 42, "text": "Черновик"}]
 
 
 @pytest.mark.asyncio
@@ -74,3 +94,13 @@ async def test_private_draft_final_send_message_happens_after_draft() -> None:
     await sink.final(chat_id=100, text="Финальный ответ")
 
     assert bot.calls[-1] == {"method": "send_message", "chat_id": 100, "text": "Финальный ответ"}
+
+
+@pytest.mark.asyncio
+async def test_private_draft_truncates_preview_to_telegram_limit() -> None:
+    bot = FakeDraftBot()
+    sink = TelegramPrivateDraftSink(bot, draft_id=9)
+
+    await sink.publish(chat_id=100, text="я" * (TELEGRAM_TEXT_LIMIT + 100))
+
+    assert len(str(bot.calls[-1]["text"])) <= TELEGRAM_TEXT_LIMIT

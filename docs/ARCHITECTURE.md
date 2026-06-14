@@ -102,6 +102,12 @@ Streaming использует SSE `chat/completions` (`stream=true`) через
 Private draft не считается постоянным сообщением и не пишется в БД. В БД пишется только финальный assistant response после `sendMessage` или финального group edit/send.
 Guest Mode не использует streaming. Business Mode не включает auto-reply в Stage 3A-S, но fallback abstraction учитывает `business_connection_id` для `sendChatAction`.
 
+Telegram text limits:
+
+- draft/edit preview обрезается до Telegram-safe длины;
+- финальный ответ делится на Telegram-safe chunks при отправке;
+- в PostgreSQL сохраняется один полный assistant response, а не отдельные chunks.
+
 ## Business Mode / Secretary Foundation
 
 Business Mode — optional integration, а не основной путь для обычного аккаунта.

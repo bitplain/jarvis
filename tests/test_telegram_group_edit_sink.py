@@ -1,6 +1,7 @@
 import pytest
 
 from app.bot.streaming.telegram_fallback import TelegramGroupEditSink
+from app.bot.streaming.text_limits import TELEGRAM_TEXT_LIMIT
 
 
 class FakeMessage:
@@ -72,3 +73,14 @@ async def test_group_edit_sink_final_sends_message_when_final_edit_fails() -> No
         {"chat_id": -100, "text": "Думаю..."},
         {"chat_id": -100, "text": "Финальный ответ"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_group_edit_sink_truncates_preview_edits_to_telegram_limit() -> None:
+    bot = FakeBot()
+    sink = TelegramGroupEditSink(bot, edit_interval_ms=1000, chat_action_interval_seconds=4)
+
+    await sink.start(chat_id=-100)
+    await sink.publish(chat_id=-100, text="я" * (TELEGRAM_TEXT_LIMIT + 100), now=1.0)
+
+    assert len(str(bot.edits[-1]["text"])) <= TELEGRAM_TEXT_LIMIT

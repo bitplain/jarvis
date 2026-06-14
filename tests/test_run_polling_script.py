@@ -122,6 +122,15 @@ def test_sanitized_startup_does_not_include_secrets() -> None:
     assert "admin-only: enabled" in rendered
     assert "business mode: disabled" in rendered
     assert "business reply: disabled" in rendered
+    assert "streaming: enabled" in rendered
+    assert "private draft streaming: enabled" in rendered
+    assert "group fallback streaming: enabled" in rendered
+    assert "draft raw api fallback: enabled" in rendered
+    assert "draft update interval ms: 800" in rendered
+    assert "group edit interval ms: 1000" in rendered
+    assert "min chars delta: 120" in rendered
+    assert "max draft seconds: 25" in rendered
+    assert "chat action interval seconds: 4" in rendered
 
 
 def test_host_polling_settings_map_docker_hostnames_to_localhost() -> None:

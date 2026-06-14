@@ -4,6 +4,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any, Protocol, cast
 
 from app.bot.adapters.message_draft_api import TelegramMessageDraftApi
+from app.bot.streaming.text_limits import clip_telegram_preview
 
 logger = logging.getLogger(__name__)
 
@@ -54,35 +55,74 @@ class TelegramPrivateDraftSink:
     ) -> None:
         if not self.available:
             raise TelegramDraftNotAvailable("draft_disabled_for_job")
+        preview_text = clip_telegram_preview(text)
         typed_method = getattr(self.bot, "send_message_draft", None)
         if callable(typed_method):
             try:
                 payload: dict[str, object] = {
                     "chat_id": chat_id,
                     "draft_id": self.draft_id,
-                    "text": text,
+                    "text": preview_text,
                 }
                 if message_thread_id is not None:
                     payload["message_thread_id"] = message_thread_id
                 await typed_method(**payload)
+                logger.warning(
+                    "telegram_send_message_draft_called",
+                    extra={
+                        "draft_id": self.draft_id,
+                        "text_length": len(preview_text),
+                        "source_text_length": len(text),
+                        "empty_text": preview_text == "",
+                        "adapter": "typed",
+                    },
+                )
                 return
             except Exception as exc:
+                if preview_text == "":
+                    logger.warning(
+                        "telegram_empty_draft_placeholder_skipped",
+                        extra={"draft_id": self.draft_id, "error_type": type(exc).__name__},
+                    )
+                    return
                 self._disable("typed_draft_failed", exc)
                 raise TelegramDraftNotAvailable("typed_draft_failed") from exc
         if not self.raw_api_fallback:
             self._disable("typed_draft_missing", None)
             raise TelegramDraftNotAvailable("typed_draft_missing")
         try:
-            payload = {"chat_id": chat_id, "draft_id": self.draft_id, "text": text}
+            payload = {"chat_id": chat_id, "draft_id": self.draft_id, "text": preview_text}
             if message_thread_id is not None:
                 payload["message_thread_id"] = message_thread_id
             result = await self._raw("sendMessageDraft", payload)
         except Exception as exc:
+            if preview_text == "":
+                logger.warning(
+                    "telegram_empty_draft_placeholder_skipped",
+                    extra={"draft_id": self.draft_id, "error_type": type(exc).__name__},
+                )
+                return
             self._disable("raw_draft_failed", exc)
             raise TelegramDraftNotAvailable("raw_draft_failed") from exc
         if result.get("ok") is not True:
+            if preview_text == "":
+                logger.warning(
+                    "telegram_empty_draft_placeholder_skipped",
+                    extra={"draft_id": self.draft_id, "error_type": None},
+                )
+                return
             self._disable("raw_draft_not_ok", None)
             raise TelegramDraftNotAvailable("raw_draft_not_ok")
+        logger.warning(
+            "telegram_send_message_draft_called",
+            extra={
+                "draft_id": self.draft_id,
+                "text_length": len(preview_text),
+                "source_text_length": len(text),
+                "empty_text": preview_text == "",
+                "adapter": "raw",
+            },
+        )
 
     async def final(self, *, chat_id: int, text: str) -> None:
         await self.bot.send_message(chat_id=chat_id, text=text)  # type: ignore[attr-defined]

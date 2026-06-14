@@ -80,6 +80,10 @@ def render_startup_status(settings: Settings) -> str:
     admin_only = "enabled" if settings.guest_mode_admin_only else "disabled"
     business_mode = "enabled" if settings.business_mode_enabled else "disabled"
     business_reply = "enabled" if settings.business_reply_enabled else "disabled"
+    streaming = "enabled" if settings.streaming_enabled else "disabled"
+    private_draft = "enabled" if settings.streaming_private_draft_enabled else "disabled"
+    group_fallback = "enabled" if settings.streaming_group_fallback_enabled else "disabled"
+    raw_fallback = "enabled" if settings.streaming_draft_raw_api_fallback else "disabled"
     admin_count = len(settings.admin_ids)
     return "\n".join(
         [
@@ -90,6 +94,18 @@ def render_startup_status(settings: Settings) -> str:
             f"business mode: {business_mode}",
             f"business reply: {business_reply}",
             f"admin ids: SET count={admin_count}" if admin_count else "admin ids: MISSING",
+            f"streaming: {streaming}",
+            f"private draft streaming: {private_draft}",
+            f"group fallback streaming: {group_fallback}",
+            f"draft raw api fallback: {raw_fallback}",
+            f"draft update interval ms: {settings.streaming_draft_update_interval_ms}",
+            f"group edit interval ms: {settings.streaming_group_edit_interval_ms}",
+            f"min chars delta: {settings.streaming_min_chars_delta}",
+            f"max draft seconds: {settings.streaming_max_draft_seconds}",
+            (
+                "chat action interval seconds: "
+                f"{settings.streaming_send_chat_action_interval_seconds}"
+            ),
         ]
     )
 

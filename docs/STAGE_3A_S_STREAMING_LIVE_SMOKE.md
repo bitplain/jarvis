@@ -4,11 +4,11 @@
 
 ## Статус
 
-Live smoke пока не выполнен.
+Live smoke выполнен 2026-06-14.
 
-Текущий допустимый verdict до ручного Telegram smoke:
+Verdict:
 
-`BLOCKED_NEEDS_MANUAL_STREAMING_TEST`
+`PASS_STAGE_3A_S_STREAMING_READY`
 
 ## Подготовка runtime
 
@@ -84,14 +84,14 @@ Guest Mode не должен использовать streaming.
 
 | Проверка | Результат | Evidence |
 | --- | --- | --- |
-| Private draft preview/API | PENDING | |
-| Private final sendMessage | PENDING | |
-| Private DB final-only | PENDING | |
-| Group provisional | PENDING | |
-| Group throttled edit | PENDING | |
-| Group `private=false` job | PENDING | |
-| Group DB rows | PENDING | |
-| Guest no-streaming | PENDING | |
+| Private draft preview/API | PASS_WITH_FALLBACK | Worker logs: `streaming_private_draft_selected`, repeated `telegram_send_message_draft_called`; пользователь подтвердил Telegram visual. Draft позднее отключился sanitized и fallback продолжил job. |
+| Private final sendMessage | PASS | Worker logs: `telegram_final_send_message_called`; пользователь подтвердил финальный ответ в личке. |
+| Private DB final-only | PASS | Success window: `1 USER`, `1 ASSISTANT`; assistant length `4076`; draft chunks не сохранены. |
+| Group provisional | PASS | Worker logs: `telegram_group_provisional_sent`; пользователь подтвердил `Думаю...`. |
+| Group throttled edit | PASS | Worker logs: repeated `telegram_group_edit_message_text_called`; пользователь подтвердил редактирование/замену. |
+| Group `private=false` job | PASS | Worker job payload contained `private=false`; report masks full ids. |
+| Group DB rows | PASS | Success window: `1 USER`, `1 ASSISTANT`; guest/business recent rows `0`. |
+| Guest no-streaming | PASS | Regression tests confirmed guest final-only path; no guest streaming logs in live window. |
 
 ## Verdict после smoke
 

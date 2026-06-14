@@ -8,6 +8,7 @@ from aiogram.enums import ChatAction
 from app.bot.streaming.buffer import StreamBuffer
 from app.bot.streaming.telegram_draft import TelegramDraftNotAvailable, TelegramPrivateDraftSink
 from app.bot.streaming.telegram_fallback import TelegramGroupEditSink
+from app.bot.streaming.text_limits import split_telegram_text
 from app.core.config import get_settings
 from app.db.models import MessageRole
 from app.db.repositories.messages import MessageRepository
@@ -27,6 +28,22 @@ async def try_send_chat_action(bot: Bot, *, chat_id: int) -> None:
         logger.warning(
             "telegram_chat_action_failed",
             extra={"error_type": type(exc).__name__},
+        )
+
+
+async def send_final_messages(bot: Bot, *, chat_id: int, text: str, path: str) -> None:
+    chunks = split_telegram_text(text)
+    for index, chunk in enumerate(chunks, start=1):
+        await bot.send_message(chat_id=chat_id, text=chunk)
+        logger.warning(
+            "telegram_final_send_message_called",
+            extra={
+                "path": path,
+                "chunk_index": index,
+                "chunk_count": len(chunks),
+                "text_length": len(chunk),
+                "source_text_length": len(text),
+            },
         )
 
 
@@ -69,12 +86,21 @@ async def _process_private_streaming(
         bot,
         raw_api_fallback=settings.streaming_draft_raw_api_fallback,
     )
+    logger.warning(
+        "streaming_private_draft_selected",
+        extra={
+            "draft_id": draft.draft_id,
+            "draft_update_interval_ms": settings.streaming_draft_update_interval_ms,
+            "min_chars_delta": settings.streaming_min_chars_delta,
+        },
+    )
     fallback: TelegramGroupEditSink | None = None
     draft_available = True
     try:
         await draft.start(chat_id=chat_id)
     except TelegramDraftNotAvailable:
         draft_available = False
+        logger.warning("streaming_private_draft_unavailable_using_fallback")
         fallback = TelegramGroupEditSink(
             bot,
             edit_interval_ms=settings.streaming_group_edit_interval_ms,
@@ -97,6 +123,10 @@ async def _process_private_streaming(
                     await draft.publish(chat_id=chat_id, text=decision.text)
                 except TelegramDraftNotAvailable:
                     draft_available = False
+                    logger.warning(
+                        "streaming_private_draft_failed_using_fallback",
+                        extra={"flush_reason": decision.reason.value},
+                    )
                     fallback = TelegramGroupEditSink(
                         bot,
                         edit_interval_ms=settings.streaming_group_edit_interval_ms,
@@ -151,6 +181,13 @@ async def _process_group_streaming(
         bot,
         edit_interval_ms=settings.streaming_group_edit_interval_ms,
         chat_action_interval_seconds=settings.streaming_send_chat_action_interval_seconds,
+    )
+    logger.warning(
+        "streaming_group_fallback_selected",
+        extra={
+            "group_edit_interval_ms": settings.streaming_group_edit_interval_ms,
+            "min_chars_delta": settings.streaming_min_chars_delta,
+        },
     )
     await sink.start(chat_id=chat_id, now=time.monotonic())
     final_text = ""
@@ -218,7 +255,12 @@ async def process_llm_message(ctx: dict[str, Any], payload: dict[str, Any]) -> N
                     chat_id=chat_id,
                     settings=settings,
                 )
-                await bot.send_message(chat_id=chat_id, text=final_text)
+                await send_final_messages(
+                    bot,
+                    chat_id=chat_id,
+                    text=final_text,
+                    path="private_streaming",
+                )
                 sent_final = True
             elif (
                 settings.streaming_enabled
@@ -238,18 +280,23 @@ async def process_llm_message(ctx: dict[str, Any], payload: dict[str, Any]) -> N
                 final_text = response.content
             else:
                 final_text, _ = await _stream_response(provider, messages)
-                await bot.send_message(chat_id=chat_id, text=final_text)
+                await send_final_messages(
+                    bot,
+                    chat_id=chat_id,
+                    text=final_text,
+                    path="private_final",
+                )
                 sent_final = True
         except LLMProviderError as exc:
             logger.warning("llm_failed", extra={"error_code": exc.code})
             final_text = USER_ERROR_MESSAGE
-            await bot.send_message(chat_id=chat_id, text=final_text)
+            await send_final_messages(bot, chat_id=chat_id, text=final_text, path="error")
             sent_final = True
         if not sent_final and (
             payload.get("guest")
             or (not is_private and not settings.streaming_group_fallback_enabled)
         ):
-            await bot.send_message(chat_id=chat_id, text=final_text)
+            await send_final_messages(bot, chat_id=chat_id, text=final_text, path="final_only")
         await memory.add_message(
             chat_id=chat_id,
             user_id=None,

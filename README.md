@@ -235,6 +235,7 @@ Stage 3A-S добавляет streaming UX для обычного assistant pat
 - Group chat: `sendMessageDraft` не используется. Worker отправляет `sendChatAction typing`, provisional `Думаю...`, затем throttled `editMessageText` и финальный edit. Если финальный edit не прошёл, отправляется финальный `sendMessage`.
 - Guest Mode: остаётся final-only через `answerGuestQuery`, без streaming, draft и group edit sink.
 - Business / Secretary: auto-reply не включается; streaming слой только подготовлен к fallback path с `business_connection_id` для `sendChatAction`.
+- Длинные финальные ответы делятся на Telegram-safe chunks при отправке, но в БД сохраняется один полный assistant response.
 
 Readiness без получения Telegram updates:
 
@@ -243,7 +244,7 @@ uv run --python 3.12 --extra dev python scripts/smoke_streaming_readiness.py
 ```
 
 Отчёт Stage 3A-S: `docs/STAGE_3A_S_STREAMING_UX_REPORT.md`.
-Live smoke checklist: `docs/STAGE_3A_S_STREAMING_LIVE_SMOKE.md`.
+Live smoke отчёт: `docs/STAGE_3A_S_STREAMING_LIVE_REPORT.md`.
 
 ### Guest Mode
 

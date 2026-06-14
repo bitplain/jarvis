@@ -91,6 +91,7 @@
 - Group/supergroup path не использует `sendMessageDraft`; fallback использует `sendChatAction typing`, provisional `Думаю...`, throttled `editMessageText` и финальный edit/send.
 - Guest Mode остаётся final-only: `guest_message -> LLM final answer -> answerGuestQuery`, без streaming, draft и group edit sink.
 - Business / Secretary auto-reply в Stage 3A-S не включается; разрешена только fallback abstraction с учётом `business_connection_id` для `sendChatAction`.
+- Draft/edit preview должен учитывать Telegram text limit; финальный ответ можно делить на Telegram-safe chunks, но в БД должен сохраняться один полный assistant response.
 - Readiness script `scripts/smoke_streaming_readiness.py` не должен вызывать `getUpdates` и не должен съедать ручные private/group/guest updates.
 - Live smoke Stage 3A-S засчитывается только по фактическим Telegram/logs/DB evidence; нельзя писать “должно работать”.
 
