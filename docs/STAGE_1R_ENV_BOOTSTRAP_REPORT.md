@@ -41,16 +41,25 @@
 - OpenRouter model discovery: `OPENROUTER_MODEL` стал `<set>`.
 - OpenRouter chat completion smoke: sanitized `http_400`, provider пока не считается подтверждённым real runtime smoke.
 
+## Stage 1R-ID update
+
+После явного запуска `--delete-webhook-for-getupdates` webhook был временно удалён с `drop_pending_updates=False`.
+
+- `ADMIN_TELEGRAM_IDS`: `<missing>`.
+- Telegram `getUpdates`: updates пустые, нужен ручной `/start` боту в личке.
+- OpenRouter model selection: старая модель дала sanitized `http_400`, следующая candidate model прошла smoke.
+- OpenRouter provider status: `OPENROUTER_READY`.
+
+Скрипт не удаляет pending updates автоматически. Для удаления нужен отдельный явный флаг:
+
+```bash
+uv run --python 3.12 --extra dev python scripts/bootstrap_real_env.py --apply --delete-webhook-for-getupdates --drop-pending-updates
+```
+
 ## Заблокировано
 
 - `ADMIN_TELEGRAM_IDS`: `<missing>`.
-- Telegram `getUpdates`: sanitized `http_409`, причина: webhook уже установлен, поэтому polling API конфликтует с webhook.
-
-Скрипт не удалял webhook автоматически. Для этого требуется явный флаг:
-
-```bash
-uv run --python 3.12 --extra dev python scripts/bootstrap_real_env.py --apply --delete-webhook-for-getupdates
-```
+- `PUBLIC_BASE_URL`: `<not_public_https>`, поэтому webhook не был восстановлен.
 
 ## Выполненные команды
 

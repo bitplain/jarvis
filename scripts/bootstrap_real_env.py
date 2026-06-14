@@ -17,8 +17,10 @@ TELEGRAM_SECRET_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 OPENROUTER_PREFERRED_MODELS = [
     "openai/gpt-4.1-mini",
     "openai/gpt-4o-mini",
-    "anthropic/claude-3.5-haiku",
     "google/gemini-2.0-flash-001",
+    "google/gemini-flash-1.5",
+    "anthropic/claude-3.5-haiku",
+    "meta-llama/llama-3.1-8b-instruct",
 ]
 REQUIRED_ENV_KEYS = [
     "TELEGRAM_BOT_TOKEN",
@@ -151,22 +153,46 @@ def _status_for_value(value: str | None) -> str:
     return "<set>" if value else "<missing>"
 
 
+def _sanitize_error_text(value: str) -> str:
+    sanitized = re.sub(r"Bearer\s+[A-Za-z0-9._~+/=-]+", "Bearer <redacted>", value)
+    sanitized = re.sub(r"sk-[A-Za-z0-9._-]+", "sk-<redacted>", sanitized)
+    return sanitized[:240]
+
+
 def _safe_error(provider: str, action: str, response: JsonResponse | None = None) -> str:
     if response is None:
         return f"{provider} {action}: network_error"
-    description = ""
+    details: list[str] = [f"{provider} {action}: http_{response.status_code}"]
+    request_id = ""
+    headers = getattr(response, "headers", {})
+    if headers:
+        request_id = headers.get("x-request-id") or headers.get("cf-ray") or ""
+    if request_id:
+        details.append(f"request_id={_sanitize_error_text(str(request_id))}")
     try:
         payload = response.json()
-        raw_description = (
-            payload.get("description") or payload.get("error") or payload.get("message")
-        )
+        raw_description: object = payload.get("description") or payload.get("message")
+        error = payload.get("error")
+        if isinstance(error, dict):
+            raw_description = error.get("message") or raw_description
+            metadata = error.get("metadata")
+            if isinstance(metadata, dict):
+                provider_name = metadata.get("provider_name")
+                if isinstance(provider_name, str) and provider_name:
+                    details.append(f"provider_name={_sanitize_error_text(provider_name)}")
+                raw = metadata.get("raw")
+                if isinstance(raw, str) and raw:
+                    details.append(f"raw={_sanitize_error_text(raw)}")
+                previous_errors = metadata.get("previous_errors")
+                if isinstance(previous_errors, list):
+                    details.append(f"previous_errors={len(previous_errors)}")
+        elif isinstance(error, str):
+            raw_description = error
         if isinstance(raw_description, str):
-            description = raw_description[:160]
+            details.append(f"message={_sanitize_error_text(raw_description)}")
     except Exception:
-        description = "invalid_json"
-    return f"{provider} {action}: http_{response.status_code}" + (
-        f" {description}" if description else ""
-    )
+        details.append("message=invalid_json")
+    return " ".join(details)
 
 
 def derive_telegram_username(
@@ -255,6 +281,8 @@ def delete_webhook_for_getupdates(
     env: dict[str, str],
     http: HttpClient,
     result: BootstrapResult,
+    *,
+    drop_pending_updates: bool = False,
 ) -> None:
     token = env.get("TELEGRAM_BOT_TOKEN", "")
     if not token:
@@ -263,7 +291,7 @@ def delete_webhook_for_getupdates(
     try:
         response = http.post(
             f"https://api.telegram.org/bot{token}/deleteWebhook",
-            json={"drop_pending_updates": False},
+            json={"drop_pending_updates": drop_pending_updates},
             timeout=20.0,
         )
     except httpx.HTTPError:
@@ -308,7 +336,6 @@ def chat_smoke(
         "model": model,
         "messages": [{"role": "user", "content": "Ответь одним словом: тест"}],
         "max_tokens": 10,
-        "stream": False,
     }
     try:
         response = http.post(
@@ -396,17 +423,6 @@ def choose_openrouter_model(
         result.provider_status["openrouter"] = "<missing>"
         result.notes.append("OPENROUTER_MODEL requires OPENROUTER_API_KEY")
         return None
-    if existing_model:
-        chat_smoke(
-            provider="openrouter",
-            base_url=base_url,
-            api_key=api_key,
-            model=existing_model,
-            http=http,
-            result=result,
-            extra_headers={"HTTP-Referer": env.get("PUBLIC_BASE_URL", ""), "X-Title": "Jarvis"},
-        )
-        return existing_model
     models: list[str] = []
     try:
         response = http.get(
@@ -420,24 +436,62 @@ def choose_openrouter_model(
             result.notes.append(_safe_error("openrouter", "models", response))
     except httpx.HTTPError:
         result.notes.append("openrouter models: network_error")
-    selected = next((model for model in OPENROUTER_PREFERRED_MODELS if model in models), None)
-    if selected is None and models:
-        selected = models[0]
-    if selected is None:
-        selected = OPENROUTER_PREFERRED_MODELS[0]
-        result.notes.append(
-            "openrouter models unavailable; selected first preferred candidate for smoke"
-        )
-    chat_smoke(
+
+    if existing_model and chat_smoke(
         provider="openrouter",
         base_url=base_url,
         api_key=api_key,
-        model=selected,
+        model=existing_model,
         http=http,
         result=result,
         extra_headers={"HTTP-Referer": env.get("PUBLIC_BASE_URL", ""), "X-Title": "Jarvis"},
-    )
-    return selected
+    ):
+        result.provider_status["openrouter"] = "OPENROUTER_READY"
+        return existing_model
+
+    if existing_model:
+        result.notes.append(
+            f"openrouter existing model failed: {existing_model} "
+            f"{result.provider_status.get('openrouter', '<unknown>')}"
+        )
+
+    available_candidates = [model for model in OPENROUTER_PREFERRED_MODELS if model in models]
+    if not available_candidates and models:
+        available_candidates = models[:1]
+    if not available_candidates:
+        available_candidates = OPENROUTER_PREFERRED_MODELS[:1]
+        result.notes.append(
+            "openrouter models unavailable; selected first preferred candidate for smoke"
+        )
+
+    for selected in available_candidates:
+        if selected == existing_model:
+            continue
+        if chat_smoke(
+            provider="openrouter",
+            base_url=base_url,
+            api_key=api_key,
+            model=selected,
+            http=http,
+            result=result,
+            extra_headers={"HTTP-Referer": env.get("PUBLIC_BASE_URL", ""), "X-Title": "Jarvis"},
+        ):
+            result.provider_status["openrouter"] = "OPENROUTER_READY"
+            return selected
+
+    if result.provider_status.get("openrouter", "").startswith(
+        "openrouter chat_completions: http_400"
+    ):
+        result.provider_status["openrouter"] = (
+            "OPENROUTER_BLOCKED_HTTP_400 "
+            f"{result.provider_status.get('openrouter', '')}"
+        )
+    else:
+        result.provider_status["openrouter"] = (
+            "OPENROUTER_BLOCKED_NO_WORKING_MODEL "
+            f"{result.provider_status.get('openrouter', '')}"
+        )
+    return existing_model or (available_candidates[0] if available_candidates else None)
 
 
 def _set_value(
@@ -464,6 +518,7 @@ def bootstrap_env(
     apply: bool = False,
     http: HttpClient | None = None,
     delete_webhook: bool = False,
+    drop_pending_updates: bool = False,
 ) -> BootstrapResult:
     result = BootstrapResult(applied=apply)
     client: HttpClient = http or httpx.Client()
@@ -478,7 +533,12 @@ def bootstrap_env(
     updates: dict[str, str] = {}
 
     if delete_webhook:
-        delete_webhook_for_getupdates(values, client, result)
+        delete_webhook_for_getupdates(
+            values,
+            client,
+            result,
+            drop_pending_updates=drop_pending_updates,
+        )
 
     for key in REQUIRED_ENV_KEYS:
         result.statuses[key] = _status_for_value(values.get(key, ""))
@@ -529,7 +589,7 @@ def bootstrap_env(
 
     if not values.get("OPENROUTER_MODEL") or values.get("OPENROUTER_API_KEY"):
         openrouter_model = choose_openrouter_model(values, client, result)
-        if openrouter_model and not values.get("OPENROUTER_MODEL"):
+        if openrouter_model and openrouter_model != values.get("OPENROUTER_MODEL"):
             _set_value(values, updates, result, "OPENROUTER_MODEL", openrouter_model, "<derived>")
         elif openrouter_model:
             result.statuses["OPENROUTER_MODEL"] = "<set>"
@@ -589,6 +649,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Explicitly delete Telegram webhook before getUpdates derivation.",
     )
+    parser.add_argument(
+        "--drop-pending-updates",
+        action="store_true",
+        help="Drop pending Telegram updates while deleting webhook.",
+    )
     parser.add_argument("--env-file", default=".env", help=argparse.SUPPRESS)
     parser.add_argument("--example-file", default=".env.example", help=argparse.SUPPRESS)
     return parser
@@ -603,6 +668,7 @@ def main(argv: list[str] | None = None) -> int:
         Path(args.example_file),
         apply=apply_mode,
         delete_webhook=bool(args.delete_webhook_for_getupdates),
+        drop_pending_updates=bool(args.drop_pending_updates),
     )
     print(result.render_sanitized())  # noqa: T201
     if result.verdict == "PASS_STAGE_1R_ENV_READY":

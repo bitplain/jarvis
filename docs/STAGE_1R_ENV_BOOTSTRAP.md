@@ -54,6 +54,12 @@ uv run --python 3.12 --extra dev python scripts/bootstrap_real_env.py --apply
 uv run --python 3.12 --extra dev python scripts/bootstrap_real_env.py --apply --delete-webhook-for-getupdates
 ```
 
+По умолчанию pending updates сохраняются (`drop_pending_updates=False`). Если их нужно явно удалить, используется отдельный флаг:
+
+```bash
+uv run --python 3.12 --extra dev python scripts/bootstrap_real_env.py --apply --delete-webhook-for-getupdates --drop-pending-updates
+```
+
 ## Yandex model
 
 `YANDEX_AI_BASE_URL` автоматически выставляется в:

@@ -45,6 +45,12 @@ uv run --python 3.12 --extra dev python scripts/bootstrap_real_env.py --dry-run
 uv run --python 3.12 --extra dev python scripts/bootstrap_real_env.py --apply
 ```
 
+Если нужно временно перейти с webhook на polling для получения `ADMIN_TELEGRAM_IDS`, используйте явный флаг. Pending updates по умолчанию сохраняются:
+
+```bash
+uv run --python 3.12 --extra dev python scripts/bootstrap_real_env.py --apply --delete-webhook-for-getupdates
+```
+
 Подробности: `docs/STAGE_1R_ENV_BOOTSTRAP.md`.
 
 ## Обязательные переменные

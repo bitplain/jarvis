@@ -73,6 +73,8 @@ curl -fsS http://localhost:8000/ready
 
 Инструкция: `docs/STAGE_1R_ENV_BOOTSTRAP.md`.
 
+Stage 1R-ID диагностика admin id и OpenRouter smoke: `docs/STAGE_1R_ADMIN_ID_AND_OPENROUTER_REPORT.md`.
+
 ## Куда вставить секреты
 
 Только в локальный `.env`:
