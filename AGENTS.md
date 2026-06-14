@@ -41,6 +41,17 @@
 - Readiness script `scripts/smoke_polling_readiness.py` не должен вызывать `getUpdates`, чтобы не съесть ручной `guest_message`.
 - Polling smoke не использует tunnel и не засчитывает обычные `message`/group mention updates как Guest Mode.
 
+## Stage 3A Business Mode
+
+- Business Mode по умолчанию выключен: `BUSINESS_MODE_ENABLED=false`.
+- Ответы от имени Telegram Business account по умолчанию запрещены: `BUSINESS_REPLY_ENABLED=false`.
+- Stage 3A не включает постоянный autonomous auto-reply и не отвечает всем входящим business-сообщениям.
+- Ручной test reply разрешён только при `BUSINESS_MODE_ENABLED=true`, `BUSINESS_REPLY_ENABLED=true`, `BUSINESS_ADMIN_ONLY=true`, owner из `ADMIN_TELEGRAM_IDS`, активном connection, `can_reply=true` и trigger `BUSINESS_REPLY_TRIGGER`.
+- Business Mode не использует обычную chat memory и Guest Mode memory; используется отдельная business-memory по `business_connection_id + chat_id`.
+- В отчётах и логах нельзя выводить полный `business_connection_id`, Telegram IDs и приватный текст business-сообщений.
+- Readiness script `scripts/smoke_business_readiness.py` не должен вызывать `getUpdates`, чтобы не съесть ручные business updates до polling runner.
+- Real Business Mode smoke засчитывается только если пришли настоящие `business_connection` и `business_message`, ответ отправлен через `business_connection_id`, а БД подтвердила записи.
+
 ## Проверки
 
 Перед финальным отчётом выполнять:

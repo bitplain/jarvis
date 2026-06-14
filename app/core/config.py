@@ -31,6 +31,13 @@ class Settings(BaseSettings):
     guest_mode_enabled: bool = False
     guest_mode_admin_only: bool = True
     guest_mode_max_tokens: int = Field(default=512, ge=1, le=4096)
+    business_mode_enabled: bool = False
+    business_admin_only: bool = True
+    business_reply_enabled: bool = False
+    business_reply_trigger: str = "!jarvis"
+    business_memory_max_messages: int = Field(default=10, ge=0, le=100)
+    business_allowed_connection_ids: str = ""
+    business_allowed_chat_ids: str = ""
 
     yandex_ai_base_url: str = ""
     yandex_ai_api_key: str = ""
@@ -47,6 +54,23 @@ class Settings(BaseSettings):
     def admin_ids(self) -> set[int]:
         ids: set[int] = set()
         for raw_value in self.admin_telegram_ids.split(","):
+            value = raw_value.strip()
+            if value:
+                ids.add(int(value))
+        return ids
+
+    @property
+    def business_allowed_connections(self) -> set[str]:
+        return {
+            value
+            for raw_value in self.business_allowed_connection_ids.split(",")
+            if (value := raw_value.strip())
+        }
+
+    @property
+    def business_allowed_chats(self) -> set[int]:
+        ids: set[int] = set()
+        for raw_value in self.business_allowed_chat_ids.split(","):
             value = raw_value.strip()
             if value:
                 ids.add(int(value))

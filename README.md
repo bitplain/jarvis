@@ -79,6 +79,11 @@ uv run --python 3.12 --extra dev python scripts/smoke_llm.py
 - `GUEST_MODE_ENABLED`
 - `GUEST_MODE_ADMIN_ONLY`
 - `GUEST_MODE_MAX_TOKENS`
+- `BUSINESS_MODE_ENABLED`
+- `BUSINESS_ADMIN_ONLY`
+- `BUSINESS_REPLY_ENABLED`
+- `BUSINESS_REPLY_TRIGGER`
+- `BUSINESS_MEMORY_MAX_MESSAGES`
 - `YANDEX_AI_BASE_URL`
 - `YANDEX_AI_API_KEY`
 - `YANDEX_AI_MODEL`
@@ -149,7 +154,27 @@ uv run --python 3.12 --extra dev python scripts/run_polling.py
 
 Подробности: `docs/STAGE_2R_GUEST_MODE_POLLING_SMOKE.md`.
 
+## Business Mode / Secretary Foundation
+
+Stage 3A добавляет безопасный foundation для Telegram Business Mode:
+
+- сохраняет `business_connection`, `business_message`, `edited_business_message` и `deleted_business_messages` в PostgreSQL;
+- проверяет owner через `ADMIN_TELEGRAM_IDS`, `is_enabled`, `can_reply`, allowlist connection/chat при наличии;
+- не включает автоответчик по умолчанию;
+- отвечает только при явных `BUSINESS_MODE_ENABLED=true`, `BUSINESS_REPLY_ENABLED=true` и trigger `BUSINESS_REPLY_TRIGGER`;
+- отправляет ответ typed aiogram `sendMessage` с `business_connection_id`;
+- использует отдельную business-memory по `business_connection_id + chat_id`.
+
+Readiness без получения updates:
+
+```bash
+uv run --python 3.12 --extra dev python scripts/smoke_business_readiness.py
+```
+
+Ручной real smoke: `docs/STAGE_3A_BUSINESS_MODE_REAL_SMOKE.md`.
+Итоговый отчёт: `docs/STAGE_3A_BUSINESS_MODE_FOUNDATION_REPORT.md`.
+
 ## Отложенные части
 
-- Secretary / Business Mode — Stage 3.
+- Autonomous Secretary auto-reply — будущий этап после ручного Stage 3A smoke.
 - Mini App — отдельный будущий этап.

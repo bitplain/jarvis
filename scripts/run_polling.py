@@ -17,14 +17,14 @@ from app.core.config import Settings
 from app.db.session import make_engine
 
 ALLOWED_UPDATES = [
-    "message",
-    "edited_message",
-    "callback_query",
-    "guest_message",
     "business_connection",
     "business_message",
     "edited_business_message",
     "deleted_business_messages",
+    "guest_message",
+    "message",
+    "edited_message",
+    "callback_query",
 ]
 
 logger = logging.getLogger(__name__)
@@ -78,6 +78,8 @@ def resolve_host_polling_settings(settings: Settings) -> Settings:
 def render_startup_status(settings: Settings) -> str:
     guest_mode = "enabled" if settings.guest_mode_enabled else "disabled"
     admin_only = "enabled" if settings.guest_mode_admin_only else "disabled"
+    business_mode = "enabled" if settings.business_mode_enabled else "disabled"
+    business_reply = "enabled" if settings.business_reply_enabled else "disabled"
     admin_count = len(settings.admin_ids)
     return "\n".join(
         [
@@ -85,6 +87,8 @@ def render_startup_status(settings: Settings) -> str:
             f"allowed_updates: {', '.join(ALLOWED_UPDATES)}",
             f"guest mode: {guest_mode}",
             f"admin-only: {admin_only}",
+            f"business mode: {business_mode}",
+            f"business reply: {business_reply}",
             f"admin ids: SET count={admin_count}" if admin_count else "admin ids: MISSING",
         ]
     )

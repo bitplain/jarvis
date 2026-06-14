@@ -33,6 +33,30 @@ class GuestMessageStatus(StrEnum):
     IGNORED = "ignored"
 
 
+class BusinessConnectionStatus(StrEnum):
+    ENABLED = "enabled"
+    DISABLED = "disabled"
+    IGNORED = "ignored"
+    FAILED = "failed"
+
+
+class BusinessMessageDirection(StrEnum):
+    INCOMING = "incoming"
+    OUTGOING = "outgoing"
+    EDITED = "edited"
+    DELETED = "deleted"
+
+
+class BusinessMessageStatus(StrEnum):
+    RECEIVED = "received"
+    IGNORED = "ignored"
+    QUEUED = "queued"
+    ANSWERED = "answered"
+    FAILED = "failed"
+    DELETED = "deleted"
+    EDITED = "edited"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -113,6 +137,64 @@ class BusinessConnectionStub(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class BusinessConnection(Base):
+    __tablename__ = "business_connections"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    business_connection_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    business_user_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
+    user_chat_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    can_reply: Mapped[bool] = mapped_column(Boolean, default=False)
+    can_read_messages: Mapped[bool] = mapped_column(Boolean, default=False)
+    rights_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    status: Mapped[BusinessConnectionStatus] = mapped_column(
+        Enum(
+            BusinessConnectionStatus,
+            name="business_connection_status",
+            values_callable=lambda enum_class: [status.value for status in enum_class],
+        ),
+        default=BusinessConnectionStatus.IGNORED,
+    )
+
+
+class BusinessMessage(Base):
+    __tablename__ = "business_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    business_connection_id: Mapped[str] = mapped_column(String(255), index=True)
+    telegram_message_id: Mapped[int] = mapped_column(Integer, index=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    from_user_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
+    direction: Mapped[BusinessMessageDirection] = mapped_column(
+        Enum(
+            BusinessMessageDirection,
+            name="business_message_direction",
+            values_callable=lambda enum_class: [direction.value for direction in enum_class],
+        )
+    )
+    message_text: Mapped[str | None] = mapped_column(Text)
+    reply_to_message_id: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[BusinessMessageStatus] = mapped_column(
+        Enum(
+            BusinessMessageStatus,
+            name="business_message_status",
+            values_callable=lambda enum_class: [status.value for status in enum_class],
+        ),
+        default=BusinessMessageStatus.RECEIVED,
+    )
+    provider: Mapped[str | None] = mapped_column(String(64))
+    model: Mapped[str | None] = mapped_column(String(255))
+    response_text: Mapped[str | None] = mapped_column(Text)
+    error_code: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class GuestMessageRecord(Base):
     __tablename__ = "guest_messages_stub"
 
@@ -144,3 +226,15 @@ GuestMessageStub = GuestMessageRecord
 
 
 Index("ix_messages_chat_created", Message.chat_id, Message.created_at)
+Index(
+    "ix_business_messages_connection_chat_created",
+    BusinessMessage.business_connection_id,
+    BusinessMessage.chat_id,
+    BusinessMessage.created_at,
+)
+Index(
+    "ix_business_messages_lookup",
+    BusinessMessage.business_connection_id,
+    BusinessMessage.chat_id,
+    BusinessMessage.telegram_message_id,
+)

@@ -65,6 +65,12 @@ async def test_polling_runner_deletes_webhook_before_polling_by_default() -> Non
     assert bot.delete_webhook_calls == [{"drop_pending_updates": False}]
     assert dispatcher.start_polling_calls[0]["allowed_updates"] == module.ALLOWED_UPDATES
     assert "guest_message" in module.ALLOWED_UPDATES
+    assert module.ALLOWED_UPDATES[:4] == [
+        "business_connection",
+        "business_message",
+        "edited_business_message",
+        "deleted_business_messages",
+    ]
     assert dispatcher.start_polling_calls[0]["settings"] is settings
     assert bot.closed is True
 
@@ -114,6 +120,8 @@ def test_sanitized_startup_does_not_include_secrets() -> None:
     assert "100500" not in rendered
     assert "guest mode: enabled" in rendered
     assert "admin-only: enabled" in rendered
+    assert "business mode: disabled" in rendered
+    assert "business reply: disabled" in rendered
 
 
 def test_host_polling_settings_map_docker_hostnames_to_localhost() -> None:
