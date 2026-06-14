@@ -52,6 +52,18 @@
 - Readiness script `scripts/smoke_business_readiness.py` не должен вызывать `getUpdates`, чтобы не съесть ручные business updates до polling runner.
 - Real Business Mode smoke засчитывается только если пришли настоящие `business_connection` и `business_message`, ответ отправлен через `business_connection_id`, а БД подтвердила записи.
 
+## Stage 3A-R Regular Assistant Mode
+
+- Regular Assistant Mode — основной путь для обычного Telegram-аккаунта.
+- Он работает через private chat с ботом, group mode при добавлении бота в группу, Guest Mode через `@bot_username`, forwarded-message assistant и draft reply assistant.
+- Bot API не может читать личные входящие сообщения обычного пользователя и не может отвечать от имени обычного пользователя без Telegram Business / Secretary connection.
+- Business / Secretary Mode остаётся optional advanced mode: требует Telegram Business / Secretary connection, `business_connection`, `can_reply` и отправку через `business_connection_id`.
+- Нельзя писать в документации или ответах, что Secretary Mode работает без Business account.
+- Draft Reply Mode возвращает только черновик, который пользователь сам копирует и отправляет.
+- Forwarded Message Assistant работает только с текстом, который пользователь явно переслал боту.
+- Group Assistant отвечает только на mention или reply на сообщение бота; не обещать чтение всей истории группы.
+- Readiness script `scripts/smoke_regular_readiness.py` не требует Business account и должен считать Business Mode optional/disabled нормальным состоянием.
+
 ## Проверки
 
 Перед финальным отчётом выполнять:
@@ -70,6 +82,8 @@ docker compose exec api pytest -q
 curl -fsS http://localhost:8000/health
 curl -fsS http://localhost:8000/ready
 uv run --python 3.12 --extra dev python scripts/smoke_llm.py
+uv run --python 3.12 --extra dev python scripts/smoke_polling_readiness.py
+uv run --python 3.12 --extra dev python scripts/smoke_regular_readiness.py
 git status --short
 ```
 

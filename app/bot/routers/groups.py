@@ -23,6 +23,8 @@ async def handle_group_message(message: Message, **data: Any) -> None:
     if message.chat.type not in {"group", "supergroup"}:
         return
     settings = data["settings"]
+    if not settings.group_assistant_enabled:
+        return
     bot = data["bot"]
     reply_user_id = None
     if message.reply_to_message and message.reply_to_message.from_user:

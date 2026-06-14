@@ -1,4 +1,4 @@
-# Архитектура Stage 1
+# Архитектура Jarvis
 
 ## Компоненты
 
@@ -7,6 +7,14 @@
 - `postgres` — хранилище пользователей, чатов, сообщений, LLM-запросов и stub-событий.
 - `redis` — очередь arq.
 - `llm` — общий интерфейс провайдеров и fallback Yandex -> OpenRouter.
+
+## Regular Assistant Mode
+
+Regular Assistant Mode — основной путь для обычного Telegram-аккаунта.
+Он не требует Telegram Business и работает только с теми сообщениями, которые пользователь явно отправил или переслал боту.
+
+Bot API не позволяет читать личные входящие сообщения обычного пользователя и не позволяет отвечать от имени пользователя без Telegram Business / Secretary connection.
+Jarvis не использует userbot/MTProto.
 
 ## Поток Telegram private chat
 
@@ -20,9 +28,35 @@
 8. В private chat worker пробует `sendMessageDraft`; при недоступности использует `sendChatAction typing`.
 9. После генерации worker отправляет финальный `sendMessage` и сохраняет только финальный ответ.
 
+## Forwarded Message Assistant
+
+Если пользователь пересылает сообщение боту в личку, private router распознаёт forwarded metadata и сохраняет текст как context item в обычную chat memory.
+После этого бот предлагает команды:
+
+- `/summary`
+- `/draft_reply`
+- `/translate`
+- `/factcheck`
+
+Jarvis не делает вид, что видит исходный личный чат: он работает только с пересланным текстом.
+
+## Reply Draft Mode
+
+Если пользователь пишет:
+
+```text
+Ответь на это:
+<текст клиента>
+```
+
+Jarvis вызывает LLM и возвращает черновик ответа.
+Это не отправка от имени пользователя; пользователь сам копирует черновик и отправляет его в нужный чат.
+
 ## Поток групп
 
 Бот отвечает только если его явно упомянули через `@bot_username` или сообщение является reply на сообщение бота. Streaming в группах не используется.
+Если `GROUP_ASSISTANT_ENABLED=false`, group router молчит.
+Если privacy mode Telegram ограничивает updates, Jarvis не обещает чтение всей истории группы.
 
 ## Guest Mode
 
@@ -54,6 +88,9 @@ Yandex и OpenRouter используют OpenAI-compatible HTTP API. Base URL, 
 `StreamBuffer` не даёт отправлять обновление на каждый токен. Draft обновляется не чаще заданного интервала или после накопления достаточного числа символов. Draft не считается постоянным сообщением и не пишется в БД.
 
 ## Business Mode / Secretary Foundation
+
+Business Mode — optional integration, а не основной путь для обычного аккаунта.
+Он требует Telegram Business / Secretary connection, `business_connection`, прав `can_reply` и отправки через `business_connection_id`.
 
 Stage 3A обрабатывает Telegram Business updates через отдельный router `app/bot/routers/business.py`.
 Поддержанные update types:

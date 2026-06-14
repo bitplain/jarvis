@@ -2,6 +2,19 @@
 
 Jarvis — production-ready каркас Telegram AI bot для Ubuntu Server с Docker Compose.
 
+## Матрица режимов
+
+| Режим | Для обычного Telegram-аккаунта | Что умеет | Ограничения |
+| --- | --- | --- | --- |
+| Regular Assistant Mode | Да | Личка с ботом, подготовка ответов, работа с пересланным текстом | Бот видит только то, что пользователь отправил боту |
+| Group Assistant Mode | Да, если бот добавлен в группу | Ответ на mention или reply на сообщение бота | Не читает всю историю группы; privacy mode Telegram может ограничивать updates |
+| Guest Mode | Да | Вызов через `@bot_username` в чатах, куда бот не добавлен | Работает только через Telegram `guest_message` |
+| Business / Secretary Mode | Нет, только Telegram Business / Secretary | Ответ через `business_connection_id` при `can_reply` | Нужны Business connection и права Telegram Business |
+| Чтение личных входящих обычного пользователя | Нет | Невозможно через Bot API | Для этого Bot API не подходит; userbot/MTProto в проекте не используется |
+
+Главный путь Jarvis для обычного аккаунта — Regular Assistant Mode.
+Business / Secretary Mode не нужен для обычного использования и оставлен optional-модулем.
+
 ## Быстрый запуск
 
 ```bash
@@ -76,14 +89,13 @@ uv run --python 3.12 --extra dev python scripts/smoke_llm.py
 - `TELEGRAM_WEBHOOK_SECRET`
 - `ADMIN_TELEGRAM_IDS`
 - `ADMIN_API_TOKEN`
+- `REGULAR_ASSISTANT_ENABLED`
+- `FORWARDED_MESSAGE_ASSISTANT_ENABLED`
+- `DRAFT_REPLY_ENABLED`
+- `GROUP_ASSISTANT_ENABLED`
 - `GUEST_MODE_ENABLED`
 - `GUEST_MODE_ADMIN_ONLY`
 - `GUEST_MODE_MAX_TOKENS`
-- `BUSINESS_MODE_ENABLED`
-- `BUSINESS_ADMIN_ONLY`
-- `BUSINESS_REPLY_ENABLED`
-- `BUSINESS_REPLY_TRIGGER`
-- `BUSINESS_MEMORY_MAX_MESSAGES`
 - `YANDEX_AI_BASE_URL`
 - `YANDEX_AI_API_KEY`
 - `YANDEX_AI_MODEL`
@@ -97,6 +109,16 @@ YANDEX_AI_BASE_URL=https://ai.api.cloud.yandex.net/v1
 ```
 
 Model IDs не заданы в коде намеренно. Их нужно задавать только через `.env`.
+
+Business-переменные optional и нужны только для Telegram Business / Secretary Mode:
+
+- `BUSINESS_MODE_ENABLED`
+- `BUSINESS_ADMIN_ONLY`
+- `BUSINESS_REPLY_ENABLED`
+- `BUSINESS_REPLY_TRIGGER`
+- `BUSINESS_MEMORY_MAX_MESSAGES`
+- `BUSINESS_ALLOWED_CONNECTION_IDS`
+- `BUSINESS_ALLOWED_CHAT_IDS`
 
 ## Endpoints
 
@@ -154,9 +176,59 @@ uv run --python 3.12 --extra dev python scripts/run_polling.py
 
 Подробности: `docs/STAGE_2R_GUEST_MODE_POLLING_SMOKE.md`.
 
+## Как пользоваться без Telegram Business
+
+### Личка с ботом
+
+Напишите боту обычный запрос в private chat. Jarvis сохранит сообщение в обычную chat memory и подготовит ответ через worker.
+
+Пример:
+
+```text
+Составь список вопросов для созвона с подрядчиком
+```
+
+### Пересылка сообщения боту
+
+Перешлите сообщение в личку Jarvis. Бот сохранит пересланный текст как отдельный context item и предложит команды:
+
+```text
+/summary
+/draft_reply
+/translate
+/factcheck
+```
+
+### Черновик ответа
+
+Чтобы подготовить ответ клиенту без отправки от имени пользователя:
+
+```text
+Ответь на это:
+Клиент спрашивает, когда будет готов макет
+```
+
+Jarvis вернёт черновик. Пользователь сам копирует и отправляет его в нужный чат.
+
+### Группы
+
+Если бот добавлен в группу, он отвечает только на mention `@bot_username` или reply на сообщение бота.
+Если privacy mode Telegram ограничивает updates, Jarvis честно работает только с теми сообщениями, которые Telegram передал боту.
+
+### Guest Mode
+
+В чатах, куда бот не добавлен, используйте Guest Mode через `@bot_username`, если Telegram присылает update type `guest_message`.
+
+Regular readiness без Business account:
+
+```bash
+uv run --python 3.12 --extra dev python scripts/smoke_regular_readiness.py
+```
+
 ## Business Mode / Secretary Foundation
 
-Stage 3A добавляет безопасный foundation для Telegram Business Mode:
+Stage 3A оставляет безопасный optional foundation для Telegram Business Mode.
+Этот режим не работает для обычного аккаунта без Telegram Business / Secretary connection.
 
 - сохраняет `business_connection`, `business_message`, `edited_business_message` и `deleted_business_messages` в PostgreSQL;
 - проверяет owner через `ADMIN_TELEGRAM_IDS`, `is_enabled`, `can_reply`, allowlist connection/chat при наличии;
