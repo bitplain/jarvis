@@ -20,7 +20,7 @@ Jarvis не использует userbot/MTProto.
 
 1. Telegram отправляет update в `POST /telegram/webhook`.
 2. FastAPI проверяет webhook secret и передаёт update в aiogram Dispatcher.
-3. Middleware пропускает только `ADMIN_TELEGRAM_IDS`.
+3. Middleware пропускает env admin из `ADMIN_TELEGRAM_IDS` или пользователя из PostgreSQL allowlist.
 4. Private handler сохраняет входящее сообщение в PostgreSQL.
 5. Handler ставит arq job `process_llm_message`.
 6. Worker собирает system prompt и последние `MEMORY_MAX_MESSAGES`.
@@ -66,6 +66,20 @@ Group fallback finalization защищена `final_delivered`: повторны
 Обычные group messages без mention/reply должны игнорироваться без записи в regular memory и без LLM job.
 Сообщения от неразрешённых пользователей в group/supergroup молча отсекаются middleware; в private chat middleware по-прежнему отвечает `Доступ запрещён.`
 Если privacy mode Telegram ограничивает updates или Telegram присылает `guest_message` вместо обычного `message`, Jarvis не обещает чтение всей истории группы, а такой вызов не считается Group Assistant.
+
+## Access Settings
+
+Stage 4F-1 хранит разрешённых пользователей и группы в PostgreSQL таблице `telegram_access_entries`.
+
+Поля таблицы: `entry_type` (`user` или `group`), `telegram_id` bigint, optional `label`, optional `created_by`, timestamps. Уникальность задаётся по `(entry_type, telegram_id)`.
+
+`ADMIN_TELEGRAM_IDS` остаются env-based super admins: они всегда allowed и только они могут управлять `/settings`. Записи в `telegram_access_entries` дают доступ к боту, но не дают права администратора.
+
+`/whoami` доступен всем и показывает только ID текущего пользователя и текущего чата. Списки admin/allowed users не раскрываются.
+
+Group allowlist mode включается только после добавления первой разрешённой группы. Пока список групп пустой, authorized user mention/reply в любой группе работает как раньше. Когда группы добавлены, для group ответа нужны и allowed user, и allowed group.
+
+Telegram UI находится в `app/bot/routers/commands.py`: `/settings -> Доступ`, callback ids `settings:access:*`, FSM states `TelegramAccessInput.*`. Доступ к таблице изолирован в `app/db/repositories/telegram_access.py`, правила доступа — в `app/services/telegram_access_service.py`.
 
 ## Production webhook ingress
 

@@ -3,7 +3,9 @@ from typing import Any, cast
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +14,7 @@ from app.bot.middlewares.access import is_admin_user
 from app.db.models import BusinessConnection, BusinessConnectionStatus
 from app.db.repositories.messages import MessageRepository
 from app.db.repositories.runtime_settings import RuntimeSettingRepository
+from app.db.repositories.telegram_access import TelegramAccessRepository
 from app.llm.base import LLMProviderError
 from app.llm.factory import build_llm_provider
 from app.llm.types import LLMMessage
@@ -21,9 +24,22 @@ from app.services.runtime_settings_service import (
     RuntimeSettingsService,
     RuntimeSettingsUnavailable,
 )
+from app.services.telegram_access_service import (
+    AccessEntry,
+    TelegramAccessService,
+    TelegramAccessUnavailable,
+)
 
 SETTINGS_CALLBACK_REFRESH = "settings:refresh"
 SETTINGS_CALLBACK_CLOSE = "settings:close"
+SETTINGS_CALLBACK_AGENT = "settings:agent"
+SETTINGS_CALLBACK_ACCESS = "settings:access"
+SETTINGS_CALLBACK_ACCESS_USERS = "settings:access:users"
+SETTINGS_CALLBACK_ACCESS_GROUPS = "settings:access:groups"
+SETTINGS_CALLBACK_ACCESS_USER_ADD = "settings:access:user:add"
+SETTINGS_CALLBACK_ACCESS_USER_REMOVE = "settings:access:user:remove"
+SETTINGS_CALLBACK_ACCESS_GROUP_ADD = "settings:access:group:add"
+SETTINGS_CALLBACK_ACCESS_GROUP_REMOVE = "settings:access:group:remove"
 SETTINGS_PROVIDER_PREFIX = "settings:provider:"
 SETTINGS_PROVIDER_AUTO = "settings:provider:auto"
 SETTINGS_PROVIDER_YANDEX = "settings:provider:yandex"
@@ -36,7 +52,17 @@ PROVIDER_LABELS = {
 SETTINGS_UNAVAILABLE_MESSAGE = (
     "Настройки временно недоступны: миграция БД ещё не применена."
 )
+ACCESS_UNAVAILABLE_MESSAGE = (
+    "Настройки доступа временно недоступны: миграция БД ещё не применена."
+)
 logger = logging.getLogger(__name__)
+
+
+class TelegramAccessInput(StatesGroup):
+    add_user = State()
+    remove_user = State()
+    add_group = State()
+    remove_group = State()
 
 
 def _command_argument(message: Message) -> str | None:
@@ -113,6 +139,21 @@ def build_settings_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
+                InlineKeyboardButton(text="Агент", callback_data=SETTINGS_CALLBACK_AGENT),
+                InlineKeyboardButton(text="Доступ", callback_data=SETTINGS_CALLBACK_ACCESS),
+            ],
+            [
+                InlineKeyboardButton(text="Обновить", callback_data=SETTINGS_CALLBACK_REFRESH),
+                InlineKeyboardButton(text="Закрыть", callback_data=SETTINGS_CALLBACK_CLOSE),
+            ],
+        ]
+    )
+
+
+def build_agent_settings_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
                 InlineKeyboardButton(
                     text="Auto",
                     callback_data=SETTINGS_PROVIDER_AUTO,
@@ -127,22 +168,112 @@ def build_settings_keyboard() -> InlineKeyboardMarkup:
                 ),
             ],
             [
-                InlineKeyboardButton(text="Обновить", callback_data=SETTINGS_CALLBACK_REFRESH),
+                InlineKeyboardButton(text="Назад", callback_data=SETTINGS_CALLBACK_REFRESH),
                 InlineKeyboardButton(text="Закрыть", callback_data=SETTINGS_CALLBACK_CLOSE),
             ],
         ]
     )
 
 
+def build_access_settings_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Пользователи",
+                    callback_data=SETTINGS_CALLBACK_ACCESS_USERS,
+                ),
+                InlineKeyboardButton(
+                    text="Группы",
+                    callback_data=SETTINGS_CALLBACK_ACCESS_GROUPS,
+                ),
+            ],
+            [
+                InlineKeyboardButton(text="Назад", callback_data=SETTINGS_CALLBACK_REFRESH),
+                InlineKeyboardButton(text="Закрыть", callback_data=SETTINGS_CALLBACK_CLOSE),
+            ],
+        ]
+    )
+
+
+def build_access_users_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Добавить пользователя",
+                    callback_data=SETTINGS_CALLBACK_ACCESS_USER_ADD,
+                ),
+                InlineKeyboardButton(
+                    text="Удалить пользователя",
+                    callback_data=SETTINGS_CALLBACK_ACCESS_USER_REMOVE,
+                ),
+            ],
+            [
+                InlineKeyboardButton(text="Назад", callback_data=SETTINGS_CALLBACK_ACCESS),
+                InlineKeyboardButton(text="Закрыть", callback_data=SETTINGS_CALLBACK_CLOSE),
+            ],
+        ]
+    )
+
+
+def build_access_groups_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Добавить группу",
+                    callback_data=SETTINGS_CALLBACK_ACCESS_GROUP_ADD,
+                ),
+                InlineKeyboardButton(
+                    text="Удалить группу",
+                    callback_data=SETTINGS_CALLBACK_ACCESS_GROUP_REMOVE,
+                ),
+            ],
+            [
+                InlineKeyboardButton(text="Назад", callback_data=SETTINGS_CALLBACK_ACCESS),
+                InlineKeyboardButton(text="Закрыть", callback_data=SETTINGS_CALLBACK_CLOSE),
+            ],
+        ]
+    )
+
+
+def render_settings_home_text() -> str:
+    return "Настройки Jarvis\n\nРазделы:\n- Агент\n- Доступ"
+
+
 def render_settings_text(provider: ActiveLLMProvider, *, saved: bool = False) -> str:
     title = "Настройки сохранены." if saved else "Настройки Jarvis"
     return (
         f"{title}\n\n"
+        "Раздел: Агент\n\n"
         f"Активный агент: {PROVIDER_LABELS[provider]}\n\n"
         "Выберите LLM-провайдера:\n"
         "[Auto] [Yandex] [OpenRouter]\n\n"
         "Текущий режим применится к следующим сообщениям."
     )
+
+
+def render_access_settings_text(users_count: int, groups_count: int) -> str:
+    return (
+        "Доступ Jarvis\n\n"
+        "Админы задаются через production env.\n"
+        "Здесь можно управлять разрешёнными пользователями и группами.\n\n"
+        f"Разрешённые пользователи: {users_count}\n"
+        f"Разрешённые группы: {groups_count}"
+    )
+
+
+def render_access_entries_text(title: str, entries: list[AccessEntry]) -> str:
+    lines = [title, ""]
+    if entries:
+        lines.extend(
+            f"- {entry.telegram_id} — {entry.label or 'без подписи'}" for entry in entries
+        )
+    else:
+        lines.append("Список пуст.")
+    lines.extend(["", "Действия:"])
+    return "\n".join(lines)
 
 
 def _message_user_id(message: Message) -> int | None:
@@ -155,6 +286,13 @@ def _callback_user_id(callback: CallbackQuery) -> int | None:
 
 def _runtime_settings_service(session: object) -> RuntimeSettingsService:
     return RuntimeSettingsService(RuntimeSettingRepository(session))  # type: ignore[arg-type]
+
+
+def _telegram_access_service(session: object, admin_ids: set[int]) -> TelegramAccessService:
+    return TelegramAccessService(
+        TelegramAccessRepository(session),  # type: ignore[arg-type]
+        admin_ids=admin_ids,
+    )
 
 
 def _is_message_not_modified(exc: TelegramBadRequest) -> bool:
@@ -198,6 +336,65 @@ async def _safe_delete_settings_message(message: object) -> str:
     return "deleted"
 
 
+async def _edit_settings_callback_message(
+    callback: CallbackQuery,
+    *,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None,
+) -> bool:
+    if callback.message is None:
+        await callback.answer()
+        return True
+    edit_status = await _safe_edit_settings_message(
+        callback.message,
+        text=text,
+        reply_markup=reply_markup,
+    )
+    if edit_status == "not_modified":
+        await callback.answer("Настройки уже актуальны.", show_alert=False)
+        return False
+    if edit_status == "telegram_error":
+        await callback.answer("Не удалось обновить сообщение настроек.", show_alert=True)
+        return False
+    return True
+
+
+def _parse_access_input(text: str | None) -> tuple[int, str | None] | None:
+    if not text:
+        return None
+    parts = text.strip().split(maxsplit=1)
+    if not parts:
+        return None
+    try:
+        telegram_id = int(parts[0])
+    except ValueError:
+        return None
+    label = parts[1].strip() if len(parts) > 1 else None
+    return telegram_id, label or None
+
+
+async def cmd_whoami(message: Message, **data: Any) -> None:
+    settings = data.get("settings")
+    bot_username = await _resolve_bot_username(
+        data,
+        settings.telegram_bot_username if settings is not None else "",
+    )
+    if bot_username and _is_command_for_other_bot(message, bot_username):
+        return
+    if message.from_user is None:
+        await message.answer("Не удалось определить Telegram user ID.")
+        return
+    text = (
+        f"Ваш Telegram ID: {message.from_user.id}\n"
+        f"Chat ID: {message.chat.id}\n"
+        f"Тип чата: {message.chat.type}"
+    )
+    kwargs: dict[str, Any] = {}
+    if message.chat.type in {"group", "supergroup"}:
+        kwargs["reply_to_message_id"] = message.message_id
+    await message.answer(text, **kwargs)
+
+
 async def cmd_settings(message: Message, **data: Any) -> None:
     settings = data["settings"]
     if not is_admin_user(_message_user_id(message), settings.admin_ids):
@@ -207,15 +404,7 @@ async def cmd_settings(message: Message, **data: Any) -> None:
     if session is None:
         await message.answer("Настройки доступны только в runtime с БД.")
         return
-    try:
-        provider = await _runtime_settings_service(session).get_active_llm_provider()
-    except RuntimeSettingsUnavailable:
-        await message.answer(
-            f"{SETTINGS_UNAVAILABLE_MESSAGE}\n"
-            "Railway должен автоматически выполнить `alembic upgrade head` перед стартом API."
-        )
-        return
-    await message.answer(render_settings_text(provider), reply_markup=build_settings_keyboard())
+    await message.answer(render_settings_home_text(), reply_markup=build_settings_keyboard())
 
 
 async def handle_settings_callback(callback: CallbackQuery, **data: Any) -> None:
@@ -229,9 +418,9 @@ async def handle_settings_callback(callback: CallbackQuery, **data: Any) -> None
         await callback.answer("Настройки доступны только в runtime с БД.", show_alert=True)
         return
     callback_data = callback.data or ""
-    service = _runtime_settings_service(session)
     saved = False
     if callback_data.startswith(SETTINGS_PROVIDER_PREFIX):
+        service = _runtime_settings_service(session)
         provider_value = callback_data.removeprefix(SETTINGS_PROVIDER_PREFIX)
         try:
             current_provider = await service.get_active_llm_provider()
@@ -253,13 +442,131 @@ async def handle_settings_callback(callback: CallbackQuery, **data: Any) -> None
             await callback.answer(SETTINGS_UNAVAILABLE_MESSAGE, show_alert=True)
             return
         saved = True
-    elif callback_data == SETTINGS_CALLBACK_REFRESH:
+        edited = await _edit_settings_callback_message(
+            callback,
+            text=render_settings_text(provider, saved=saved),
+            reply_markup=build_agent_settings_keyboard(),
+        )
+        if not edited:
+            return
+        await callback.answer("Настройки сохранены.", show_alert=False)
+        return
+    if callback_data == SETTINGS_CALLBACK_REFRESH:
+        edited = await _edit_settings_callback_message(
+            callback,
+            text=render_settings_home_text(),
+            reply_markup=build_settings_keyboard(),
+        )
+        if edited:
+            await callback.answer()
+        return
+    if callback_data == SETTINGS_CALLBACK_AGENT:
+        service = _runtime_settings_service(session)
         try:
             provider = await service.get_active_llm_provider()
         except RuntimeSettingsUnavailable:
             await callback.answer(SETTINGS_UNAVAILABLE_MESSAGE, show_alert=True)
             return
-    elif callback_data == SETTINGS_CALLBACK_CLOSE:
+        edited = await _edit_settings_callback_message(
+            callback,
+            text=render_settings_text(provider),
+            reply_markup=build_agent_settings_keyboard(),
+        )
+        if edited:
+            await callback.answer()
+        return
+    if callback_data == SETTINGS_CALLBACK_ACCESS:
+        try:
+            access_service = _telegram_access_service(session, settings.admin_ids)
+            users = await access_service.list_allowed_users()
+            groups = await access_service.list_allowed_groups()
+        except TelegramAccessUnavailable:
+            await callback.answer(ACCESS_UNAVAILABLE_MESSAGE, show_alert=True)
+            return
+        edited = await _edit_settings_callback_message(
+            callback,
+            text=render_access_settings_text(len(users), len(groups)),
+            reply_markup=build_access_settings_keyboard(),
+        )
+        if edited:
+            await callback.answer()
+        return
+    if callback_data == SETTINGS_CALLBACK_ACCESS_USERS:
+        try:
+            users = await _telegram_access_service(session, settings.admin_ids).list_allowed_users()
+        except TelegramAccessUnavailable:
+            await callback.answer(ACCESS_UNAVAILABLE_MESSAGE, show_alert=True)
+            return
+        edited = await _edit_settings_callback_message(
+            callback,
+            text=render_access_entries_text("Разрешённые пользователи", users),
+            reply_markup=build_access_users_keyboard(),
+        )
+        if edited:
+            await callback.answer()
+        return
+    if callback_data == SETTINGS_CALLBACK_ACCESS_GROUPS:
+        try:
+            access_service = _telegram_access_service(session, settings.admin_ids)
+            groups = await access_service.list_allowed_groups()
+        except TelegramAccessUnavailable:
+            await callback.answer(ACCESS_UNAVAILABLE_MESSAGE, show_alert=True)
+            return
+        edited = await _edit_settings_callback_message(
+            callback,
+            text=render_access_entries_text("Разрешённые группы", groups),
+            reply_markup=build_access_groups_keyboard(),
+        )
+        if edited:
+            await callback.answer()
+        return
+    if callback_data in {
+        SETTINGS_CALLBACK_ACCESS_USER_ADD,
+        SETTINGS_CALLBACK_ACCESS_USER_REMOVE,
+        SETTINGS_CALLBACK_ACCESS_GROUP_ADD,
+        SETTINGS_CALLBACK_ACCESS_GROUP_REMOVE,
+    }:
+        state = cast(Any, data.get("state"))
+        if state is None or not all(
+            hasattr(state, attr) for attr in ("set_state", "clear")
+        ):
+            await callback.answer("FSM временно недоступен.", show_alert=True)
+            return
+        prompts = {
+            SETTINGS_CALLBACK_ACCESS_USER_ADD: (
+                TelegramAccessInput.add_user,
+                "Отправьте Telegram user ID.\n"
+                "Можно добавить подпись через пробел:\n\n"
+                "59144850 Александр",
+            ),
+            SETTINGS_CALLBACK_ACCESS_USER_REMOVE: (
+                TelegramAccessInput.remove_user,
+                "Отправьте Telegram ID, который нужно удалить.\n"
+                "Для отмены отправьте /cancel.",
+            ),
+            SETTINGS_CALLBACK_ACCESS_GROUP_ADD: (
+                TelegramAccessInput.add_group,
+                "Отправьте Telegram group chat ID.\n"
+                "Можно добавить подпись через пробел:\n\n"
+                "-5437860232 Домашний чат",
+            ),
+            SETTINGS_CALLBACK_ACCESS_GROUP_REMOVE: (
+                TelegramAccessInput.remove_group,
+                "Отправьте Telegram ID, который нужно удалить.\n"
+                "Для отмены отправьте /cancel.",
+            ),
+        }
+        next_state, prompt = prompts[callback_data]
+        await state.set_state(next_state)
+        edited = await _edit_settings_callback_message(
+            callback,
+            text=prompt,
+            reply_markup=None,
+        )
+        if edited:
+            await callback.answer()
+        return
+    if callback_data == SETTINGS_CALLBACK_CLOSE:
         await callback.answer()
         if callback.message is not None:
             delete_status = await _safe_delete_settings_message(callback.message)
@@ -270,25 +577,7 @@ async def handle_settings_callback(callback: CallbackQuery, **data: Any) -> None
                     reply_markup=None,
                 )
         return
-    else:
-        await callback.answer("Неизвестная команда настроек.", show_alert=True)
-        return
-    if callback.message is not None and hasattr(callback.message, "edit_text"):
-        edit_status = await _safe_edit_settings_message(
-            callback.message,
-            text=render_settings_text(provider, saved=saved),
-            reply_markup=build_settings_keyboard(),
-        )
-        if edit_status == "not_modified":
-            await callback.answer("Настройки уже актуальны.", show_alert=False)
-            return
-        if edit_status == "telegram_error":
-            await callback.answer("Не удалось обновить сообщение настроек.", show_alert=True)
-            return
-    if saved:
-        await callback.answer("Настройки сохранены.", show_alert=False)
-    else:
-        await callback.answer()
+    await callback.answer("Неизвестная команда настроек.", show_alert=True)
 
 
 async def cmd_status(message: Message, **data: Any) -> None:
@@ -414,6 +703,67 @@ async def cmd_factcheck(message: Message, **data: Any) -> None:
     await _handle_context_command(message, data, action="factcheck")
 
 
+async def handle_access_input_message(
+    message: Message,
+    state: FSMContext,
+    **data: Any,
+) -> None:
+    settings = data["settings"]
+    user_id = _message_user_id(message)
+    if not is_admin_user(user_id, settings.admin_ids):
+        await message.answer("Доступ запрещён.")
+        return
+    text = message.text or message.caption
+    if text and text.strip().lower() == "/cancel":
+        await state.clear()
+        await message.answer("Ввод отменён.")
+        return
+    session = data.get("db_session")
+    if session is None:
+        await message.answer("Настройки доступны только в runtime с БД.")
+        return
+    current_state = await state.get_state()
+    parsed = _parse_access_input(text)
+    if parsed is None:
+        await message.answer("Нужен Telegram ID числом. Для отмены отправьте /cancel.")
+        return
+    telegram_id, label = parsed
+    service = _telegram_access_service(session, settings.admin_ids)
+    try:
+        if current_state == TelegramAccessInput.add_user.state:
+            await service.add_allowed_user(telegram_id, label, created_by=user_id)
+            logger.info("telegram_access_user_added")
+            await state.clear()
+            await message.answer("Пользователь добавлен.")
+            return
+        if current_state == TelegramAccessInput.remove_user.state:
+            removed = await service.remove_allowed_user(telegram_id)
+            logger.info("telegram_access_user_removed")
+            await state.clear()
+            await message.answer("Пользователь удалён." if removed else "Запись не найдена.")
+            return
+        if current_state == TelegramAccessInput.add_group.state:
+            await service.add_allowed_group(telegram_id, label, created_by=user_id)
+            logger.info("telegram_access_group_added")
+            await state.clear()
+            await message.answer("Группа добавлена.")
+            return
+        if current_state == TelegramAccessInput.remove_group.state:
+            removed = await service.remove_allowed_group(telegram_id)
+            logger.info("telegram_access_group_removed")
+            await state.clear()
+            await message.answer("Группа удалена." if removed else "Запись не найдена.")
+            return
+    except ValueError:
+        await message.answer("Нужен положительный Telegram user ID.")
+        return
+    except TelegramAccessUnavailable:
+        await message.answer(ACCESS_UNAVAILABLE_MESSAGE)
+        return
+    await state.clear()
+    await message.answer("Ввод отменён.")
+
+
 async def resolve_business_counts(data: dict[str, Any]) -> tuple[int, int]:
     injected = data.get("business_status_counts")
     if isinstance(injected, tuple) and len(injected) == 2:
@@ -458,6 +808,7 @@ def build_router() -> Router:
     router = Router(name="commands")
     router.message(Command("start"))(cmd_start)
     router.message(Command("help"))(cmd_help)
+    router.message(Command("whoami"))(cmd_whoami)
     router.message(Command("settings"))(cmd_settings)
     router.message(Command("status"))(cmd_status)
     router.message(Command("models"))(cmd_models)
@@ -466,6 +817,11 @@ def build_router() -> Router:
     router.message(Command("draft_reply"))(cmd_draft_reply)
     router.message(Command("translate"))(cmd_translate)
     router.message(Command("factcheck"))(cmd_factcheck)
+    router.message(Command("cancel"))(handle_access_input_message)
+    router.message(StateFilter(TelegramAccessInput.add_user))(handle_access_input_message)
+    router.message(StateFilter(TelegramAccessInput.remove_user))(handle_access_input_message)
+    router.message(StateFilter(TelegramAccessInput.add_group))(handle_access_input_message)
+    router.message(StateFilter(TelegramAccessInput.remove_group))(handle_access_input_message)
     router.callback_query(F.data.startswith("settings:"))(handle_settings_callback)
     return router
 

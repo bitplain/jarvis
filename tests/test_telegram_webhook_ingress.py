@@ -5,6 +5,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.api import routes_telegram
+from app.bot.middlewares import access
 from app.bot.routers import groups, private
 from app.core.config import Settings
 from app.core.config import get_settings as app_get_settings
@@ -87,6 +88,24 @@ class FakeMessageRepository:
         del chat_id
 
 
+class FakeAccessService:
+    allowed_users: set[int] = set()
+    allowed_groups: set[int] = set()
+
+    def __init__(self, repository: object, *, admin_ids: set[int]) -> None:
+        del repository
+        self.admin_ids = admin_ids
+
+    def is_admin_user(self, user_id: int | None) -> bool:
+        return user_id is not None and user_id in self.admin_ids
+
+    async def is_allowed_user(self, user_id: int | None) -> bool:
+        return user_id in self.allowed_users
+
+    async def is_allowed_group(self, chat_id: int) -> bool:
+        return not self.allowed_groups or chat_id in self.allowed_groups
+
+
 def private_update(*, user_id: int, text: str = "тест") -> dict[str, object]:
     return {
         "update_id": 101,
@@ -134,6 +153,10 @@ def ingress_app(monkeypatch: pytest.MonkeyPatch) -> tuple[Any, FakeBot, FakeRedi
     app.dependency_overrides[routes_telegram.get_session] = fake_get_session
     monkeypatch.setattr(private, "MessageRepository", FakeMessageRepository)
     monkeypatch.setattr(groups, "MessageRepository", FakeMessageRepository)
+    monkeypatch.setattr(access, "TelegramAccessRepository", lambda session: object())
+    monkeypatch.setattr(access, "TelegramAccessService", FakeAccessService)
+    FakeAccessService.allowed_users = set()
+    FakeAccessService.allowed_groups = set()
     return app, fake_bot, fake_redis
 
 
@@ -179,6 +202,24 @@ async def test_webhook_private_unauthorized_gets_access_denied_without_job(
 
 
 @pytest.mark.asyncio
+async def test_webhook_private_db_allowed_user_enqueues_once(
+    ingress_app: tuple[Any, FakeBot, FakeRedis],
+) -> None:
+    app, bot, redis = ingress_app
+    FakeAccessService.allowed_users = {200600}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/telegram/webhook", json=private_update(user_id=200600))
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "accepted"}
+    assert redis.jobs == [
+        ("process_llm_message", {"chat_id": 200600, "user_id": 200600, "private": True})
+    ]
+    assert [message["text"] for message in bot.sent_messages] == ["Принял. Готовлю ответ."]
+
+
+@pytest.mark.asyncio
 async def test_webhook_group_admin_mention_enqueues_once(
     ingress_app: tuple[Any, FakeBot, FakeRedis],
 ) -> None:
@@ -191,6 +232,26 @@ async def test_webhook_group_admin_mention_enqueues_once(
     assert response.json() == {"status": "accepted"}
     assert redis.jobs == [
         ("process_llm_message", {"chat_id": -100123, "user_id": 100500, "private": False})
+    ]
+    assert bot.sent_messages == []
+    assert bot.chat_actions
+
+
+@pytest.mark.asyncio
+async def test_webhook_group_db_allowed_user_mention_enqueues_once(
+    ingress_app: tuple[Any, FakeBot, FakeRedis],
+) -> None:
+    app, bot, redis = ingress_app
+    FakeAccessService.allowed_users = {200600}
+    FakeAccessService.allowed_groups = {-100123}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/telegram/webhook", json=group_update(user_id=200600))
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "accepted"}
+    assert redis.jobs == [
+        ("process_llm_message", {"chat_id": -100123, "user_id": 200600, "private": False})
     ]
     assert bot.sent_messages == []
     assert bot.chat_actions

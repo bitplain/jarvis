@@ -2,7 +2,19 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Enum, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -55,6 +67,11 @@ class BusinessMessageStatus(StrEnum):
     FAILED = "failed"
     DELETED = "deleted"
     EDITED = "edited"
+
+
+class TelegramAccessEntryType(StrEnum):
+    USER = "user"
+    GROUP = "group"
 
 
 class User(Base):
@@ -139,6 +156,33 @@ class RuntimeSetting(Base):
         onupdate=utcnow,
     )
     updated_by_telegram_id: Mapped[int | None] = mapped_column(BigInteger)
+
+
+class TelegramAccessEntry(Base):
+    __tablename__ = "telegram_access_entries"
+    __table_args__ = (
+        CheckConstraint(
+            "entry_type IN ('user', 'group')",
+            name="ck_telegram_access_entries_entry_type",
+        ),
+        UniqueConstraint(
+            "entry_type",
+            "telegram_id",
+            name="uq_telegram_access_entries_entry_type_telegram_id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    entry_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    telegram_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    label: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[int | None] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        onupdate=utcnow,
+    )
 
 
 class BusinessConnectionStub(Base):
