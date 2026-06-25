@@ -1,187 +1,239 @@
 # Railway deploy Jarvis
 
-Stage 4B готовит репозиторий к ручному production deploy на Railway.
-Этот документ не создаёт Railway project и не запускает deploy сам по себе.
+Stage 4C фиксирует повторяемый production deploy на Railway после ручного live bring-up.
+Документ не создаёт Railway project, не меняет Railway Variables и не запускает deploy сам по себе.
 
-## 1. Что будет создано в Railway
+## Railway services
 
-- API service: FastAPI webhook backend, публичный домен, healthcheck `/ready`.
-- Worker service: arq worker без public domain.
-- PostgreSQL: Railway PostgreSQL plugin/service.
-- Redis: Railway Redis plugin/service.
+- `jarvis-api`: публичный API/webhook service. У него включён public domain, Telegram webhook указывает на `/telegram/webhook`, Railway healthcheck идёт в `/health`, ручная dependency-проверка идёт через `/ready`.
+- `jarvis-worker`: background worker без public domain. Он читает jobs из Redis и выполняет LLM/Telegram отправку.
+- PostgreSQL: Railway Postgres service. `DATABASE_URL` подключается к API и worker.
+- Redis: Railway Redis service. `REDIS_URL` подключается к API и worker.
 
-Railway не запускает `docker-compose.yml` как единый production stack. Compose остаётся локальным development flow.
+Railway не запускает `docker-compose.yml` как единый production stack. Compose остаётся локальным development/smoke flow.
 
-## 2. Создать Railway project
+## Config files
 
-1. Открыть Railway dashboard.
-2. Создать новый project.
-3. Не вставлять секреты в git, README, issue, PR или logs.
-4. Подключить GitHub repository Jarvis как source.
+Для Railway services используются отдельные config-as-code файлы:
 
-## 3. Подключить GitHub repo
+- API: `railway.api.toml`.
+- Worker: `railway.worker.toml`.
 
-В Railway выбрать GitHub repo Jarvis и создать первый service для API.
-Если Railway UI позволяет выбрать config file, API service uses `railway.api.toml`.
-Если UI не даёт выбрать toml, использовать тот же Dockerfile и вручную задать Start Command:
+Если Railway UI позволяет выбрать custom config file, для API указать `/railway.api.toml`, для worker указать `/railway.worker.toml`.
 
-```bash
-sh -c 'uvicorn app.main:app --host ${APP_HOST:-0.0.0.0} --port ${PORT:-8000}'
-```
+## Start commands
 
-## 4. PostgreSQL и Redis
-
-1. Добавить Railway PostgreSQL.
-2. Добавить Railway Redis.
-3. Подключить variables этих services к API service и Worker service.
-4. Для PostgreSQL использовать `DATABASE_URL`, который Railway отдаёт сервису.
-5. Для Redis использовать `REDIS_URL`, который Railway отдаёт сервису.
-
-Jarvis принимает `DATABASE_URL` в формате Railway и приводит `postgresql://` / `postgres://` к async driver `postgresql+asyncpg://`.
-
-## 5. Variables
-
-Добавить в Railway Variables для API и Worker:
-
-```env
-APP_ENV=production
-APP_HOST=0.0.0.0
-APP_PORT=8000
-PUBLIC_BASE_URL=https://your-service.up.railway.app
-
-TELEGRAM_BOT_TOKEN=
-TELEGRAM_BOT_USERNAME=
-TELEGRAM_WEBHOOK_SECRET=
-ADMIN_TELEGRAM_IDS=
-ADMIN_API_TOKEN=
-
-DATABASE_URL=
-REDIS_URL=
-
-LLM_PRIMARY_PROVIDER=yandex
-LLM_FALLBACK_PROVIDER=openrouter
-
-YANDEX_AI_BASE_URL=
-YANDEX_AI_API_KEY=
-YANDEX_AI_FOLDER_ID=
-YANDEX_AI_MODEL=
-
-OPENROUTER_BASE_URL=
-OPENROUTER_API_KEY=
-OPENROUTER_MODEL=
-
-GUEST_MODE_ENABLED=true
-GUEST_MODE_ADMIN_ONLY=true
-
-STREAMING_ENABLED=true
-STREAMING_PRIVATE_DRAFT_ENABLED=true
-STREAMING_GROUP_FALLBACK_ENABLED=true
-STREAMING_DRAFT_UPDATE_INTERVAL_MS=800
-STREAMING_GROUP_EDIT_INTERVAL_MS=1000
-STREAMING_MIN_CHARS_DELTA=120
-STREAMING_MAX_DRAFT_SECONDS=25
-STREAMING_SEND_CHAT_ACTION_INTERVAL_SECONDS=4
-STREAMING_DRAFT_RAW_API_FALLBACK=true
-```
-
-Значения выше являются именами и безопасными defaults/placeholders. Реальные token/key/admin values вводятся только в Railway Variables.
-
-## 6. API service
-
-- Source: тот же GitHub repo.
-- Build: Dockerfile.
-- Railway config: `railway.api.toml`.
-- Start Command:
+API command из `railway.api.toml`:
 
 ```bash
-sh -c 'uvicorn app.main:app --host ${APP_HOST:-0.0.0.0} --port ${PORT:-8000}'
+sh -c "python -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}"
 ```
 
-- Public domain: включить.
-- Healthcheck path: `/ready`.
-- Проверочный endpoint без зависимостей: `/health`.
-- Telegram webhook endpoint: `/telegram/webhook`.
-
-## 7. Worker service
-
-- Source: тот же GitHub repo.
-- Build: Dockerfile.
-- Railway config: `railway.worker.toml`.
-- Public domain: не нужен.
-- Start Command:
+Worker command из `railway.worker.toml`:
 
 ```bash
 arq app.workers.arq_settings.WorkerSettings
 ```
 
-Worker подключается к PostgreSQL и Redis через те же Railway Variables. Worker не запускает Alembic migrations автоматически.
+Важно: API command должен идти через `sh -c`, чтобы `${PORT:-8080}` был раскрыт shell runtime, а не передан в uvicorn буквальной строкой.
 
-## 8. Миграции
+## Pre-deploy migrations
 
-Предпочтительный flow: ручная миграция через Railway CLI после настройки variables и перед проверкой webhook:
+API service запускает Alembic до старта новой версии:
 
 ```bash
-railway run alembic upgrade head
+alembic upgrade head
 ```
 
-Не запускать миграции автоматически в worker, чтобы не получить гонки между services.
+Это задано в `railway.api.toml`:
 
-## 9. Установить webhook
+```toml
+[deploy]
+preDeployCommand = "alembic upgrade head"
+```
 
-После получения публичного Railway domain и заполнения `PUBLIC_BASE_URL`:
+Worker service не запускает Alembic migrations. Это уменьшает риск гонки между API и worker deploy.
+
+Если Railway pre-deploy command падает с non-zero exit code, deployment не должен переходить к старту приложения. Следующий push нужно проверять по логам `jarvis-api`: там должен быть виден успешный pre-deploy step.
+
+## Railway Variables UI rule
+
+В Railway Variables:
+
+- left field = variable name;
+- right field = value only;
+- value only, no KEY=value.
+
+Правильно:
+
+```text
+Key: DATABASE_URL
+Value: ${{Postgres.DATABASE_URL}}
+```
+
+Неправильно:
+
+```text
+Key: DATABASE_URL
+Value: DATABASE_URL=${{Postgres.DATABASE_URL}}
+```
+
+Реальные token/key/admin values вводятся только в Railway Variables. Их нельзя писать в git, README, issue, PR или logs.
+
+## Required API variables
+
+Минимальный набор для `jarvis-api`:
+
+```env
+APP_ENV=production
+APP_HOST=0.0.0.0
+APP_PORT=8080
+PUBLIC_BASE_URL=https://jarvis-production-786d.up.railway.app
+TELEGRAM_BOT_TOKEN=<secret>
+TELEGRAM_BOT_USERNAME=Home_ai_my_bot
+TELEGRAM_WEBHOOK_SECRET=<A-Z-a-z-0-9_- only>
+ADMIN_TELEGRAM_IDS=<telegram-user-id>
+ADMIN_API_TOKEN=<secret>
+DATABASE_URL=${{Postgres.DATABASE_URL}}
+REDIS_URL=${{Redis.REDIS_URL}}
+REGULAR_ASSISTANT_ENABLED=true
+GROUP_ASSISTANT_ENABLED=true
+GUEST_MODE_ENABLED=true
+STREAMING_ENABLED=true
+STREAMING_PRIVATE_DRAFT_ENABLED=true
+STREAMING_GROUP_FALLBACK_ENABLED=true
+```
+
+`TELEGRAM_BOT_USERNAME` должен быть username без `@`, не numeric id.
+`ADMIN_TELEGRAM_IDS` должен содержать Telegram user id администратора.
+`TELEGRAM_WEBHOOK_SECRET` допускает только `A-Z`, `a-z`, `0-9`, `_`, `-`.
+
+## Required worker variables
+
+Минимальный набор для `jarvis-worker`:
+
+```env
+TELEGRAM_BOT_TOKEN=<same bot token>
+DATABASE_URL=${{Postgres.DATABASE_URL}}
+REDIS_URL=${{Redis.REDIS_URL}}
+LLM_PRIMARY_PROVIDER=yandex
+LLM_FALLBACK_PROVIDER=openrouter
+YANDEX_AI_BASE_URL=https://llm.api.cloud.yandex.net
+YANDEX_AI_API_KEY=<secret>
+YANDEX_AI_FOLDER_ID=<folder-id>
+YANDEX_AI_MODEL=<model>
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_API_KEY=<secret>
+OPENROUTER_MODEL=<model>
+STREAMING_ENABLED=true
+STREAMING_PRIVATE_DRAFT_ENABLED=true
+STREAMING_GROUP_FALLBACK_ENABLED=true
+```
+
+LLM keys нужны именно в `jarvis-worker`, потому что LLM job выполняет worker.
+
+## Webhook setup
+
+После получения публичного Railway domain и заполнения `PUBLIC_BASE_URL` выполнить в Railway API console:
 
 ```bash
-railway run python scripts/setup_telegram_webhook.py
-railway run python scripts/setup_telegram_webhook.py --info
+PYTHONPATH=/app python scripts/setup_telegram_webhook.py
+PYTHONPATH=/app python scripts/setup_telegram_webhook.py --info
 ```
 
 Скрипт берёт `TELEGRAM_BOT_TOKEN`, `PUBLIC_BASE_URL` и `TELEGRAM_WEBHOOK_SECRET` из Railway process env или локального `.env`. В выводе показываются только sanitized host/path/status, без token и secret.
 
-## 10. Проверить
+Production runtime использует webhook mode. Polling разрешён только для local/Mac smoke и не должен работать параллельно с production webhook runtime.
+Короткое правило для проверок: polling только для local, production только webhook.
+
+## Health and readiness
 
 HTTP:
 
 ```bash
-curl -fsS https://your-service.up.railway.app/health
-curl -fsS https://your-service.up.railway.app/ready
+curl -fsS https://jarvis-production-786d.up.railway.app/health
+curl -fsS https://jarvis-production-786d.up.railway.app/ready
 ```
 
-Telegram:
+`/health` должен проходить сразу после старта процесса. `/ready` вернёт degraded/503, если Railway PostgreSQL или Redis ещё не подключены, variables не привязаны, миграции не применены или сеть ещё не готова.
+
+## LLM smoke
+
+В Railway worker console:
+
+```bash
+PYTHONPATH=/app python scripts/smoke_llm.py
+```
+
+Ожидаемо:
+
+- verdict не `BLOCKED_LLM_SMOKE`;
+- нет `provider_not_configured`;
+- нет `TokenValidationError`;
+- бот отвечает в Telegram.
+
+## Telegram smoke
+
+Проверить руками после webhook setup:
 
 - `/start` в private chat.
-- Private assistant: обычный текст владельца.
+- Private regular answer: обычный текст владельца.
 - Guest Mode: вызов через `@bot_username`, который Telegram доставляет как `guest_message`.
 - Group assistant: mention/reply в настоящей group/supergroup, где бот добавлен участником.
 - Streaming private draft: private path создаёт draft preview и финальный ответ.
 - Group fallback streaming: group path использует provisional/edit flow, без `sendMessageDraft`.
 
-Repository readiness без секретов:
+Обычное private/group сообщение не считается Guest Mode smoke.
+
+## Repository readiness without secrets
+
+Локальная проверка config/docs без секретов:
 
 ```bash
-railway run python scripts/smoke_railway_readiness.py
+uv run --python 3.12 --extra dev python scripts/smoke_railway_readiness.py
 ```
 
-## 11. Logs
+Ожидаемый verdict:
+
+```text
+PASS_RAILWAY_READINESS
+```
+
+## Typical Railway failures
+
+| Симптом | Причина | Фикс |
+| --- | --- | --- |
+| `$PORT is not a valid integer` | Start Command передал `${PORT...}` в приложение буквально, без shell expansion. | Использовать `sh -c "python -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}"`. |
+| `TELEGRAM_BOT_TOKEN missing` | Token не задан в variables нужного service. | Добавить `TELEGRAM_BOT_TOKEN` в `jarvis-api` и `jarvis-worker`, значение не печатать. |
+| `TokenValidationError: Token is invalid` | В value field вставили `TELEGRAM_BOT_TOKEN=...`, пробелы или неправильный token. | В Railway Variables right field вводить только value. |
+| `secret token contains unallowed characters` | `TELEGRAM_WEBHOOK_SECRET` содержит запрещённые символы. | Использовать только `A-Z`, `a-z`, `0-9`, `_`, `-`. |
+| `Доступ запрещён` | Telegram user id не входит в `ADMIN_TELEGRAM_IDS` или задан numeric bot id вместо owner id. | Указать реальный Telegram user id администратора в `ADMIN_TELEGRAM_IDS`. |
+| `relation "messages" does not exist` | PostgreSQL migrations не применились до обработки webhook/job. | Проверить `preDeployCommand = "alembic upgrade head"` в `railway.api.toml` и логи pre-deploy step. |
+| `provider_not_configured` | LLM provider variables не заданы в worker service. | Добавить Yandex/OpenRouter variables в `jarvis-worker`. |
+| `llm_failed` | Provider доступен, но запрос завершился ошибкой модели, сети или auth. | Проверить worker logs, provider status, model id и ключи без вывода секретов. |
+| Railway logs show `[err]`, but task has `●` | Railway может помечать stderr как `[err]`, хотя task ещё выполняется. | Смотреть verdict, traceback, exit code и последующие строки; не считать один marker `[err]` падением без контекста. |
+
+## Logs
 
 В Railway смотреть отдельно:
 
-- API service logs: startup, `/health`, `/ready`, Telegram webhook POST, sanitized errors.
+- API service logs: startup, pre-deploy migration, `/health`, `/ready`, Telegram webhook POST, sanitized errors.
 - Worker service logs: arq startup, `process_llm_message`, provider status без token/key/header.
 - PostgreSQL/Redis service status: connection errors и restarts.
 
 В логах нельзя печатать Telegram token, provider keys, Authorization headers, `ADMIN_API_TOKEN`, полные Telegram IDs и приватный текст сообщений.
 
-## 12. Откатиться
+## Rollback
 
 1. В Railway выбрать предыдущий deployment API service.
 2. В Railway выбрать предыдущий deployment Worker service.
 3. Если откат затрагивает schema, отдельно оценить Alembic downgrade/restore snapshot.
 4. Проверить `/health`, `/ready`, webhook info и один private smoke.
 
-## 13. Что нельзя делать
+## Что нельзя делать
 
-- Не включать polling в production; polling только для local/Mac smoke.
+- Не включать polling в production.
 - Не хранить `.env` в git.
-- Не запускать два Telegram runtime одновременно: webhook production и local polling.
-- Не создавать Railway project/deploy без отдельной команды.
+- Не запускать два Telegram runtime одновременно: webhook production и local polling runtime.
+- Не менять Railway Variables через CLI без отдельного подтверждения.
 - Не пушить изменения, tag или release без отдельной команды.

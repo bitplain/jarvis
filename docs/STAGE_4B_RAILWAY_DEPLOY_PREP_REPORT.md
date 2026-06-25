@@ -32,7 +32,8 @@
   - build: Dockerfile;
   - start command: `sh -c 'uvicorn app.main:app --host ${APP_HOST:-0.0.0.0} --port ${PORT:-8000}'`;
   - public domain: нужен;
-  - healthcheck path: `/ready`.
+  - Railway deploy healthcheck path: `/health`;
+  - dependency readiness endpoint: `/ready`.
 - Worker service:
   - config: `railway.worker.toml`;
   - build: Dockerfile;
