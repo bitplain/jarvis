@@ -13,3 +13,9 @@ def test_config_loads_from_env() -> None:
     assert settings.admin_ids == {1, 2}
     assert settings.openrouter_base_url == "https://openrouter.ai/api/v1"
     assert settings.database_url.startswith("postgresql+asyncpg://")
+
+
+def test_database_url_env_override_uses_asyncpg_driver() -> None:
+    settings = Settings(database_url_env="postgresql://user:password@host:5432/db")
+
+    assert settings.database_url == "postgresql+asyncpg://user:password@host:5432/db"

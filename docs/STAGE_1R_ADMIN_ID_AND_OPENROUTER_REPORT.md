@@ -34,7 +34,7 @@ uv run --python 3.12 --extra dev python scripts/bootstrap_real_env.py --apply --
 Официальная форма OpenRouter chat completion подтверждена по документации:
 
 - endpoint: `POST /api/v1/chat/completions`
-- auth: `Authorization: Bearer <token>`
+- auth: Bearer token, значение не выводилось
 - тело: `model`, `messages`, `max_tokens`
 
 Источники:

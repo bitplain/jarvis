@@ -5,7 +5,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        populate_by_name=True,
+    )
 
     app_env: str = "local"
     app_host: str = "0.0.0.0"
@@ -23,6 +28,7 @@ class Settings(BaseSettings):
     postgres_password: str = "jarvis_password_change_me"
     postgres_host: str = "postgres"
     postgres_port: int = 5432
+    database_url_env: str = Field(default="", validation_alias="DATABASE_URL")
     redis_url: str = "redis://redis:6379/0"
 
     memory_max_messages: int = Field(default=20, ge=1, le=200)
@@ -91,11 +97,23 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
+        if self.database_url_env:
+            return self._normalize_async_database_url(self.database_url_env)
         return (
             "postgresql+asyncpg://"
             f"{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
+
+    @staticmethod
+    def _normalize_async_database_url(value: str) -> str:
+        if value.startswith("postgresql+asyncpg://"):
+            return value
+        if value.startswith("postgresql://"):
+            return value.replace("postgresql://", "postgresql+asyncpg://", 1)
+        if value.startswith("postgres://"):
+            return value.replace("postgres://", "postgresql+asyncpg://", 1)
+        return value
 
     @property
     def selected_model(self) -> str:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from dataclasses import dataclass, field
@@ -66,6 +67,12 @@ def parse_env_file(path: Path) -> dict[str, str]:
     return values
 
 
+def load_env_values(path: Path) -> dict[str, str]:
+    values = dict(os.environ)
+    values.update(parse_env_file(path))
+    return values
+
+
 def _sanitize_error(value: str) -> str:
     sanitized = re.sub(r"bot\d+:[A-Za-z0-9_-]+", "bot<redacted>", value)
     sanitized = re.sub(r"Bearer\s+[A-Za-z0-9._~+/=-]+", "Bearer <redacted>", sanitized)
@@ -94,7 +101,7 @@ def set_webhook(
     *,
     http: TelegramHttp | None = None,
 ) -> WebhookResult:
-    env = parse_env_file(env_path)
+    env = load_env_values(env_path)
     token = env.get("TELEGRAM_BOT_TOKEN", "")
     secret = env.get("TELEGRAM_WEBHOOK_SECRET", "")
     public_base_url = env.get("PUBLIC_BASE_URL", "")
@@ -125,7 +132,7 @@ def get_webhook_info(
     *,
     http: TelegramHttp | None = None,
 ) -> WebhookResult:
-    env = parse_env_file(env_path)
+    env = load_env_values(env_path)
     token = env.get("TELEGRAM_BOT_TOKEN", "")
     if not token:
         return WebhookResult(action="info", ok=False, error="TELEGRAM_BOT_TOKEN missing")

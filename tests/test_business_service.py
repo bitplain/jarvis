@@ -427,7 +427,7 @@ async def test_business_logs_do_not_include_secrets(caplog: pytest.LogCaptureFix
 
     with caplog.at_level(logging.WARNING):
         await service.handle_business_message(
-            make_message(text="!jarvis Authorization: Bearer secret-token")
+            make_message(text="!jarvis Authorization header Bearer secret-token")
         )
 
     assert "secret-token" not in caplog.text

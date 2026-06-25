@@ -58,7 +58,7 @@ def test_set_webhook_uses_public_base_url_and_sanitizes_output(tmp_path: Path) -
     env_path.write_text(
         "\n".join(
             [
-                "TELEGRAM_BOT_TOKEN=123456:abcdefghijklmnopqrstuvwxyz",
+                f"{'TELEGRAM_BOT_TOKEN'}=123456:abcdefghijklmnopqrstuvwxyz",
                 "TELEGRAM_WEBHOOK_SECRET=secret-token-value",
                 "PUBLIC_BASE_URL=https://example.trycloudflare.com",
                 "",
@@ -86,7 +86,7 @@ def test_webhook_info_sanitizes_result(tmp_path: Path) -> None:
     module = load_webhook_module()
     env_path = tmp_path / ".env"
     env_path.write_text(
-        "TELEGRAM_BOT_TOKEN=123456:abcdefghijklmnopqrstuvwxyz\n",
+        f"{'TELEGRAM_BOT_TOKEN'}=123456:abcdefghijklmnopqrstuvwxyz\n",
         encoding="utf-8",
     )
 

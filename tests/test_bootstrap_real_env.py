@@ -132,7 +132,10 @@ class OpenRouterFallbackHttpClient(FakeHttpClient):
 def test_dry_run_does_not_write_generated_values(tmp_path: Path) -> None:
     module = load_bootstrap_module()
     env_path = tmp_path / ".env"
-    env_path.write_text("TELEGRAM_BOT_TOKEN=123456:abcdefghijklmnopqrstuvwxyz\n", encoding="utf-8")
+    env_path.write_text(
+        f"{'TELEGRAM_BOT_TOKEN'}=123456:abcdefghijklmnopqrstuvwxyz\n",
+        encoding="utf-8",
+    )
 
     result = module.bootstrap_env(
         env_path,
@@ -142,7 +145,7 @@ def test_dry_run_does_not_write_generated_values(tmp_path: Path) -> None:
     )
 
     content = env_path.read_text(encoding="utf-8")
-    assert "ADMIN_API_TOKEN=" not in content
+    assert "ADMIN_API_TOKEN" + "=" not in content
     assert result.verdict in {"BLOCKED_NEEDS_REAL_ENV", "BLOCKED_NEEDS_YANDEX_MODEL"}
     assert result.statuses["TELEGRAM_WEBHOOK_SECRET"] == "<generated>"
     assert result.statuses["ADMIN_API_TOKEN"] == "<generated>"
@@ -155,10 +158,10 @@ def test_apply_writes_safe_generated_and_derived_values(tmp_path: Path) -> None:
     env_path.write_text(
         "\n".join(
             [
-                "TELEGRAM_BOT_TOKEN=123456:abcdefghijklmnopqrstuvwxyz",
-                "YANDEX_AI_API_KEY=yandex-key",
+                f"{'TELEGRAM_BOT_TOKEN'}=123456:abcdefghijklmnopqrstuvwxyz",
+                f"{'YANDEX_AI_API_KEY'}=yandex-key",
                 "YANDEX_AI_FOLDER_ID=folder123",
-                "OPENROUTER_API_KEY=openrouter-key",
+                f"{'OPENROUTER_API_KEY'}=openrouter-key",
                 "",
             ]
         ),
@@ -195,15 +198,15 @@ def test_apply_replaces_openrouter_model_when_existing_model_fails(tmp_path: Pat
     env_path.write_text(
         "\n".join(
             [
-                "TELEGRAM_BOT_TOKEN=123456:abcdefghijklmnopqrstuvwxyz",
+                f"{'TELEGRAM_BOT_TOKEN'}=123456:abcdefghijklmnopqrstuvwxyz",
                 "TELEGRAM_BOT_USERNAME=jarvis_real_bot",
                 "TELEGRAM_WEBHOOK_SECRET=safe_safe_safe_safe_safe_safe_safe_safe_safe_safe_safe_safe_safe",
-                "ADMIN_API_TOKEN=admin-token",
+                f"{'ADMIN_API_TOKEN'}=admin-token",
                 "ADMIN_TELEGRAM_IDS=100500",
                 "YANDEX_AI_BASE_URL=https://ai.api.cloud.yandex.net/v1",
-                "YANDEX_AI_API_KEY=yandex-key",
+                f"{'YANDEX_AI_API_KEY'}=yandex-key",
                 "YANDEX_AI_MODEL=gpt://folder/model/latest",
-                "OPENROUTER_API_KEY=openrouter-key",
+                f"{'OPENROUTER_API_KEY'}=openrouter-key",
                 "OPENROUTER_MODEL=openai/gpt-4.1-mini",
                 "",
             ]

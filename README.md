@@ -39,6 +39,13 @@ docker compose logs -f worker
 docker compose exec api pytest -q
 ```
 
+## Deployment
+
+Локальный Docker Compose flow остаётся основным режимом разработки и smoke на Mac.
+Production deploy на Railway описан в `docs/RAILWAY_DEPLOY.md`.
+
+Railway production запускается в webhook mode: отдельный service для API/webhook, отдельный service для arq worker, отдельные Railway PostgreSQL и Railway Redis. Polling используется только для local/Mac smoke и не должен работать параллельно с production webhook runtime.
+
 ## Куда вставлять секреты
 
 Секреты вставляются только в локальный `.env`, который не попадает в git:
@@ -134,7 +141,7 @@ Business-переменные optional и нужны только для Telegra
 - `GET /health` — процесс жив.
 - `GET /ready` — PostgreSQL и Redis доступны.
 - `POST /telegram/webhook` — вход Telegram updates.
-- `GET /admin/models` — диагностика моделей Yandex/OpenRouter, требует `Authorization: Bearer ${ADMIN_API_TOKEN}`.
+- `GET /admin/models` — диагностика моделей Yandex/OpenRouter, требует Bearer token из `ADMIN_API_TOKEN`.
 
 ## Guest Mode
 

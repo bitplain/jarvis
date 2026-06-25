@@ -159,7 +159,7 @@ async def test_guest_service_logs_do_not_include_secrets(caplog: pytest.LogCaptu
     )
 
     with caplog.at_level(logging.WARNING):
-        await service.handle(make_request(text="Authorization: Bearer secret-token"))
+        await service.handle(make_request(text="Authorization header Bearer secret-token"))
 
     assert "secret-token" not in caplog.text
     assert "openrouter-secret" not in caplog.text

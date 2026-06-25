@@ -95,6 +95,17 @@
 - Readiness script `scripts/smoke_streaming_readiness.py` не должен вызывать `getUpdates` и не должен съедать ручные private/group/guest updates.
 - Live smoke Stage 3A-S засчитывается только по фактическим Telegram/logs/DB evidence; нельзя писать “должно работать”.
 
+## Stage 4B Railway Deploy Prep
+
+- Railway production model использует отдельный service для API/webhook, отдельный service для worker, Railway PostgreSQL и Railway Redis.
+- Railway не запускает `docker-compose.yml` как единый production stack; compose остаётся локальным development/smoke flow.
+- Production API должен слушать порт из Railway `$PORT`; локальный compose flow остаётся на `8000`.
+- Production runtime использует webhook mode. Polling разрешён только для local/Mac smoke и не должен работать параллельно с production webhook runtime.
+- Railway variables задаются через Railway UI/CLI; `.env`, Telegram token, LLM keys, `ADMIN_API_TOKEN`, Authorization headers и полные `ADMIN_TELEGRAM_IDS` не коммитятся и не печатаются.
+- Миграции выполняются вручную перед/после deploy через `railway run alembic upgrade head`; worker не запускает миграции автоматически.
+- Webhook на Railway устанавливается через sanitized script `scripts/setup_telegram_webhook.py` или совместимый `scripts/set_telegram_webhook.py`; scripts должны читать Railway process env и не печатать token/secret.
+- Railway project/deploy/push/tag/release не создаются без отдельной команды.
+
 ## Проверки
 
 Перед финальным отчётом выполнять:
