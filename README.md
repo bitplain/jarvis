@@ -194,6 +194,14 @@ Stage 4F-1 добавляет admin-only раздел `/settings -> Доступ
 
 Если разрешённых групп нет, сохраняется старая совместимость: authorized user может вызвать Jarvis в любой группе через mention/reply. После добавления хотя бы одной группы включается group allowlist mode: нужны и разрешённый user, и разрешённая group.
 
+Access input поддерживает:
+
+- один ID с подписью: `5117224471 Александр`;
+- несколько IDs через пробел: `5117224471 291844566`;
+- несколько IDs по строкам.
+
+Webhook runtime должен использовать один persistent aiogram Dispatcher на app instance: access FSM state хранится в Dispatcher storage между callback update и следующим message update.
+
 Readiness без секретов:
 
 ```bash

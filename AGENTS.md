@@ -145,6 +145,9 @@
 - После добавления хотя бы одной разрешённой группы group response требует allowed user и allowed group.
 - Unknown private user получает `Доступ запрещён.`, unknown group/supergroup user молча игнорируется.
 - В логах использовать sanitized события `telegram_access_user_added`, `telegram_access_user_removed`, `telegram_access_group_added`, `telegram_access_group_removed`, `telegram_access_denied_private`, `telegram_access_denied_group_silent`.
+- Access settings FSM input должен перехватывать следующий private text до generic private LLM handler: не должно быть `process_llm_message` и `Принял. Готовлю ответ.` во время add/remove user/group state.
+- Webhook runtime должен переиспользовать persistent aiogram Dispatcher на app instance; transient Dispatcher per update ломает FSM MemoryStorage между callback и message.
+- Access input поддерживает один ID с label, несколько IDs через пробел и несколько IDs по строкам; `/cancel` очищает state.
 - Prompt Profiles, Shopping List, Reminders, Memory и Smart Watcher в Stage 4F-1 не реализуются.
 
 ## Проверки

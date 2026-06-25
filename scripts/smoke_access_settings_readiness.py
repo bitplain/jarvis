@@ -113,12 +113,28 @@ async def run_readiness() -> AccessSettingsReadinessResult:
     result.statuses["access_callbacks"] = (
         "OK" if all(callback_id in commands for callback_id in required_callbacks) else "MISSING"
     )
+    result.statuses["fsm_handlers"] = (
+        "OK"
+        if "StateFilter(TelegramAccessInput.add_user)" in commands
+        and "StateFilter(TelegramAccessInput.remove_user)" in commands
+        and "StateFilter(TelegramAccessInput.add_group)" in commands
+        and "StateFilter(TelegramAccessInput.remove_group)" in commands
+        else "MISSING"
+    )
+    telegram_route = _read("app/api/routes_telegram.py")
+    result.statuses["persistent_dispatcher"] = (
+        "OK"
+        if "request.app.state.dispatcher = dispatcher" in telegram_route
+        and "dispatcher is None" in telegram_route
+        else "MISSING"
+    )
     tests = "\n".join(
         [
             _read("tests/test_telegram_access_service.py"),
             _read("tests/test_access_control.py"),
             _read("tests/test_settings_command.py"),
             _read("tests/test_telegram_webhook_ingress.py"),
+            _read("tests/test_access_settings_fsm_ingress.py"),
         ]
     )
     required_tests = [
@@ -126,6 +142,9 @@ async def run_readiness() -> AccessSettingsReadinessResult:
         "test_private_db_allowed_user_reaches_handler",
         "test_access_section_visible_to_admin",
         "test_webhook_group_db_allowed_user_mention_enqueues_once",
+        "test_add_user_state_intercepts_text_before_private_llm",
+        "test_invalid_access_fsm_input_does_not_enqueue_llm",
+        "test_add_user_state_supports_multiple_ids_space_separated",
     ]
     result.statuses["tests"] = (
         "OK" if all(test_name in tests for test_name in required_tests) else "MISSING"
@@ -135,6 +154,7 @@ async def run_readiness() -> AccessSettingsReadinessResult:
             _read("README.md"),
             _read("docs/ARCHITECTURE.md"),
             _read("docs/STAGE_4F1_ACCESS_SETTINGS_REPORT.md"),
+            _read("docs/HOTFIX_ACCESS_SETTINGS_FSM_INPUT_REPORT.md"),
             _read("AGENTS.md"),
         ]
     )
