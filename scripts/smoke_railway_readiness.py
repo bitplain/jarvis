@@ -13,7 +13,7 @@ class RailwayReadinessResult:
     verdict: str = "PARTIAL_RAILWAY_READINESS_NEEDS_FIX"
 
     def render_sanitized(self) -> str:
-        lines = ["Stage 4B Railway readiness sanitized result:"]
+        lines = ["Stage 4C Railway readiness sanitized result:"]
         for key in sorted(self.statuses):
             lines.append(f"{key}: {self.statuses[key]}")
         lines.append(f"verdict: {self.verdict}")
@@ -70,20 +70,43 @@ def run_readiness() -> RailwayReadinessResult:
         if "/health" in deploy_doc and "/ready" in deploy_doc
         else "MISSING"
     )
+    result.statuses["api_config_exists"] = "OK" if api_config else "MISSING"
+    result.statuses["worker_config_exists"] = "OK" if worker_config else "MISSING"
     result.statuses["api_start_command"] = (
         "OK"
-        if "uvicorn app.main:app" in api_config and "${PORT:-8000}" in api_config
+        if "python -m uvicorn app.main:app" in api_config and "${PORT:-8080}" in api_config
         else "MISSING"
+    )
+    result.statuses["api_predeploy_migration"] = (
+        "OK" if 'preDeployCommand = "alembic upgrade head"' in api_config else "MISSING"
     )
     result.statuses["worker_start_command"] = (
         "OK" if "arq app.workers.arq_settings.WorkerSettings" in worker_config else "MISSING"
     )
+    result.statuses["worker_no_alembic"] = (
+        "OK" if "alembic" not in worker_config.lower() else "UNEXPECTED_ALEMBIC"
+    )
     result.statuses["railway_doc"] = "OK" if deploy_doc else "MISSING"
+    required_doc_items = [
+        "DATABASE_URL=${{Postgres.DATABASE_URL}}",
+        "REDIS_URL=${{Redis.REDIS_URL}}",
+        "PYTHONPATH=/app python scripts/smoke_llm.py",
+        "value only, no KEY=value",
+        "$PORT is not a valid integer",
+        "provider_not_configured",
+        'relation "messages" does not exist',
+    ]
+    missing_doc_items = [item for item in required_doc_items if item not in deploy_doc]
+    result.statuses["railway_doc_stage_4c"] = (
+        "OK" if not missing_doc_items else "MISSING " + ",".join(missing_doc_items)
+    )
     result.statuses["webhook_script"] = (
         "OK" if (ROOT / "scripts" / "setup_telegram_webhook.py").exists() else "MISSING"
     )
     result.statuses["polling_production"] = (
-        "OK local-only" if "polling только для local" in deploy_doc else "MISSING"
+        "OK local-only"
+        if "Polling разрешён только для local/Mac smoke" in deploy_doc
+        else "MISSING"
     )
 
     if all(value.startswith("OK") for value in result.statuses.values()):

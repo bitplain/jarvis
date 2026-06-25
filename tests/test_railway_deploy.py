@@ -62,12 +62,36 @@ def test_railway_configs_and_documented_start_commands_exist() -> None:
     worker_config = read("railway.worker.toml")
     deploy_doc = read("docs/RAILWAY_DEPLOY.md")
 
-    assert "uvicorn app.main:app" in api_config
-    assert "--port ${PORT:-8000}" in api_config
-    assert "/ready" in api_config
+    assert (ROOT / "railway.api.toml").exists()
+    assert (ROOT / "railway.worker.toml").exists()
+    assert "python -m uvicorn app.main:app" in api_config
+    assert "--port ${PORT:-8080}" in api_config
+    assert 'preDeployCommand = "alembic upgrade head"' in api_config
+    assert 'healthcheckPath = "/health"' in api_config
     assert "arq app.workers.arq_settings.WorkerSettings" in worker_config
+    assert "alembic" not in worker_config.lower()
     assert "railway.api.toml" in deploy_doc
     assert "railway.worker.toml" in deploy_doc
+    assert "alembic upgrade head" in deploy_doc
+
+
+def test_railway_doc_captures_live_deploy_rules_and_failures() -> None:
+    deploy_doc = read("docs/RAILWAY_DEPLOY.md")
+    required = [
+        "DATABASE_URL=${{Postgres.DATABASE_URL}}",
+        "REDIS_URL=${{Redis.REDIS_URL}}",
+        "PYTHONPATH=/app python scripts/smoke_llm.py",
+        "value only, no KEY=value",
+        "$PORT is not a valid integer",
+        "provider_not_configured",
+        'relation "messages" does not exist',
+        "Railway services",
+        "Required API variables",
+        "Required worker variables",
+    ]
+
+    for item in required:
+        assert item in deploy_doc
 
 
 def test_railway_smoke_and_webhook_scripts_exist() -> None:
