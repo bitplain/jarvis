@@ -102,12 +102,23 @@ async def run_readiness() -> ProviderSettingsReadinessResult:
     result.statuses["callback_ids"] = (
         "OK" if all(callback_id in commands for callback_id in required_callbacks) else "MISSING"
     )
+    result.statuses["message_not_modified_guard"] = (
+        "OK"
+        if "message is not modified" in commands and "TelegramBadRequest" in commands
+        else "MISSING"
+    )
+    result.statuses["close_callback"] = (
+        "OK"
+        if "Настройки закрыты." in commands and "settings:close" in commands
+        else "MISSING"
+    )
     docs = "\n".join(
         [
             _read("README.md"),
             _read("docs/ARCHITECTURE.md"),
             _read("docs/RAILWAY_DEPLOY.md"),
             _read("docs/STAGE_4D_PROVIDER_SETTINGS_REPORT.md"),
+            _read("docs/STAGE_4E_RAILWAY_MIGRATION_SETTINGS_FIX_REPORT.md"),
         ]
     )
     required_docs = [
@@ -115,6 +126,7 @@ async def run_readiness() -> ProviderSettingsReadinessResult:
         "/settings",
         "PostgreSQL runtime setting",
         "PASS_STAGE_4D_PROVIDER_SETTINGS_READY",
+        "PASS_STAGE_4E_RAILWAY_MIGRATION_SETTINGS_FIX_READY",
     ]
     result.statuses["docs"] = (
         "OK" if all(item in docs for item in required_docs) else "MISSING"

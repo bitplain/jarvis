@@ -81,6 +81,13 @@ def test_api_start_command_runs_migrations_before_serving_webhooks() -> None:
     assert "alembic upgrade head && python -m uvicorn app.main:app" in api_config
 
 
+def test_docs_explain_code_level_startup_guard_for_ui_override() -> None:
+    deploy_doc = read("docs/RAILWAY_DEPLOY.md")
+
+    assert "Railway UI Start Command" in deploy_doc
+    assert "startup migration guard" in deploy_doc
+
+
 def test_railway_doc_captures_live_deploy_rules_and_failures() -> None:
     deploy_doc = read("docs/RAILWAY_DEPLOY.md")
     required = [

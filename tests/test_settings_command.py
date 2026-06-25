@@ -1,6 +1,8 @@
 from typing import Any
 
 import pytest
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.methods import DeleteMessage, EditMessageText
 
 from app.bot.routers import commands
 from app.core.config import Settings
@@ -17,7 +19,14 @@ class FakeChat:
 
 
 class FakeMessage:
-    def __init__(self, text: str = "/settings", user_id: int | None = 100500) -> None:
+    def __init__(
+        self,
+        text: str = "/settings",
+        user_id: int | None = 100500,
+        *,
+        delete_error: Exception | None = None,
+        edit_error: Exception | None = None,
+    ) -> None:
         self.text = text
         self.caption = None
         self.chat = FakeChat()
@@ -25,14 +34,20 @@ class FakeMessage:
         self.answers: list[dict[str, Any]] = []
         self.edits: list[dict[str, Any]] = []
         self.deleted = False
+        self.delete_error = delete_error
+        self.edit_error = edit_error
 
     async def answer(self, text: str, **kwargs: Any) -> None:
         self.answers.append({"text": text, **kwargs})
 
     async def edit_text(self, text: str, **kwargs: Any) -> None:
+        if self.edit_error is not None:
+            raise self.edit_error
         self.edits.append({"text": text, **kwargs})
 
     async def delete(self) -> None:
+        if self.delete_error is not None:
+            raise self.delete_error
         self.deleted = True
 
 
@@ -51,6 +66,17 @@ class FakeCallbackQuery:
 
     async def answer(self, text: str | None = None, **kwargs: Any) -> None:
         self.answers.append({"text": text, **kwargs})
+
+
+def telegram_bad_request(message: str) -> TelegramBadRequest:
+    return TelegramBadRequest(method=DeleteMessage(chat_id=123, message_id=1), message=message)
+
+
+def telegram_edit_bad_request(message: str) -> TelegramBadRequest:
+    return TelegramBadRequest(
+        method=EditMessageText(chat_id=123, message_id=1, text="text"),
+        message=message,
+    )
 
 
 class FakeRuntimeSettingsService:
@@ -214,3 +240,111 @@ async def test_settings_callback_handles_missing_runtime_settings_table() -> Non
         }
     ]
     assert callback.message.edits == []
+
+
+@pytest.mark.asyncio
+async def test_refresh_callback_ignores_message_not_modified() -> None:
+    callback = FakeCallbackQuery(
+        "settings:refresh",
+        user_id=100500,
+        message=FakeMessage(
+            user_id=100500,
+            edit_error=telegram_edit_bad_request("Bad Request: message is not modified"),
+        ),
+    )
+
+    await commands.handle_settings_callback(
+        callback,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    assert callback.answers == [{"text": "Настройки уже актуальны.", "show_alert": False}]
+
+
+@pytest.mark.asyncio
+async def test_provider_callback_for_same_provider_does_not_edit_same_message() -> None:
+    FakeRuntimeSettingsService.provider = ActiveLLMProvider.YANDEX
+    callback = FakeCallbackQuery("settings:provider:yandex", user_id=100500)
+
+    await commands.handle_settings_callback(
+        callback,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    assert callback.answers == [{"text": "Уже выбрано: Yandex", "show_alert": False}]
+    assert callback.message.edits == []
+
+
+@pytest.mark.asyncio
+async def test_close_callback_deletes_settings_message() -> None:
+    message = FakeMessage(user_id=100500)
+    callback = FakeCallbackQuery("settings:close", user_id=100500, message=message)
+
+    await commands.handle_settings_callback(
+        callback,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    assert message.deleted is True
+    assert callback.answers == [{"text": None}]
+
+
+@pytest.mark.asyncio
+async def test_close_callback_edits_closed_text_when_delete_fails() -> None:
+    message = FakeMessage(
+        user_id=100500,
+        delete_error=telegram_bad_request("Bad Request: message can't be deleted"),
+    )
+    callback = FakeCallbackQuery("settings:close", user_id=100500, message=message)
+
+    await commands.handle_settings_callback(
+        callback,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    assert message.edits == [{"text": "Настройки закрыты.", "reply_markup": None}]
+    assert callback.answers == [{"text": None}]
+
+
+@pytest.mark.asyncio
+async def test_message_not_modified_is_safe_noop_for_close_fallback_edit() -> None:
+    message = FakeMessage(
+        user_id=100500,
+        delete_error=telegram_bad_request("Bad Request: message can't be deleted"),
+        edit_error=telegram_edit_bad_request("Bad Request: message is not modified"),
+    )
+    callback = FakeCallbackQuery("settings:close", user_id=100500, message=message)
+
+    await commands.handle_settings_callback(
+        callback,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    assert callback.answers == [{"text": None}]
+
+
+@pytest.mark.asyncio
+async def test_unexpected_telegram_bad_request_is_reported_without_webhook_crash() -> None:
+    callback = FakeCallbackQuery(
+        "settings:refresh",
+        user_id=100500,
+        message=FakeMessage(
+            user_id=100500,
+            edit_error=telegram_edit_bad_request("Bad Request: chat not found"),
+        ),
+    )
+
+    await commands.handle_settings_callback(
+        callback,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    assert callback.answers == [
+        {"text": "Не удалось обновить сообщение настроек.", "show_alert": True}
+    ]

@@ -1,14 +1,17 @@
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 
 import redis.asyncio as redis
 from fastapi import FastAPI
 
 from app.api import routes_admin, routes_health, routes_telegram
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.db.session import ping_postgres
+from app.services.startup_migrations import run_startup_migrations, should_run_startup_migrations
 
 ReadyProbe = Callable[[], Awaitable[dict[str, bool]]]
+StartupMigrationRunner = Callable[[], Awaitable[None]]
 
 
 async def default_ready_probe() -> dict[str, bool]:
@@ -24,11 +27,29 @@ async def default_ready_probe() -> dict[str, bool]:
     return {"postgres": postgres_ok, "redis": redis_ok}
 
 
-def create_app() -> FastAPI:
-    settings = get_settings()
-    configure_logging(settings.log_level)
-    app = FastAPI(title="Jarvis Telegram AI Bot", version="0.1.0")
+async def default_startup_migration_runner() -> None:
+    run_startup_migrations()
+
+
+def create_app(
+    *,
+    settings: Settings | None = None,
+    startup_migration_runner: StartupMigrationRunner | None = None,
+) -> FastAPI:
+    resolved_settings = settings or get_settings()
+    configure_logging(resolved_settings.log_level)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        if should_run_startup_migrations(resolved_settings):
+            await app.state.startup_migration_runner()
+        yield
+
+    app = FastAPI(title="Jarvis Telegram AI Bot", version="0.1.0", lifespan=lifespan)
     app.state.default_ready_probe = default_ready_probe
+    app.state.startup_migration_runner = (
+        startup_migration_runner or default_startup_migration_runner
+    )
     app.include_router(routes_health.router)
     app.include_router(routes_admin.router)
     app.include_router(routes_telegram.router)

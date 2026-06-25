@@ -119,6 +119,15 @@
 - API production start command должен автоматически выполнять `alembic upgrade head` перед стартом `uvicorn`; ручная миграция не должна быть обязательной для кнопки `Настройки`.
 - Production deploy Stage 4D происходит только после PR review, merge в `main`, CI и Railway production autodeploy; PR Environments выключены.
 
+## Stage 4E Railway Migration And Settings Callback Fix
+
+- API production startup должен иметь code-level startup migration guard: даже если Railway UI Start Command переопределит `railway.api.toml`, `APP_ENV=production` обязан запускать `alembic upgrade head` до приёма webhook requests.
+- Startup migration guard не запускается при обычных local/unit tests по умолчанию и не должен запускаться в worker path.
+- В логах startup migration guard должны быть короткие sanitized события `startup_migrations_started`, `startup_migrations_completed`, `startup_migrations_failed`.
+- Если startup migration падает, API startup должен падать, чтобы Railway deploy не стал healthy со старой схемой.
+- Settings callbacks должны быть идемпотентными: `settings:refresh`, повторный `settings:provider:*`, `settings:close` и Telegram `message is not modified` не должны давать HTTP 500.
+- Другие `TelegramBadRequest` в settings callbacks нельзя считать успехом молча: нужен sanitized log и безопасный callback answer.
+
 ## Проверки
 
 Перед финальным отчётом выполнять:
