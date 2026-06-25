@@ -154,7 +154,7 @@ async def test_group_mention_records_message_and_enqueues_worker_job() -> None:
         redis=redis,
     )
 
-    assert message.answers == ["Принял. Готовлю групповой ответ."]
+    assert message.answers == []
     assert repository.messages[0].role == MessageRole.USER
     assert repository.messages[0].content == "@jarvis_bot кратко объясни DNS"
     assert redis.jobs == [
@@ -163,6 +163,28 @@ async def test_group_mention_records_message_and_enqueues_worker_job() -> None:
             {"chat_id": message.chat.id, "user_id": message.from_user.id, "private": False},
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_group_authorized_mention_enqueues_once() -> None:
+    repository = InMemoryMessageRepository()
+    memory = MemoryService(repository, max_messages=10)
+    redis = FakeRedis()
+    message = FakeMessage("@jarvis_bot кратко объясни DNS")
+
+    await handle_group_message(
+        message,  # type: ignore[arg-type]
+        settings=Settings(telegram_bot_username="jarvis_bot"),
+        bot=FakeBot(),
+        memory_service=memory,
+        redis=redis,
+    )
+
+    assert len(redis.jobs) == 1
+    assert redis.jobs[0] == (
+        "process_llm_message",
+        {"chat_id": message.chat.id, "user_id": message.from_user.id, "private": False},
+    )
 
 
 @pytest.mark.asyncio
@@ -180,7 +202,7 @@ async def test_group_mention_uses_runtime_bot_username_when_env_username_is_stal
         redis=redis,
     )
 
-    assert message.answers == ["Принял. Готовлю групповой ответ."]
+    assert message.answers == []
     assert repository.messages[0].content == "@jarvis_bot кратко объясни DNS"
     assert redis.jobs[0][1]["private"] is False
 
@@ -200,7 +222,7 @@ async def test_group_reply_to_bot_records_message_and_enqueues_worker_job() -> N
         redis=redis,
     )
 
-    assert message.answers == ["Принял. Готовлю групповой ответ."]
+    assert message.answers == []
     assert repository.messages[0].content == "кратко поясни это"
     assert redis.jobs[0][1]["private"] is False
 

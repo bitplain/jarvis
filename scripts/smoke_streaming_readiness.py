@@ -15,11 +15,15 @@ from app.core.config import Settings
 try:
     from run_polling import resolve_host_polling_settings
     from smoke_group_readiness import run_readiness as run_group_readiness
+    from smoke_group_stability_readiness import run_readiness as run_group_stability_readiness
     from smoke_llm import RetryableFailingProvider, run_smoke
     from smoke_polling_readiness import run_readiness as run_polling_readiness
 except ModuleNotFoundError:
     from scripts.run_polling import resolve_host_polling_settings
     from scripts.smoke_group_readiness import run_readiness as run_group_readiness
+    from scripts.smoke_group_stability_readiness import (
+        run_readiness as run_group_stability_readiness,
+    )
     from scripts.smoke_llm import RetryableFailingProvider, run_smoke
     from scripts.smoke_polling_readiness import run_readiness as run_polling_readiness
 
@@ -85,6 +89,11 @@ async def _check_group(settings: Settings) -> str:
     return result.verdict
 
 
+def _check_group_stability() -> str:
+    result = run_group_stability_readiness()
+    return result.verdict
+
+
 def _import_ok(module_name: str, attribute: str | None = None) -> bool:
     try:
         module = importlib.import_module(module_name)
@@ -102,6 +111,7 @@ async def run_readiness(
     llm_probe: Probe | None = None,
     polling_probe: Probe | None = None,
     group_probe: Probe | None = None,
+    group_stability_probe: Probe | None = None,
 ) -> StreamingReadinessResult:
     result = StreamingReadinessResult()
     try:
@@ -141,9 +151,13 @@ async def run_readiness(
         llm_result = await _resolve_probe(llm_probe or (lambda: check_llm(settings)))
         polling_result = await _resolve_probe(polling_probe or (lambda: _check_polling(settings)))
         group_result = await _resolve_probe(group_probe or (lambda: _check_group(settings)))
+        group_stability_result = await _resolve_probe(
+            group_stability_probe or _check_group_stability
+        )
         result.statuses["llm_smoke"] = str(llm_result)
         result.statuses["polling_readiness"] = str(polling_result)
         result.statuses["group_readiness"] = str(group_result)
+        result.statuses["group_stability_readiness"] = str(group_stability_result)
 
         required_ok = (
             result.statuses["telegram_token"] == "SET"
@@ -161,6 +175,7 @@ async def run_readiness(
             and result.statuses["llm_smoke"] == "PASS_LLM_SMOKE"
             and result.statuses["polling_readiness"] == "PASS_POLLING_READINESS"
             and result.statuses["group_readiness"] == "PASS_GROUP_READINESS"
+            and result.statuses["group_stability_readiness"] == "PASS_GROUP_STABILITY_READINESS"
         )
         if required_ok:
             result.verdict = "PASS_STREAMING_READINESS"

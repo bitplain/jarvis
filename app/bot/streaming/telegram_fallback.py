@@ -2,6 +2,7 @@ import logging
 from typing import Any, Protocol
 
 from aiogram.enums import ChatAction
+from aiogram.exceptions import TelegramBadRequest
 
 from app.bot.streaming.text_limits import clip_telegram_preview, split_telegram_text
 
@@ -48,6 +49,7 @@ class TelegramGroupEditSink:
         self.message_id: int | None = None
         self.last_edit_at: float | None = None
         self.last_chat_action_at: float | None = None
+        self.final_delivered = False
 
     async def start(self, *, chat_id: int, now: float = 0.0) -> None:
         await self._send_chat_action(chat_id=chat_id)
@@ -74,23 +76,105 @@ class TelegramGroupEditSink:
         self.last_edit_at = now
 
     async def final(self, *, chat_id: int, text: str) -> None:
+        if self.final_delivered:
+            logger.warning(
+                "telegram_group_final_already_delivered",
+                extra={"message_id": self.message_id, "source_text_length": len(text)},
+            )
+            return
         if self.message_id is None:
             await self.start(chat_id=chat_id)
         chunks = split_telegram_text(text)
         try:
-            await self._edit(chat_id=chat_id, text=chunks[0])
             logger.warning(
                 "telegram_group_final_edit_called",
                 extra={"message_id": self.message_id, "text_length": len(chunks[0])},
             )
+            await self._edit(chat_id=chat_id, text=chunks[0])
+        except TelegramBadRequest as exc:
+            if _is_message_not_modified(exc):
+                logger.warning(
+                    "telegram_group_final_message_not_modified",
+                    extra={"message_id": self.message_id, "text_length": len(chunks[0])},
+                )
+                await self._send_remaining_chunks(
+                    chat_id=chat_id,
+                    chunks=chunks,
+                    source_text_length=len(text),
+                )
+                self.final_delivered = True
+                return
+            logger.warning(
+                "telegram_streaming_final_edit_failed",
+                extra={"error_type": type(exc).__name__},
+            )
+            await self._send_final_chunks(
+                chat_id=chat_id,
+                chunks=chunks,
+                source_text_length=len(text),
+            )
+            self.final_delivered = True
+            return
         except Exception as exc:
             logger.warning(
                 "telegram_streaming_final_edit_failed",
                 extra={"error_type": type(exc).__name__},
             )
-            await self.bot.send_message(chat_id=chat_id, text=chunks[0])
-        for chunk in chunks[1:]:
+            await self._send_final_chunks(
+                chat_id=chat_id,
+                chunks=chunks,
+                source_text_length=len(text),
+            )
+            self.final_delivered = True
+            return
+        logger.warning(
+            "telegram_group_final_edit_succeeded",
+            extra={"message_id": self.message_id, "text_length": len(chunks[0])},
+        )
+        await self._send_remaining_chunks(
+            chat_id=chat_id,
+            chunks=chunks,
+            source_text_length=len(text),
+        )
+        self.final_delivered = True
+
+    async def _send_remaining_chunks(
+        self,
+        *,
+        chat_id: int,
+        chunks: list[str],
+        source_text_length: int,
+    ) -> None:
+        for index, chunk in enumerate(chunks[1:], start=2):
             await self.bot.send_message(chat_id=chat_id, text=chunk)
+            logger.warning(
+                "telegram_group_final_send_fallback_called",
+                extra={
+                    "chunk_index": index,
+                    "chunk_count": len(chunks),
+                    "text_length": len(chunk),
+                    "source_text_length": source_text_length,
+                },
+            )
+
+    async def _send_final_chunks(
+        self,
+        *,
+        chat_id: int,
+        chunks: list[str],
+        source_text_length: int,
+    ) -> None:
+        for index, chunk in enumerate(chunks, start=1):
+            await self.bot.send_message(chat_id=chat_id, text=chunk)
+            logger.warning(
+                "telegram_group_final_send_fallback_called",
+                extra={
+                    "chunk_index": index,
+                    "chunk_count": len(chunks),
+                    "text_length": len(chunk),
+                    "source_text_length": source_text_length,
+                },
+            )
 
     async def _send_chat_action(self, *, chat_id: int) -> None:
         payload: dict[str, object] = {"chat_id": chat_id, "action": ChatAction.TYPING.value}
@@ -117,3 +201,7 @@ class TelegramGroupEditSink:
                 "source_text_length": len(text),
             },
         )
+
+
+def _is_message_not_modified(exc: TelegramBadRequest) -> bool:
+    return "message is not modified" in str(exc).lower()

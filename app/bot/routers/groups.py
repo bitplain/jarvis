@@ -181,7 +181,6 @@ async def handle_group_message(message: Message, **data: Any) -> None:
     )
     _log_group_routing(message=message, decision=decision, enqueue_job=True)
     await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
-    await message.answer("Принял. Готовлю групповой ответ.")
 
 
 def build_router() -> Router:

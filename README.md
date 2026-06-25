@@ -267,7 +267,8 @@ Stage 3A-S добавляет streaming UX для обычного assistant pat
 
 - Private chat: worker пробует Telegram `sendMessageDraft` с non-zero `draft_id`, обновляет draft через `StreamBuffer` с throttling, а после завершения отправляет финальный `sendMessage`. В БД сохраняется только финальный assistant response.
 - Private fallback: если draft API недоступен или вернул ошибку, текущий LLM job переключается на provisional/edit path без вывода token/key/header в logs.
-- Group chat: `sendMessageDraft` не используется. Worker отправляет `sendChatAction typing`, provisional `Думаю...`, затем throttled `editMessageText` и финальный edit. Если финальный edit не прошёл, отправляется финальный `sendMessage`.
+- Group chat: `sendMessageDraft` не используется. Worker отправляет `sendChatAction typing`, один provisional `Принял. Готовлю групповой ответ.`, затем throttled `editMessageText` и финальный edit. Если финальный edit не прошёл, отправляется fallback final `sendMessage` ровно один раз; повторная finalization ничего не отправляет.
+- Unauthorized group/supergroup сообщения молча игнорируются, чтобы бот не спамил `Доступ запрещён`; в private chat явный отказ остаётся.
 - Guest Mode: остаётся final-only через `answerGuestQuery`, без streaming, draft и group edit sink.
 - Business / Secretary: auto-reply не включается; streaming слой только подготовлен к fallback path с `business_connection_id` для `sendChatAction`.
 - Длинные финальные ответы делятся на Telegram-safe chunks при отправке, но в БД сохраняется один полный assistant response.
@@ -276,6 +277,7 @@ Readiness без получения Telegram updates:
 
 ```bash
 uv run --python 3.12 --extra dev python scripts/smoke_streaming_readiness.py
+uv run --python 3.12 --extra dev python scripts/smoke_group_stability_readiness.py
 ```
 
 Отчёт Stage 3A-S: `docs/STAGE_3A_S_STREAMING_UX_REPORT.md`.
