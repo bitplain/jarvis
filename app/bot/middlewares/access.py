@@ -1,8 +1,12 @@
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from aiogram import BaseMiddleware
 from aiogram.types import Message, TelegramObject
+
+logger = logging.getLogger(__name__)
+GROUP_CHAT_TYPES = {"group", "supergroup"}
 
 
 def is_admin_user(user_id: int | None, admin_ids: set[int]) -> bool:
@@ -22,6 +26,13 @@ class AdminAccessMiddleware(BaseMiddleware):
         if isinstance(event, Message):
             user_id = event.from_user.id if event.from_user else None
             if not is_admin_user(user_id, self.admin_ids):
+                if event.chat.type in GROUP_CHAT_TYPES:
+                    logger.info(
+                        "access_denied_group_silent",
+                        extra={"chat_type": event.chat.type},
+                    )
+                    return None
+                logger.info("access_denied_private")
                 await event.answer("Доступ запрещён.")
                 return None
         return await handler(event, data)

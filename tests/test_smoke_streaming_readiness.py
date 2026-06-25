@@ -53,6 +53,7 @@ async def test_streaming_readiness_passes_without_live_updates_or_secrets() -> N
         llm_probe=lambda: "PASS_LLM_SMOKE",
         polling_probe=lambda: "PASS_POLLING_READINESS",
         group_probe=lambda: "PASS_GROUP_READINESS",
+        group_stability_probe=lambda: "PASS_GROUP_STABILITY_READINESS",
     )
 
     rendered = result.render_sanitized()
@@ -61,6 +62,7 @@ async def test_streaming_readiness_passes_without_live_updates_or_secrets() -> N
     assert "draft_adapter_import: OK" in rendered
     assert "buffer_config: OK" in rendered
     assert "worker_import: OK" in rendered
+    assert "group_stability_readiness: PASS_GROUP_STABILITY_READINESS" in rendered
     assert "secret-token" not in rendered
     assert "100500" not in rendered
     assert bot.closed is True

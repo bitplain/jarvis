@@ -204,7 +204,10 @@ async def test_group_streaming_uses_fallback_edit_without_draft_and_private_fals
     messages = [record.message for record in caplog.records]
     assert provider.stream_called is True
     assert bot.drafts == []
-    assert bot.sent_messages[0] == {"chat_id": -100, "text": "Думаю..."}
+    assert bot.sent_messages[0] == {
+        "chat_id": -100,
+        "text": "Принял. Готовлю групповой ответ.",
+    }
     assert bot.edits[-1] == {
         "chat_id": -100,
         "message_id": 77,

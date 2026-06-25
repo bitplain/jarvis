@@ -88,7 +88,10 @@
 - Private chat path использует Telegram `sendMessageDraft` с non-zero `draft_id`, throttled `StreamBuffer`, затем финальный `sendMessage`.
 - Draft preview не считается постоянным сообщением; в БД сохраняется только финальный assistant response.
 - Если draft API недоступен или падает, текущий job должен перейти на sanitized fallback без вывода token/key/header.
-- Group/supergroup path не использует `sendMessageDraft`; fallback использует `sendChatAction typing`, provisional `Думаю...`, throttled `editMessageText` и финальный edit/send.
+- Group/supergroup path не использует `sendMessageDraft`; fallback использует `sendChatAction typing`, один worker-owned provisional `Принял. Готовлю групповой ответ.`, throttled `editMessageText` и финальный edit/send.
+- Unauthorized group/supergroup messages, включая mention/reply от неразрешённого пользователя, должны молча игнорироваться без ответа `Доступ запрещён`; private unauthorized всё ещё получает `Доступ запрещён.`
+- Group fallback finalization должна быть idempotent: после успешного final edit, safe `message is not modified` или fallback final send повторный вызов ничего не отправляет и логирует sanitized `telegram_group_final_already_delivered`.
+- Telegram `message is not modified` в group final edit считается safe no-op/success и не должен запускать fallback duplicate send.
 - Guest Mode остаётся final-only: `guest_message -> LLM final answer -> answerGuestQuery`, без streaming, draft и group edit sink.
 - Business / Secretary auto-reply в Stage 3A-S не включается; разрешена только fallback abstraction с учётом `business_connection_id` для `sendChatAction`.
 - Draft/edit preview должен учитывать Telegram text limit; финальный ответ можно делить на Telegram-safe chunks, но в БД должен сохраняться один полный assistant response.
