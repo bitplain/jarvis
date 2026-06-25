@@ -67,6 +67,11 @@ Group fallback finalization защищена `final_delivered`: повторны
 Сообщения от неразрешённых пользователей в group/supergroup молча отсекаются middleware; в private chat middleware по-прежнему отвечает `Доступ запрещён.`
 Если privacy mode Telegram ограничивает updates или Telegram присылает `guest_message` вместо обычного `message`, Jarvis не обещает чтение всей истории группы, а такой вызов не считается Group Assistant.
 
+## Production webhook ingress
+
+Production Telegram ingress остаётся `POST /telegram/webhook`; router подключается в `app/main.py` через `routes_telegram.router`, а setup script формирует URL как `<PUBLIC_BASE_URL>/telegram/webhook`.
+Polling readiness и polling runner могут удалять webhook только для local/Mac polling smoke. При `APP_ENV=production` они не выполняют `deleteWebhook`, чтобы production webhook не замолчал после диагностического smoke.
+
 ## Guest Mode
 
 Guest Mode обрабатывает Telegram update type `guest_message` через отдельный aiogram router.

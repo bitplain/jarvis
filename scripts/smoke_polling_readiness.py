@@ -124,6 +124,11 @@ async def run_readiness(
             "SET" if settings.openrouter_model else "MISSING"
         )
 
+        if settings.app_env.lower() == "production":
+            result.statuses["delete_webhook"] = "SKIPPED production_webhook_runtime"
+            result.statuses["telegram_get_me"] = "SKIPPED production_webhook_runtime"
+            return result
+
         try:
             await bot.delete_webhook(drop_pending_updates=False)
             result.statuses["delete_webhook"] = "OK drop_pending_updates=false"

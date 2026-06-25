@@ -28,6 +28,7 @@ ALLOWED_UPDATES = [
 ]
 
 logger = logging.getLogger(__name__)
+PRODUCTION_POLLING_ERROR = "Polling is disabled in production webhook runtime."
 
 
 class PollingBot(Protocol):
@@ -110,6 +111,11 @@ def render_startup_status(settings: Settings) -> str:
     )
 
 
+def ensure_not_production_webhook_runtime(settings: Settings) -> None:
+    if settings.app_env.lower() == "production":
+        raise RuntimeError(PRODUCTION_POLLING_ERROR)
+
+
 async def run_polling(
     *,
     settings: Settings,
@@ -119,6 +125,7 @@ async def run_polling(
     redis_pool: Any | None = None,
     session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> None:
+    ensure_not_production_webhook_runtime(settings)
     print(render_startup_status(settings))  # noqa: T201
     await bot.delete_webhook(drop_pending_updates=drop_pending_updates)
     engine = None
@@ -152,6 +159,11 @@ async def run_polling(
 async def async_main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     settings = resolve_host_polling_settings(Settings())
+    try:
+        ensure_not_production_webhook_runtime(settings)
+    except RuntimeError as exc:
+        print(str(exc))  # noqa: T201
+        return 2
     if not settings.telegram_bot_token:
         print("Telegram token is not configured.")  # noqa: T201
         return 2

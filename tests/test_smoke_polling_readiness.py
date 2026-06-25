@@ -68,6 +68,35 @@ async def test_polling_readiness_deletes_webhook_without_getting_updates() -> No
     assert "getUpdates" not in result.render_sanitized()
 
 
+@pytest.mark.asyncio
+async def test_polling_readiness_does_not_delete_webhook_in_production() -> None:
+    module = load_readiness_module()
+    bot = FakeBot()
+
+    result = await module.run_readiness(
+        settings=Settings(
+            _env_file=None,
+            app_env="production",
+            telegram_bot_token="123456:secret-token",
+            admin_telegram_ids="100500",
+            guest_mode_enabled=True,
+            guest_mode_admin_only=True,
+            yandex_ai_model="model",
+            openrouter_model="model",
+        ),
+        bot=bot,
+        postgres_probe=lambda: True,
+        redis_probe=lambda: True,
+        llm_smoke=lambda: "PASS_LLM_SMOKE",
+    )
+
+    assert bot.delete_webhook_calls == []
+    assert bot.get_me_called is False
+    assert bot.closed is True
+    assert result.statuses["delete_webhook"] == "SKIPPED production_webhook_runtime"
+    assert result.verdict == "BLOCKED_POLLING_READINESS"
+
+
 def test_polling_readiness_sanitized_output_hides_secrets() -> None:
     module = load_readiness_module()
     result = module.PollingReadinessResult(

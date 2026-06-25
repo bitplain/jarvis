@@ -188,6 +188,7 @@ Stage 2 реализует Telegram Guest Mode через update type `guest_mes
 
 Если публичный HTTPS tunnel недоступен, Guest Mode можно проверять через Telegram polling.
 Polling удаляет webhook и получает updates через `getUpdates`, поэтому tunnel не нужен.
+При `APP_ENV=production` polling readiness и polling runner не выполняют `deleteWebhook`: production webhook runtime нельзя отключать диагностическим smoke.
 
 Host-side overrides без секретов:
 
@@ -278,6 +279,7 @@ Readiness без получения Telegram updates:
 ```bash
 uv run --python 3.12 --extra dev python scripts/smoke_streaming_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_group_stability_readiness.py
+uv run --python 3.12 --extra dev python scripts/smoke_telegram_webhook_ingress_readiness.py
 ```
 
 Отчёт Stage 3A-S: `docs/STAGE_3A_S_STREAMING_UX_REPORT.md`.
