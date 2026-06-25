@@ -75,6 +75,12 @@ def test_railway_configs_and_documented_start_commands_exist() -> None:
     assert "alembic upgrade head" in deploy_doc
 
 
+def test_api_start_command_runs_migrations_before_serving_webhooks() -> None:
+    api_config = read("railway.api.toml")
+
+    assert "alembic upgrade head && python -m uvicorn app.main:app" in api_config
+
+
 def test_railway_doc_captures_live_deploy_rules_and_failures() -> None:
     deploy_doc = read("docs/RAILWAY_DEPLOY.md")
     required = [

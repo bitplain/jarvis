@@ -14,7 +14,11 @@ from app.llm.base import LLMProviderError
 from app.llm.factory import build_llm_provider
 from app.llm.types import LLMMessage
 from app.services.memory_service import MemoryService
-from app.services.runtime_settings_service import ActiveLLMProvider, RuntimeSettingsService
+from app.services.runtime_settings_service import (
+    ActiveLLMProvider,
+    RuntimeSettingsService,
+    RuntimeSettingsUnavailable,
+)
 
 SETTINGS_CALLBACK_REFRESH = "settings:refresh"
 SETTINGS_CALLBACK_CLOSE = "settings:close"
@@ -27,6 +31,9 @@ PROVIDER_LABELS = {
     ActiveLLMProvider.YANDEX: "Yandex",
     ActiveLLMProvider.OPENROUTER: "OpenRouter",
 }
+SETTINGS_UNAVAILABLE_MESSAGE = (
+    "Настройки временно недоступны: миграция БД ещё не применена."
+)
 
 
 def _command_argument(message: Message) -> str | None:
@@ -156,7 +163,14 @@ async def cmd_settings(message: Message, **data: Any) -> None:
     if session is None:
         await message.answer("Настройки доступны только в runtime с БД.")
         return
-    provider = await _runtime_settings_service(session).get_active_llm_provider()
+    try:
+        provider = await _runtime_settings_service(session).get_active_llm_provider()
+    except RuntimeSettingsUnavailable:
+        await message.answer(
+            f"{SETTINGS_UNAVAILABLE_MESSAGE}\n"
+            "Railway должен автоматически выполнить `alembic upgrade head` перед стартом API."
+        )
+        return
     await message.answer(render_settings_text(provider), reply_markup=build_settings_keyboard())
 
 
@@ -183,10 +197,17 @@ async def handle_settings_callback(callback: CallbackQuery, **data: Any) -> None
         except ValueError:
             await callback.answer("Неизвестный провайдер.", show_alert=True)
             return
+        except RuntimeSettingsUnavailable:
+            await callback.answer(SETTINGS_UNAVAILABLE_MESSAGE, show_alert=True)
+            return
         saved = True
         await callback.answer("Настройки сохранены.", show_alert=False)
     elif callback_data == SETTINGS_CALLBACK_REFRESH:
-        provider = await service.get_active_llm_provider()
+        try:
+            provider = await service.get_active_llm_provider()
+        except RuntimeSettingsUnavailable:
+            await callback.answer(SETTINGS_UNAVAILABLE_MESSAGE, show_alert=True)
+            return
         await callback.answer()
     elif callback_data == SETTINGS_CALLBACK_CLOSE:
         if callback.message is not None and hasattr(callback.message, "delete"):

@@ -4,6 +4,10 @@ from typing import Protocol
 ACTIVE_LLM_PROVIDER_KEY = "active_llm_provider"
 
 
+class RuntimeSettingsUnavailable(Exception):
+    pass
+
+
 class ActiveLLMProvider(StrEnum):
     AUTO = "auto"
     YANDEX = "yandex"

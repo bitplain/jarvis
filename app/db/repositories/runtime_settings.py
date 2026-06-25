@@ -1,8 +1,17 @@
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import select
 
 from app.db.models import RuntimeSetting, utcnow
+from app.services.runtime_settings_service import RuntimeSettingsUnavailable
+
+
+def _is_missing_runtime_settings_table(exc: ProgrammingError) -> bool:
+    rendered = str(exc)
+    return "runtime_settings" in rendered and (
+        "UndefinedTableError" in rendered or "does not exist" in rendered
+    )
 
 
 class RuntimeSettingRepository:
@@ -10,7 +19,15 @@ class RuntimeSettingRepository:
         self.session = session
 
     async def get_value(self, key: str) -> str | None:
-        result = await self.session.execute(select(RuntimeSetting).where(RuntimeSetting.key == key))
+        try:
+            result = await self.session.execute(
+                select(RuntimeSetting).where(RuntimeSetting.key == key)
+            )
+        except ProgrammingError as exc:
+            await self.session.rollback()
+            if _is_missing_runtime_settings_table(exc):
+                raise RuntimeSettingsUnavailable("runtime_settings_unavailable") from exc
+            raise
         setting = result.scalar_one_or_none()
         return setting.value if setting is not None else None
 
@@ -38,5 +55,11 @@ class RuntimeSettingRepository:
                 },
             )
         )
-        await self.session.execute(statement)
-        await self.session.commit()
+        try:
+            await self.session.execute(statement)
+            await self.session.commit()
+        except ProgrammingError as exc:
+            await self.session.rollback()
+            if _is_missing_runtime_settings_table(exc):
+                raise RuntimeSettingsUnavailable("runtime_settings_unavailable") from exc
+            raise

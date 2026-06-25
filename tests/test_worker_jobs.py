@@ -2,7 +2,7 @@ import pytest
 
 from app.core.config import Settings
 from app.llm.types import LLMMessage, LLMResponse, LLMStreamChunk
-from app.services.runtime_settings_service import ActiveLLMProvider
+from app.services.runtime_settings_service import ActiveLLMProvider, RuntimeSettingsUnavailable
 from app.workers import jobs
 from app.workers.jobs import process_llm_message, try_send_chat_action
 
@@ -199,3 +199,51 @@ async def test_worker_reads_active_llm_provider_setting_for_each_job(
     )
 
     assert selected_providers == [ActiveLLMProvider.OPENROUTER]
+
+
+@pytest.mark.asyncio
+async def test_worker_falls_back_to_auto_when_runtime_settings_table_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = FakeProvider()
+    selected_providers: list[ActiveLLMProvider] = []
+    FakeBot.instances = []
+    FakeMemoryService.instances = []
+
+    class MissingTableRuntimeSettingsService:
+        def __init__(self, repository: object) -> None:
+            del repository
+
+        async def get_active_llm_provider(self) -> ActiveLLMProvider:
+            raise RuntimeSettingsUnavailable("runtime_settings_unavailable")
+
+    monkeypatch.setattr(jobs, "Bot", FakeBot)
+    monkeypatch.setattr(
+        jobs,
+        "get_settings",
+        lambda: Settings(
+            telegram_bot_token="123456:secret-token",
+            memory_max_messages=5,
+            streaming_group_fallback_enabled=False,
+        ),
+    )
+    monkeypatch.setattr(jobs, "SessionLocal", FakeSessionLocal())
+    monkeypatch.setattr(jobs, "MessageRepository", lambda session: object())
+    monkeypatch.setattr(jobs, "RuntimeSettingRepository", lambda session: object())
+    monkeypatch.setattr(jobs, "RuntimeSettingsService", MissingTableRuntimeSettingsService)
+    monkeypatch.setattr(jobs, "MemoryService", FakeMemoryService)
+
+    def build_provider(settings: Settings, *, active_provider: ActiveLLMProvider) -> FakeProvider:
+        del settings
+        selected_providers.append(active_provider)
+        return provider
+
+    monkeypatch.setattr(jobs, "build_llm_provider", build_provider)
+
+    await process_llm_message(
+        {},
+        {"chat_id": -100123, "user_id": 456, "private": False},
+    )
+
+    assert selected_providers == [ActiveLLMProvider.AUTO]
+    assert provider.complete_called is True

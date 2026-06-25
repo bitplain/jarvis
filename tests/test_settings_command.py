@@ -4,7 +4,7 @@ import pytest
 
 from app.bot.routers import commands
 from app.core.config import Settings
-from app.services.runtime_settings_service import ActiveLLMProvider
+from app.services.runtime_settings_service import ActiveLLMProvider, RuntimeSettingsUnavailable
 
 
 class FakeUser:
@@ -171,3 +171,46 @@ async def test_settings_callback_non_admin_is_denied() -> None:
 
     assert callback.answers == [{"text": "Доступ запрещён.", "show_alert": True}]
     assert FakeRuntimeSettingsService.instances == []
+
+
+@pytest.mark.asyncio
+async def test_settings_command_handles_missing_runtime_settings_table() -> None:
+    class MissingTableSettingsService(FakeRuntimeSettingsService):
+        async def get_active_llm_provider(self) -> ActiveLLMProvider:
+            raise RuntimeSettingsUnavailable("runtime_settings_unavailable")
+
+    commands.RuntimeSettingsService = MissingTableSettingsService  # type: ignore[assignment]
+    message = FakeMessage(user_id=100500)
+
+    await commands.cmd_settings(
+        message,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    assert "Настройки временно недоступны" in message.answers[0]["text"]
+    assert "alembic upgrade head" in message.answers[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_settings_callback_handles_missing_runtime_settings_table() -> None:
+    class MissingTableSettingsService(FakeRuntimeSettingsService):
+        async def get_active_llm_provider(self) -> ActiveLLMProvider:
+            raise RuntimeSettingsUnavailable("runtime_settings_unavailable")
+
+    commands.RuntimeSettingsService = MissingTableSettingsService  # type: ignore[assignment]
+    callback = FakeCallbackQuery("settings:refresh", user_id=100500)
+
+    await commands.handle_settings_callback(
+        callback,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    assert callback.answers == [
+        {
+            "text": "Настройки временно недоступны: миграция БД ещё не применена.",
+            "show_alert": True,
+        }
+    ]
+    assert callback.message.edits == []
