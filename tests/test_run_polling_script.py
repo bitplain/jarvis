@@ -91,6 +91,24 @@ async def test_polling_runner_supports_explicit_drop_pending_updates() -> None:
     assert bot.delete_webhook_calls == [{"drop_pending_updates": True}]
 
 
+@pytest.mark.asyncio
+async def test_polling_runner_refuses_production_webhook_runtime() -> None:
+    module = load_run_polling_module()
+    bot = FakeBot()
+    dispatcher = FakeDispatcher()
+
+    with pytest.raises(RuntimeError, match="production webhook runtime"):
+        await module.run_polling(
+            settings=Settings(_env_file=None, app_env="production", telegram_bot_token="token"),
+            bot=bot,
+            dispatcher=dispatcher,
+            drop_pending_updates=False,
+        )
+
+    assert bot.delete_webhook_calls == []
+    assert dispatcher.start_polling_calls == []
+
+
 def test_parse_args_keeps_pending_updates_by_default() -> None:
     module = load_run_polling_module()
 
