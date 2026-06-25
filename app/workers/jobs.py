@@ -17,7 +17,11 @@ from app.db.session import SessionLocal
 from app.llm.base import LLMProviderError
 from app.llm.factory import build_llm_provider
 from app.services.memory_service import MemoryService
-from app.services.runtime_settings_service import RuntimeSettingsService
+from app.services.runtime_settings_service import (
+    ActiveLLMProvider,
+    RuntimeSettingsService,
+    RuntimeSettingsUnavailable,
+)
 
 logger = logging.getLogger(__name__)
 USER_ERROR_MESSAGE = "Не получилось подготовить ответ. Попробуйте позже."
@@ -238,9 +242,13 @@ async def process_llm_message(ctx: dict[str, Any], payload: dict[str, Any]) -> N
             max_messages=settings.memory_max_messages,
         )
         messages = await memory.build_context(chat_id=chat_id)
-        active_provider = await RuntimeSettingsService(
-            RuntimeSettingRepository(session)
-        ).get_active_llm_provider()
+        try:
+            active_provider = await RuntimeSettingsService(
+                RuntimeSettingRepository(session)
+            ).get_active_llm_provider()
+        except RuntimeSettingsUnavailable:
+            logger.warning("runtime_settings_unavailable_using_auto_provider")
+            active_provider = ActiveLLMProvider.AUTO
         provider = build_llm_provider(settings, active_provider=active_provider)
         final_text = ""
         sent_final = False

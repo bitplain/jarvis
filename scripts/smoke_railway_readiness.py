@@ -77,6 +77,11 @@ def run_readiness() -> RailwayReadinessResult:
         if "python -m uvicorn app.main:app" in api_config and "${PORT:-8080}" in api_config
         else "MISSING"
     )
+    result.statuses["api_start_migration"] = (
+        "OK"
+        if "alembic upgrade head && python -m uvicorn app.main:app" in api_config
+        else "MISSING"
+    )
     result.statuses["api_predeploy_migration"] = (
         "OK" if 'preDeployCommand = "alembic upgrade head"' in api_config else "MISSING"
     )
@@ -95,6 +100,7 @@ def run_readiness() -> RailwayReadinessResult:
         "$PORT is not a valid integer",
         "provider_not_configured",
         'relation "messages" does not exist',
+        "alembic upgrade head && python -m uvicorn app.main:app",
     ]
     missing_doc_items = [item for item in required_doc_items if item not in deploy_doc]
     result.statuses["railway_doc_stage_4c"] = (

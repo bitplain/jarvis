@@ -102,7 +102,7 @@
 - Production API должен слушать порт из Railway `$PORT`; локальный compose flow остаётся на `8000`.
 - Production runtime использует webhook mode. Polling разрешён только для local/Mac smoke и не должен работать параллельно с production webhook runtime.
 - Railway variables задаются через Railway UI/CLI; `.env`, Telegram token, LLM keys, `ADMIN_API_TOKEN`, Authorization headers и полные `ADMIN_TELEGRAM_IDS` не коммитятся и не печатаются.
-- Stage 4C автоматизирует миграции через `preDeployCommand = "alembic upgrade head"` только в `railway.api.toml`; worker не запускает миграции автоматически.
+- Stage 4C автоматизирует миграции через `preDeployCommand = "alembic upgrade head"` в `railway.api.toml`; Stage 4D дополнительно запускает `alembic upgrade head` в API start command перед `uvicorn`, чтобы webhook runtime не стартовал со старой схемой.
 - Webhook на Railway устанавливается через sanitized script `scripts/setup_telegram_webhook.py` или совместимый `scripts/set_telegram_webhook.py`; scripts должны читать Railway process env и не печатать token/secret.
 - Railway project/deploy/push/tag/release не создаются без отдельной команды.
 
@@ -116,6 +116,7 @@
 - Кнопка `Настройки` может показываться в `/start`, но обработчик всё равно обязан проверять admin access.
 - Если выбранный provider не настроен или падает, пользователю показывается безопасная русская ошибка, а logs остаются sanitized без token/key/header/provider response body.
 - Railway Variables `YANDEX_*` и `OPENROUTER_*` остаются обязательными для worker, но реальные значения нельзя выводить в Telegram UI, docs, logs или PR.
+- API production start command должен автоматически выполнять `alembic upgrade head` перед стартом `uvicorn`; ручная миграция не должна быть обязательной для кнопки `Настройки`.
 - Production deploy Stage 4D происходит только после PR review, merge в `main`, CI и Railway production autodeploy; PR Environments выключены.
 
 ## Проверки
