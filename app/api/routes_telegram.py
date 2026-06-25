@@ -40,7 +40,10 @@ async def telegram_webhook(
             await BusinessService().record_business_event(key, payload)
             return {"status": "accepted"}
     bot = getattr(request.app.state, "bot", None) or Bot(token=settings.telegram_bot_token)
-    dispatcher = getattr(request.app.state, "dispatcher", None) or build_dispatcher(settings)
+    dispatcher = getattr(request.app.state, "dispatcher", None)
+    if dispatcher is None:
+        dispatcher = build_dispatcher(settings)
+        request.app.state.dispatcher = dispatcher
     redis = getattr(request.app.state, "redis_pool", None)
     if redis is None:
         redis = await create_pool(RedisSettings.from_dsn(settings.redis_url))

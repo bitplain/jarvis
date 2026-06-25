@@ -81,6 +81,8 @@ Group allowlist mode включается только после добавле
 
 Telegram UI находится в `app/bot/routers/commands.py`: `/settings -> Доступ`, callback ids `settings:access:*`, FSM states `TelegramAccessInput.*`. Доступ к таблице изолирован в `app/db/repositories/telegram_access.py`, правила доступа — в `app/services/telegram_access_service.py`.
 
+Access input FSM принимает один ID с label или несколько IDs через пробел/строки. Для webhook runtime callback update и следующий text message должны проходить через один persistent aiogram Dispatcher на `app.state`: FSM storage живёт внутри Dispatcher, поэтому transient Dispatcher per update ломает access input и отдаёт текст generic private LLM handler.
+
 ## Production webhook ingress
 
 Production Telegram ingress остаётся `POST /telegram/webhook`; router подключается в `app/main.py` через `routes_telegram.router`, а setup script формирует URL как `<PUBLIC_BASE_URL>/telegram/webhook`.

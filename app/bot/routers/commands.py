@@ -1,4 +1,5 @@
 import logging
+from dataclasses import dataclass
 from typing import Any, cast
 
 from aiogram import F, Router
@@ -63,6 +64,12 @@ class TelegramAccessInput(StatesGroup):
     remove_user = State()
     add_group = State()
     remove_group = State()
+
+
+@dataclass(frozen=True)
+class AccessInput:
+    telegram_ids: list[int]
+    label: str | None = None
 
 
 def _command_argument(message: Message) -> str | None:
@@ -359,18 +366,77 @@ async def _edit_settings_callback_message(
     return True
 
 
-def _parse_access_input(text: str | None) -> tuple[int, str | None] | None:
+def _parse_access_input(text: str | None) -> AccessInput | None:
     if not text:
         return None
-    parts = text.strip().split(maxsplit=1)
-    if not parts:
+    stripped = text.strip()
+    if not stripped:
         return None
+    tokens = stripped.split()
+    if _all_integer_tokens(tokens):
+        return AccessInput([int(token) for token in tokens])
+    parts = stripped.split(maxsplit=1)
     try:
         telegram_id = int(parts[0])
     except ValueError:
         return None
     label = parts[1].strip() if len(parts) > 1 else None
-    return telegram_id, label or None
+    return AccessInput([telegram_id], label or None)
+
+
+def _all_integer_tokens(tokens: list[str]) -> bool:
+    if not tokens:
+        return False
+    for token in tokens:
+        try:
+            int(token)
+        except ValueError:
+            return False
+    return True
+
+
+def _render_id_lines(ids: list[int]) -> str:
+    return "\n".join(f"- {telegram_id}" for telegram_id in ids)
+
+
+def _invalid_access_input_message(kind: str) -> str:
+    return (
+        f"Не понял ID. Отправьте Telegram {kind} ID числом.\n"
+        "Пример:\n"
+        "59144850 Александр\n\n"
+        "Для отмены отправьте /cancel."
+    )
+
+
+def _validate_positive_ids(telegram_ids: list[int]) -> None:
+    if any(telegram_id <= 0 for telegram_id in telegram_ids):
+        raise ValueError("invalid_user_id")
+
+
+def _render_remove_result(
+    *,
+    singular_removed: str,
+    plural_removed: str,
+    removed_ids: list[int],
+    missing_ids: list[int],
+    screen_title: str,
+    entries: list[AccessEntry],
+) -> str:
+    lines: list[str] = []
+    if removed_ids:
+        if len(removed_ids) == 1:
+            lines.append(singular_removed)
+            lines.append(_render_id_lines(removed_ids))
+        else:
+            lines.append(plural_removed)
+            lines.append(_render_id_lines(removed_ids))
+    if missing_ids:
+        lines.append("Запись не найдена:")
+        lines.append(_render_id_lines(missing_ids))
+    if not lines:
+        lines.append("Запись не найдена.")
+    lines.extend(["", render_access_entries_text(screen_title, entries)])
+    return "\n".join(lines)
 
 
 async def cmd_whoami(message: Message, **data: Any) -> None:
@@ -725,37 +791,94 @@ async def handle_access_input_message(
     current_state = await state.get_state()
     parsed = _parse_access_input(text)
     if parsed is None:
-        await message.answer("Нужен Telegram ID числом. Для отмены отправьте /cancel.")
+        await message.answer(_invalid_access_input_message("user/group"))
         return
-    telegram_id, label = parsed
     service = _telegram_access_service(session, settings.admin_ids)
     try:
         if current_state == TelegramAccessInput.add_user.state:
-            await service.add_allowed_user(telegram_id, label, created_by=user_id)
+            _validate_positive_ids(parsed.telegram_ids)
+            for telegram_id in parsed.telegram_ids:
+                label = parsed.label if len(parsed.telegram_ids) == 1 else None
+                await service.add_allowed_user(telegram_id, label, created_by=user_id)
             logger.info("telegram_access_user_added")
             await state.clear()
-            await message.answer("Пользователь добавлен.")
+            users = await service.list_allowed_users()
+            if len(parsed.telegram_ids) == 1:
+                prefix = f"Пользователь добавлен/уже был:\n{_render_id_lines(parsed.telegram_ids)}"
+            else:
+                prefix = f"Добавлены пользователи:\n{_render_id_lines(parsed.telegram_ids)}"
+            await message.answer(
+                f"{prefix}\n\n{render_access_entries_text('Разрешённые пользователи', users)}",
+                reply_markup=build_access_users_keyboard(),
+            )
             return
         if current_state == TelegramAccessInput.remove_user.state:
-            removed = await service.remove_allowed_user(telegram_id)
+            _validate_positive_ids(parsed.telegram_ids)
+            removed_ids: list[int] = []
+            missing_ids: list[int] = []
+            for telegram_id in parsed.telegram_ids:
+                removed = await service.remove_allowed_user(telegram_id)
+                if removed:
+                    removed_ids.append(telegram_id)
+                else:
+                    missing_ids.append(telegram_id)
             logger.info("telegram_access_user_removed")
             await state.clear()
-            await message.answer("Пользователь удалён." if removed else "Запись не найдена.")
+            users = await service.list_allowed_users()
+            await message.answer(
+                _render_remove_result(
+                    singular_removed="Пользователь удалён.",
+                    plural_removed="Удалены пользователи:",
+                    removed_ids=removed_ids,
+                    missing_ids=missing_ids,
+                    screen_title="Разрешённые пользователи",
+                    entries=users,
+                ),
+                reply_markup=build_access_users_keyboard(),
+            )
             return
         if current_state == TelegramAccessInput.add_group.state:
-            await service.add_allowed_group(telegram_id, label, created_by=user_id)
+            for telegram_id in parsed.telegram_ids:
+                label = parsed.label if len(parsed.telegram_ids) == 1 else None
+                await service.add_allowed_group(telegram_id, label, created_by=user_id)
             logger.info("telegram_access_group_added")
             await state.clear()
-            await message.answer("Группа добавлена.")
+            groups = await service.list_allowed_groups()
+            if len(parsed.telegram_ids) == 1:
+                prefix = f"Группа добавлена/уже была:\n{_render_id_lines(parsed.telegram_ids)}"
+            else:
+                prefix = f"Добавлены группы:\n{_render_id_lines(parsed.telegram_ids)}"
+            await message.answer(
+                f"{prefix}\n\n{render_access_entries_text('Разрешённые группы', groups)}",
+                reply_markup=build_access_groups_keyboard(),
+            )
             return
         if current_state == TelegramAccessInput.remove_group.state:
-            removed = await service.remove_allowed_group(telegram_id)
+            removed_ids = []
+            missing_ids = []
+            for telegram_id in parsed.telegram_ids:
+                removed = await service.remove_allowed_group(telegram_id)
+                if removed:
+                    removed_ids.append(telegram_id)
+                else:
+                    missing_ids.append(telegram_id)
             logger.info("telegram_access_group_removed")
             await state.clear()
-            await message.answer("Группа удалена." if removed else "Запись не найдена.")
+            groups = await service.list_allowed_groups()
+            await message.answer(
+                _render_remove_result(
+                    singular_removed="Группа удалена.",
+                    plural_removed="Удалены группы:",
+                    removed_ids=removed_ids,
+                    missing_ids=missing_ids,
+                    screen_title="Разрешённые группы",
+                    entries=groups,
+                ),
+                reply_markup=build_access_groups_keyboard(),
+            )
             return
     except ValueError:
-        await message.answer("Нужен положительный Telegram user ID.")
+        await message.answer(_invalid_access_input_message("user"))
         return
     except TelegramAccessUnavailable:
         await message.answer(ACCESS_UNAVAILABLE_MESSAGE)
