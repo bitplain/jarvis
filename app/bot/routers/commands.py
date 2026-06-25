@@ -1,17 +1,32 @@
-from typing import Any
+from typing import Any, cast
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.bot.middlewares.access import is_admin_user
 from app.db.models import BusinessConnection, BusinessConnectionStatus
 from app.db.repositories.messages import MessageRepository
+from app.db.repositories.runtime_settings import RuntimeSettingRepository
 from app.llm.base import LLMProviderError
 from app.llm.factory import build_llm_provider
 from app.llm.types import LLMMessage
 from app.services.memory_service import MemoryService
+from app.services.runtime_settings_service import ActiveLLMProvider, RuntimeSettingsService
+
+SETTINGS_CALLBACK_REFRESH = "settings:refresh"
+SETTINGS_CALLBACK_CLOSE = "settings:close"
+SETTINGS_PROVIDER_PREFIX = "settings:provider:"
+SETTINGS_PROVIDER_AUTO = "settings:provider:auto"
+SETTINGS_PROVIDER_YANDEX = "settings:provider:yandex"
+SETTINGS_PROVIDER_OPENROUTER = "settings:provider:openrouter"
+PROVIDER_LABELS = {
+    ActiveLLMProvider.AUTO: "Auto",
+    ActiveLLMProvider.YANDEX: "Yandex",
+    ActiveLLMProvider.OPENROUTER: "OpenRouter",
+}
 
 
 def _command_argument(message: Message) -> str | None:
@@ -57,7 +72,10 @@ async def _resolve_bot_username(data: dict[str, Any], fallback: str) -> str:
 
 
 async def cmd_start(message: Message) -> None:
-    await message.answer("Jarvis готов. Пишите вопрос на русском языке.")
+    await message.answer(
+        "Jarvis готов. Пишите вопрос на русском языке.",
+        reply_markup=build_settings_button(),
+    )
 
 
 async def cmd_help(message: Message) -> None:
@@ -65,11 +83,124 @@ async def cmd_help(message: Message) -> None:
         "/reset — очистить память\n"
         "/models — модели\n"
         "/status — статус\n"
+        "/settings — настройки\n"
         "/summary — кратко пересказать последний переданный контекст\n"
         "/draft_reply — подготовить ответ\n"
         "/translate — перевести нормально\n"
         "/factcheck — проверить факты"
     )
+
+
+def build_settings_button() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Настройки", callback_data=SETTINGS_CALLBACK_REFRESH)]
+        ]
+    )
+
+
+def build_settings_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Auto",
+                    callback_data=SETTINGS_PROVIDER_AUTO,
+                ),
+                InlineKeyboardButton(
+                    text="Yandex",
+                    callback_data=SETTINGS_PROVIDER_YANDEX,
+                ),
+                InlineKeyboardButton(
+                    text="OpenRouter",
+                    callback_data=SETTINGS_PROVIDER_OPENROUTER,
+                ),
+            ],
+            [
+                InlineKeyboardButton(text="Обновить", callback_data=SETTINGS_CALLBACK_REFRESH),
+                InlineKeyboardButton(text="Закрыть", callback_data=SETTINGS_CALLBACK_CLOSE),
+            ],
+        ]
+    )
+
+
+def render_settings_text(provider: ActiveLLMProvider, *, saved: bool = False) -> str:
+    title = "Настройки сохранены." if saved else "Настройки Jarvis"
+    return (
+        f"{title}\n\n"
+        f"Активный агент: {PROVIDER_LABELS[provider]}\n\n"
+        "Выберите LLM-провайдера:\n"
+        "[Auto] [Yandex] [OpenRouter]\n\n"
+        "Текущий режим применится к следующим сообщениям."
+    )
+
+
+def _message_user_id(message: Message) -> int | None:
+    return message.from_user.id if message.from_user else None
+
+
+def _callback_user_id(callback: CallbackQuery) -> int | None:
+    return callback.from_user.id if callback.from_user else None
+
+
+def _runtime_settings_service(session: object) -> RuntimeSettingsService:
+    return RuntimeSettingsService(RuntimeSettingRepository(session))  # type: ignore[arg-type]
+
+
+async def cmd_settings(message: Message, **data: Any) -> None:
+    settings = data["settings"]
+    if not is_admin_user(_message_user_id(message), settings.admin_ids):
+        await message.answer("Доступ запрещён.")
+        return
+    session = data.get("db_session")
+    if session is None:
+        await message.answer("Настройки доступны только в runtime с БД.")
+        return
+    provider = await _runtime_settings_service(session).get_active_llm_provider()
+    await message.answer(render_settings_text(provider), reply_markup=build_settings_keyboard())
+
+
+async def handle_settings_callback(callback: CallbackQuery, **data: Any) -> None:
+    settings = data["settings"]
+    user_id = _callback_user_id(callback)
+    if not is_admin_user(user_id, settings.admin_ids):
+        await callback.answer("Доступ запрещён.", show_alert=True)
+        return
+    session = data.get("db_session")
+    if session is None:
+        await callback.answer("Настройки доступны только в runtime с БД.", show_alert=True)
+        return
+    callback_data = callback.data or ""
+    service = _runtime_settings_service(session)
+    saved = False
+    if callback_data.startswith(SETTINGS_PROVIDER_PREFIX):
+        provider_value = callback_data.removeprefix(SETTINGS_PROVIDER_PREFIX)
+        try:
+            provider = await service.set_active_llm_provider(
+                provider_value,
+                updated_by_telegram_id=user_id,
+            )
+        except ValueError:
+            await callback.answer("Неизвестный провайдер.", show_alert=True)
+            return
+        saved = True
+        await callback.answer("Настройки сохранены.", show_alert=False)
+    elif callback_data == SETTINGS_CALLBACK_REFRESH:
+        provider = await service.get_active_llm_provider()
+        await callback.answer()
+    elif callback_data == SETTINGS_CALLBACK_CLOSE:
+        if callback.message is not None and hasattr(callback.message, "delete"):
+            await cast(Message, callback.message).delete()
+        await callback.answer()
+        return
+    else:
+        await callback.answer("Неизвестная команда настроек.", show_alert=True)
+        return
+    if callback.message is not None and hasattr(callback.message, "edit_text"):
+        await cast(Message, callback.message).edit_text(
+            render_settings_text(provider, saved=saved),
+            reply_markup=build_settings_keyboard(),
+        )
 
 
 async def cmd_status(message: Message, **data: Any) -> None:
@@ -239,6 +370,7 @@ def build_router() -> Router:
     router = Router(name="commands")
     router.message(Command("start"))(cmd_start)
     router.message(Command("help"))(cmd_help)
+    router.message(Command("settings"))(cmd_settings)
     router.message(Command("status"))(cmd_status)
     router.message(Command("models"))(cmd_models)
     router.message(Command("reset"))(cmd_reset)
@@ -246,6 +378,7 @@ def build_router() -> Router:
     router.message(Command("draft_reply"))(cmd_draft_reply)
     router.message(Command("translate"))(cmd_translate)
     router.message(Command("factcheck"))(cmd_factcheck)
+    router.callback_query(F.data.startswith("settings:"))(handle_settings_callback)
     return router
 
 

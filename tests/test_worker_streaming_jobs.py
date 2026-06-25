@@ -6,6 +6,7 @@ from app.bot.streaming.text_limits import TELEGRAM_TEXT_LIMIT
 from app.core.config import Settings
 from app.llm.base import LLMProviderError
 from app.llm.types import LLMMessage, LLMResponse, LLMStreamChunk
+from app.services.runtime_settings_service import ActiveLLMProvider
 from app.workers import jobs
 from app.workers.jobs import process_llm_message
 
@@ -114,6 +115,14 @@ class FakeSessionLocal:
         return FakeSessionContext()
 
 
+class FakeRuntimeSettingsService:
+    def __init__(self, repository: object) -> None:
+        del repository
+
+    async def get_active_llm_provider(self) -> ActiveLLMProvider:
+        return ActiveLLMProvider.AUTO
+
+
 def patch_worker(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -127,7 +136,13 @@ def patch_worker(
     monkeypatch.setattr(jobs, "SessionLocal", FakeSessionLocal())
     monkeypatch.setattr(jobs, "MessageRepository", lambda session: object())
     monkeypatch.setattr(jobs, "MemoryService", FakeMemoryService)
-    monkeypatch.setattr(jobs, "build_llm_provider", lambda loaded_settings: provider)
+    monkeypatch.setattr(jobs, "RuntimeSettingRepository", lambda session: object())
+    monkeypatch.setattr(jobs, "RuntimeSettingsService", FakeRuntimeSettingsService)
+    monkeypatch.setattr(
+        jobs,
+        "build_llm_provider",
+        lambda loaded_settings, *, active_provider: provider,
+    )
 
 
 @pytest.mark.asyncio

@@ -106,6 +106,18 @@
 - Webhook на Railway устанавливается через sanitized script `scripts/setup_telegram_webhook.py` или совместимый `scripts/set_telegram_webhook.py`; scripts должны читать Railway process env и не печатать token/secret.
 - Railway project/deploy/push/tag/release не создаются без отдельной команды.
 
+## Stage 4D Provider Settings
+
+- Активный LLM-агент переключается только через PostgreSQL runtime setting `active_llm_provider`, а не через изменение `.env` или Railway Variables.
+- Допустимые значения: `auto`, `yandex`, `openrouter`; отсутствие записи означает `auto`.
+- `auto` сохраняет env-based primary/fallback логику `LLM_PRIMARY_PROVIDER` и `LLM_FALLBACK_PROVIDER`.
+- `yandex` и `openrouter` принудительно выбирают соответствующий provider для следующих worker jobs; worker должен читать setting перед обработкой job и не кэшировать выбор навечно.
+- Telegram UI `/settings` и callback `settings:*` доступны только admin user из `ADMIN_TELEGRAM_IDS`; non-admin получает `Доступ запрещён.`
+- Кнопка `Настройки` может показываться в `/start`, но обработчик всё равно обязан проверять admin access.
+- Если выбранный provider не настроен или падает, пользователю показывается безопасная русская ошибка, а logs остаются sanitized без token/key/header/provider response body.
+- Railway Variables `YANDEX_*` и `OPENROUTER_*` остаются обязательными для worker, но реальные значения нельзя выводить в Telegram UI, docs, logs или PR.
+- Production deploy Stage 4D происходит только после PR review, merge в `main`, CI и Railway production autodeploy; PR Environments выключены.
+
 ## Проверки
 
 Перед финальным отчётом выполнять:
@@ -128,6 +140,7 @@ uv run --python 3.12 --extra dev python scripts/smoke_polling_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_regular_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_group_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_streaming_readiness.py
+uv run --python 3.12 --extra dev python scripts/smoke_provider_settings_readiness.py
 git status --short
 ```
 

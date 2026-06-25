@@ -90,6 +90,18 @@ Guest prompt содержит только текст guest-вызова и repl
 Yandex и OpenRouter используют OpenAI-compatible HTTP API. Base URL, API key и model берутся только из env. Fallback пробует OpenRouter после retryable ошибок Yandex: auth, rate limit, network, server, unavailable model.
 Streaming использует SSE `chat/completions` (`stream=true`) через тот же OpenAI-compatible adapter. Если streaming provider path ломается, worker пробует обычный non-stream completion и отправляет финальный ответ без draft/edit preview.
 
+Stage 4D добавляет runtime provider override через PostgreSQL runtime setting `active_llm_provider` в таблице `runtime_settings`.
+
+- `auto` — старое поведение через `LLM_PRIMARY_PROVIDER` и `LLM_FALLBACK_PROVIDER`.
+- `yandex` — worker использует Yandex provider напрямую.
+- `openrouter` — worker использует OpenRouter provider напрямую.
+
+Worker читает setting при обработке каждого `process_llm_message`, поэтому переключение применяется к следующим сообщениям и не требует изменения `.env` или Railway Variables. Если setting отсутствует или повреждён, используется `auto`.
+
+Telegram UI для настройки находится в `app/bot/routers/commands.py`: `/settings`, кнопка `Настройки`, callback ids `settings:provider:auto`, `settings:provider:yandex`, `settings:provider:openrouter`, `settings:refresh`, `settings:close`. Доступ проверяется по `ADMIN_TELEGRAM_IDS`; callback path имеет отдельную admin-проверку, потому что message middleware не покрывает callback queries.
+
+PostgreSQL доступ к setting изолирован в `app/db/repositories/runtime_settings.py`, бизнес-валидация значений — в `app/services/runtime_settings_service.py`.
+
 ## Streaming
 
 `StreamBuffer` не даёт отправлять обновление на каждый токен. Flush происходит по одному из условий:

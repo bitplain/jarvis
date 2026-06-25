@@ -132,6 +132,20 @@ STREAMING_GROUP_FALLBACK_ENABLED=true
 
 LLM keys нужны именно в `jarvis-worker`, потому что LLM job выполняет worker.
 
+## Runtime provider settings
+
+Stage 4D не требует менять Railway Variables для переключения активного агента. Админ открывает `/settings` или кнопку `Настройки` в Telegram и выбирает:
+
+- `Auto`;
+- `Yandex`;
+- `OpenRouter`.
+
+Выбор сохраняется в PostgreSQL runtime setting `active_llm_provider` и применяется worker к следующим сообщениям. `Auto` сохраняет env-based логику `LLM_PRIMARY_PROVIDER` + `LLM_FALLBACK_PROVIDER`.
+
+Railway Variables всё равно должны быть заполнены в `jarvis-worker`: `YANDEX_*` и `OPENROUTER_*` нужны для фактического вызова провайдера. Если выбранный provider не настроен, пользователь получит безопасную ошибку, а worker залогирует sanitized error без token/key/header.
+
+Production deploy этой функции произойдёт только после merge PR в `main`, ожидания CI и Railway production autodeploy.
+
 ## Webhook setup
 
 После получения публичного Railway domain и заполнения `PUBLIC_BASE_URL` выполнить в Railway API console:
@@ -191,12 +205,14 @@ PYTHONPATH=/app python scripts/smoke_llm.py
 
 ```bash
 uv run --python 3.12 --extra dev python scripts/smoke_railway_readiness.py
+uv run --python 3.12 --extra dev python scripts/smoke_provider_settings_readiness.py
 ```
 
 Ожидаемый verdict:
 
 ```text
 PASS_RAILWAY_READINESS
+PASS_PROVIDER_SETTINGS_READINESS
 ```
 
 ## Typical Railway failures
