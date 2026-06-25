@@ -12,6 +12,21 @@ Stage 4C фиксирует повторяемый production deploy на Railwa
 
 Railway не запускает `docker-compose.yml` как единый production stack. Compose остаётся локальным development/smoke flow.
 
+## Local container runtime on this Mac
+
+На рабочей Mac-машине Docker Desktop daemon/socket `~/.docker/run/docker.sock` может быть недоступен. Это не означает, что локальный container runtime полностью отсутствует, и не является самостоятельным blocker для Railway release readiness.
+
+Перед выводом "Docker недоступен" сначала проверить Apple Container CLI:
+
+```bash
+command -v container
+container --help
+```
+
+Primary local container runtime on this Mac can be Apple Container CLI. Docker Compose checks are optional when Docker daemon is unavailable. Если конкретная задача требует именно Docker Compose, это нужно честно указать как ограничение Docker Compose; если достаточно container runtime/build smoke, можно использовать `container`, если он доступен.
+
+Railway/live checks are the deployment source of truth для production readiness: Railway deploy logs, `/health`, `/ready`, webhook behavior, worker logs и реальные Telegram flows важнее локального Docker Desktop socket.
+
 ## Config files
 
 Для Railway services используются отдельные config-as-code файлы:

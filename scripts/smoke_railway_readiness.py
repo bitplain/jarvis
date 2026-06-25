@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from shutil import which
 
 ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_DOCKER_SOCKET = Path.home() / ".docker" / "run" / "docker.sock"
 
 
 @dataclass
@@ -31,13 +34,43 @@ def _contains(path: str, expected: str) -> bool:
     return expected in _read(path)
 
 
-def run_readiness() -> RailwayReadinessResult:
+def detect_local_container_runtime(
+    *,
+    docker_socket: Path = DEFAULT_DOCKER_SOCKET,
+    container_path: str | None = None,
+) -> dict[str, str]:
+    resolved_container = container_path if container_path is not None else which("container")
+    docker_status = (
+        "OK Docker Desktop socket available"
+        if docker_socket.exists()
+        else "WARN Docker Desktop socket missing"
+    )
+    container_status = (
+        "OK Apple Container CLI available"
+        if resolved_container
+        else "WARN Apple Container CLI unavailable"
+    )
+    return {
+        "local_docker_socket": docker_status,
+        "local_apple_container_cli": container_status,
+    }
+
+
+def _status_allows_pass(status: str) -> bool:
+    return status.startswith(("OK", "WARN"))
+
+
+def run_readiness(
+    *,
+    local_container_statuses: Mapping[str, str] | None = None,
+) -> RailwayReadinessResult:
     result = RailwayReadinessResult()
     env_example = _read(".env.example")
     deploy_doc = _read("docs/RAILWAY_DEPLOY.md")
     api_config = _read("railway.api.toml")
     worker_config = _read("railway.worker.toml")
     startup_migrations = _read("app/services/startup_migrations.py")
+    result.statuses.update(local_container_statuses or detect_local_container_runtime())
 
     required_env = [
         "APP_ENV=production",
@@ -112,6 +145,9 @@ def run_readiness() -> RailwayReadinessResult:
         "alembic upgrade head && python -m uvicorn app.main:app",
         "Railway UI Start Command",
         "startup migration guard",
+        "Apple Container CLI",
+        "Docker Compose checks are optional",
+        "Railway/live checks",
     ]
     missing_doc_items = [item for item in required_doc_items if item not in deploy_doc]
     result.statuses["railway_doc_stage_4c"] = (
@@ -126,7 +162,7 @@ def run_readiness() -> RailwayReadinessResult:
         else "MISSING"
     )
 
-    if all(value.startswith("OK") for value in result.statuses.values()):
+    if all(_status_allows_pass(value) for value in result.statuses.values()):
         result.verdict = "PASS_RAILWAY_READINESS"
     return result
 

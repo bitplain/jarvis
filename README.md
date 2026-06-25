@@ -41,10 +41,19 @@ docker compose exec api pytest -q
 
 ## Deployment
 
-Локальный Docker Compose flow остаётся основным режимом разработки и smoke на Mac.
+Локальный Docker Compose flow остаётся удобным режимом разработки и smoke на Mac, когда доступен Docker daemon.
+На этой машине primary local container runtime can be Apple Container CLI, поэтому перед выводом о недоступности контейнерного runtime сначала проверяйте:
+
+```bash
+command -v container
+container --help
+```
+
+Docker Compose checks are optional when Docker daemon is unavailable. Если задача требует именно Docker Compose, это нужно честно указать отдельно; если достаточно container runtime/build smoke, можно использовать `container`.
 Production deploy на Railway описан в `docs/RAILWAY_DEPLOY.md`.
 
 Railway production запускается в webhook mode: отдельный service для API/webhook, отдельный service для arq worker, отдельные Railway PostgreSQL и Railway Redis. Polling используется только для local/Mac smoke и не должен работать параллельно с production webhook runtime.
+Railway/live checks are the deployment source of truth для production readiness.
 
 ## Куда вставлять секреты
 

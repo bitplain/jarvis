@@ -88,6 +88,19 @@ def test_docs_explain_code_level_startup_guard_for_ui_override() -> None:
     assert "startup migration guard" in deploy_doc
 
 
+def test_docs_explain_local_apple_container_cli_fallback() -> None:
+    agents = read("AGENTS.md")
+    readme = read("README.md")
+    deploy_doc = read("docs/RAILWAY_DEPLOY.md")
+    combined = "\n".join([agents, readme, deploy_doc])
+
+    assert "Apple Container CLI" in combined
+    assert "command -v container" in combined
+    assert "container --help" in combined
+    assert "Docker Compose checks are optional" in combined
+    assert "Railway/live checks" in combined
+
+
 def test_railway_doc_captures_live_deploy_rules_and_failures() -> None:
     deploy_doc = read("docs/RAILWAY_DEPLOY.md")
     required = [

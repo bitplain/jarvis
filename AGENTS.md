@@ -128,6 +128,22 @@
 - Settings callbacks должны быть идемпотентными: `settings:refresh`, повторный `settings:provider:*`, `settings:close` и Telegram `message is not modified` не должны давать HTTP 500.
 - Другие `TelegramBadRequest` в settings callbacks нельзя считать успехом молча: нужен sanitized log и безопасный callback answer.
 
+## Stage 4F Local Container Runtime Checks
+
+- На этой Mac-машине Docker Desktop daemon/socket `~/.docker/run/docker.sock` может быть недоступен; это не blocker само по себе.
+- Перед выводом "Docker недоступен" сначала проверить Apple Container CLI:
+
+```bash
+command -v container
+container --help
+```
+
+- Primary local container runtime on this Mac can be Apple Container CLI.
+- Docker Compose checks are optional when Docker daemon is unavailable; если задача требует именно Docker Compose, честно писать, что Docker Compose недоступен.
+- Если достаточно container runtime/build smoke, использовать `container`, если возможно; не пытаться запускать Docker Desktop.
+- Railway/live checks are the deployment source of truth для production readiness; локальный Docker/Compose blocker не должен сам по себе блокировать release readiness.
+- Railway Variables не менять и в `main` напрямую не пушить.
+
 ## Проверки
 
 Перед финальным отчётом выполнять:
@@ -136,6 +152,8 @@
 uv run --python 3.12 --extra dev ruff check .
 uv run --python 3.12 --extra dev mypy app
 uv run --python 3.12 --extra dev pytest -q
+command -v container
+container --help
 docker compose build
 docker compose up -d
 docker compose ps
@@ -153,6 +171,8 @@ uv run --python 3.12 --extra dev python scripts/smoke_streaming_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_provider_settings_readiness.py
 git status --short
 ```
+
+Если `docker compose ...` не работает только из-за отсутствия Docker Desktop socket, зафиксировать это как локальное ограничение, проверить наличие `container`, и не считать это самостоятельным blocker для Railway/live readiness.
 
 ## Remote AGENTS sync
 
