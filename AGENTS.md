@@ -108,6 +108,8 @@
 - Railway variables задаются через Railway UI/CLI; `.env`, Telegram token, LLM keys, `ADMIN_API_TOKEN`, Authorization headers и полные `ADMIN_TELEGRAM_IDS` не коммитятся и не печатаются.
 - Stage 4C автоматизирует миграции через `preDeployCommand = "alembic upgrade head"` в `railway.api.toml`; Stage 4D дополнительно запускает `alembic upgrade head` в API start command перед `uvicorn`, чтобы webhook runtime не стартовал со старой схемой.
 - Webhook на Railway устанавливается через sanitized script `scripts/setup_telegram_webhook.py` или совместимый `scripts/set_telegram_webhook.py`; scripts должны читать Railway process env и не печатать token/secret.
+- API startup при `APP_ENV=production` выполняет Telegram webhook self-healing setup после startup migrations, использует тот же sanitized setup logic и логирует только `telegram_webhook_setup_started`, `telegram_webhook_setup_completed`, `telegram_webhook_setup_failed`, `webhook_host`, `webhook_path`.
+- Webhook self-healing не запускается в worker, dev и test. Отсутствующий token/public URL/secret или временная ошибка Telegram API не должны валить API startup; нужно логировать sanitized failure без token/secret/header.
 - Railway project/deploy/push/tag/release не создаются без отдельной команды.
 
 ## Stage 4D Provider Settings

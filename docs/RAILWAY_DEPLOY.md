@@ -39,6 +39,8 @@ arq app.workers.arq_settings.WorkerSettings
 
 Railway UI Start Command может переопределить `railway.api.toml`. Поэтому Stage 4E добавляет code-level startup migration guard в API startup path: даже если UI запустит только `uvicorn app.main:app`, API при `APP_ENV=production` сначала выполнит Alembic и только потом начнёт принимать webhook requests.
 
+После startup migrations `jarvis-api` при `APP_ENV=production` запускает Telegram webhook self-healing setup: пробует установить webhook на `<PUBLIC_BASE_URL>/telegram/webhook` через ту же sanitized logic, что и ручной setup script. Worker этот setup не выполняет. Если token, secret, public URL отсутствуют или Telegram API временно недоступен, API startup не падает; в логах остаётся только sanitized `telegram_webhook_setup_failed` с `webhook_host` и `webhook_path`.
+
 ## Pre-deploy migrations
 
 API service запускает Alembic до старта новой версии:
@@ -162,6 +164,8 @@ PYTHONPATH=/app python scripts/setup_telegram_webhook.py --info
 ```
 
 Скрипт берёт `TELEGRAM_BOT_TOKEN`, `PUBLIC_BASE_URL` и `TELEGRAM_WEBHOOK_SECRET` из Railway process env или локального `.env`. В выводе показываются только sanitized host/path/status, без token и secret.
+
+Manual setup остаётся полезен для явной проверки, но production deploy теперь self-heal-ит Telegram webhook на startup `jarvis-api`. Это важно, потому что webhook state хранится на стороне Telegram и не восстанавливается простым merge/deploy, если раньше был выполнен `deleteWebhook`.
 
 Production runtime использует webhook mode. Polling разрешён только для local/Mac smoke и не должен работать параллельно с production webhook runtime.
 Короткое правило для проверок: polling только для local, production только webhook.

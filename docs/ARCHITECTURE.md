@@ -70,6 +70,8 @@ Group fallback finalization защищена `final_delivered`: повторны
 ## Production webhook ingress
 
 Production Telegram ingress остаётся `POST /telegram/webhook`; router подключается в `app/main.py` через `routes_telegram.router`, а setup script формирует URL как `<PUBLIC_BASE_URL>/telegram/webhook`.
+При `APP_ENV=production` API startup после startup migrations выполняет Telegram webhook self-healing setup через общую sanitized logic `app.services.telegram_webhook_setup`. Это восстанавливает state Telegram webhook после deploy, если ранее он был удалён, но не делает live Telegram calls в dev/test и не запускается в worker.
+Если `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET` или `PUBLIC_BASE_URL` отсутствуют, либо Telegram API временно недоступен, API startup не падает: пишется sanitized `telegram_webhook_setup_failed` с `webhook_host` и `webhook_path`, без token/secret/header.
 Polling readiness и polling runner могут удалять webhook только для local/Mac polling smoke. При `APP_ENV=production` они не выполняют `deleteWebhook`, чтобы production webhook не замолчал после диагностического smoke.
 
 ## Guest Mode
