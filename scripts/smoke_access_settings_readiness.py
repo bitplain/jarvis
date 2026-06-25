@@ -6,7 +6,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.db.models import TelegramAccessEntry
-from app.services.telegram_access_service import TelegramAccessService
+from app.services.telegram_access_service import (
+    AccessEntry,
+    AccessMutationResult,
+    TelegramAccessService,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -45,18 +49,24 @@ class InMemoryTelegramAccessRepository:
         telegram_id: int,
         label: str | None,
         created_by: int | None,
-    ) -> None:
-        from app.services.telegram_access_service import AccessEntry
-
+    ) -> AccessMutationResult:
+        result = (
+            AccessMutationResult.ALREADY_EXISTS
+            if (entry_type, telegram_id) in self.entries
+            else AccessMutationResult.CREATED
+        )
         self.entries[(entry_type, telegram_id)] = AccessEntry(
             entry_type=entry_type,
             telegram_id=telegram_id,
             label=label,
             created_by=created_by,
         )
+        return result
 
-    async def delete_entry(self, entry_type: str, telegram_id: int) -> bool:
-        return self.entries.pop((entry_type, telegram_id), None) is not None
+    async def delete_entry(self, entry_type: str, telegram_id: int) -> AccessMutationResult:
+        if self.entries.pop((entry_type, telegram_id), None) is None:
+            return AccessMutationResult.NOT_FOUND
+        return AccessMutationResult.REMOVED
 
 
 def _read(path: str) -> str:
@@ -86,14 +96,26 @@ async def run_readiness() -> AccessSettingsReadinessResult:
         and "BigInteger" in migration
         else "MISSING"
     )
-    await service.add_allowed_user(200600, "Тест", created_by=100500)
-    await service.add_allowed_group(-100123, "Тестовая группа", created_by=100500)
+    add_user_result = await service.add_allowed_user(200600, "Тест", created_by=100500)
+    add_group_result = await service.add_allowed_group(
+        -100123,
+        "Тестовая группа",
+        created_by=100500,
+    )
+    add_group_again_result = await service.add_allowed_group(
+        -100123,
+        "Тестовая группа",
+        created_by=100500,
+    )
     result.statuses["service"] = (
         "OK"
         if service.is_admin_user(100500)
         and await service.is_allowed_user(100500)
         and await service.is_allowed_user(200600)
         and await service.is_allowed_group(-100123)
+        and add_user_result is AccessMutationResult.CREATED
+        and add_group_result is AccessMutationResult.CREATED
+        and add_group_again_result is AccessMutationResult.ALREADY_EXISTS
         else "BROKEN"
     )
 
@@ -121,6 +143,18 @@ async def run_readiness() -> AccessSettingsReadinessResult:
         and "StateFilter(TelegramAccessInput.remove_group)" in commands
         else "MISSING"
     )
+    old_user_generic = "Пользователь добавлен" + "/уже был"
+    old_group_generic = "Группа добавлена" + "/уже была"
+    result.statuses["add_result_messages"] = (
+        "OK"
+        if "Пользователь добавлен:" in commands
+        and "Пользователь уже есть в списке:" in commands
+        and "Группа добавлена:" in commands
+        and "Группа уже есть в списке:" in commands
+        and old_user_generic not in commands
+        and old_group_generic not in commands
+        else "MISSING"
+    )
     telegram_route = _read("app/api/routes_telegram.py")
     result.statuses["persistent_dispatcher"] = (
         "OK"
@@ -145,6 +179,10 @@ async def run_readiness() -> AccessSettingsReadinessResult:
         "test_add_user_state_intercepts_text_before_private_llm",
         "test_invalid_access_fsm_input_does_not_enqueue_llm",
         "test_add_user_state_supports_multiple_ids_space_separated",
+        "test_add_group_returns_created_then_already_exists",
+        "test_add_existing_group_fsm_reports_already_exists",
+        "test_add_user_state_splits_created_and_existing_without_private_llm",
+        "test_remove_group_returns_removed_then_not_found",
     ]
     result.statuses["tests"] = (
         "OK" if all(test_name in tests for test_name in required_tests) else "MISSING"

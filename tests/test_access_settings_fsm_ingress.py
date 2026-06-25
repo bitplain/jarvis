@@ -9,6 +9,7 @@ from app.bot.routers import commands, private
 from app.core.config import Settings
 from app.core.config import get_settings as app_get_settings
 from app.main import create_app
+from app.services.telegram_access_service import AccessMutationResult
 
 
 class FakeTelegramMessage:
@@ -108,15 +109,26 @@ class FakeTelegramAccessService:
         label: str | None,
         *,
         created_by: int | None,
-    ) -> None:
+    ) -> AccessMutationResult:
         self.added_users.append((user_id, label, created_by))
+        if any(entry.telegram_id == user_id for entry in self.users):
+            self.users = [
+                commands.AccessEntry("user", user_id, label, created_by)
+                if entry.telegram_id == user_id
+                else entry
+                for entry in self.users
+            ]
+            return AccessMutationResult.ALREADY_EXISTS
         self.users.append(commands.AccessEntry("user", user_id, label, created_by))
+        return AccessMutationResult.CREATED
 
-    async def remove_allowed_user(self, user_id: int) -> bool:
+    async def remove_allowed_user(self, user_id: int) -> AccessMutationResult:
         self.removed_users.append(user_id)
         before = len(self.users)
         self.users = [entry for entry in self.users if entry.telegram_id != user_id]
-        return len(self.users) != before
+        if len(self.users) == before:
+            return AccessMutationResult.NOT_FOUND
+        return AccessMutationResult.REMOVED
 
     async def add_allowed_group(
         self,
@@ -124,15 +136,26 @@ class FakeTelegramAccessService:
         label: str | None,
         *,
         created_by: int | None,
-    ) -> None:
+    ) -> AccessMutationResult:
         self.added_groups.append((chat_id, label, created_by))
+        if any(entry.telegram_id == chat_id for entry in self.groups):
+            self.groups = [
+                commands.AccessEntry("group", chat_id, label, created_by)
+                if entry.telegram_id == chat_id
+                else entry
+                for entry in self.groups
+            ]
+            return AccessMutationResult.ALREADY_EXISTS
         self.groups.append(commands.AccessEntry("group", chat_id, label, created_by))
+        return AccessMutationResult.CREATED
 
-    async def remove_allowed_group(self, chat_id: int) -> bool:
+    async def remove_allowed_group(self, chat_id: int) -> AccessMutationResult:
         self.removed_groups.append(chat_id)
         before = len(self.groups)
         self.groups = [entry for entry in self.groups if entry.telegram_id != chat_id]
-        return len(self.groups) != before
+        if len(self.groups) == before:
+            return AccessMutationResult.NOT_FOUND
+        return AccessMutationResult.REMOVED
 
 
 def callback_update(data: str, *, user_id: int = 100500) -> dict[str, object]:
@@ -234,7 +257,33 @@ async def test_add_user_state_supports_multiple_ids_space_separated(
         (291844566, None, 100500),
     ]
     assert redis.jobs == []
-    assert "Добавлены пользователи" in str(bot.sent_messages[-1]["text"])
+    assert "Добавлены:" in str(bot.sent_messages[-1]["text"])
+
+
+@pytest.mark.asyncio
+async def test_add_user_state_splits_created_and_existing_without_private_llm(
+    fsm_app: tuple[Any, FakeBot, FakeRedis],
+) -> None:
+    app, bot, redis = fsm_app
+    FakeTelegramAccessService.users = [
+        commands.AccessEntry(entry_type="user", telegram_id=123456789, label=None)
+    ]
+
+    await post_update(app, callback_update("settings:access:user:add"))
+    await post_update(app, private_update("5117224471 291844566 123456789"))
+
+    assert FakeTelegramAccessService.added_users == [
+        (5117224471, None, 100500),
+        (291844566, None, 100500),
+        (123456789, None, 100500),
+    ]
+    assert redis.jobs == []
+    answer_text = str(bot.sent_messages[-1]["text"])
+    assert "Добавлены:" in answer_text
+    assert "- 5117224471" in answer_text
+    assert "- 291844566" in answer_text
+    assert "Уже были:" in answer_text
+    assert "- 123456789" in answer_text
 
 
 @pytest.mark.asyncio
@@ -264,7 +313,30 @@ async def test_add_group_state_intercepts_text_before_private_llm(
 
     assert FakeTelegramAccessService.added_groups == [(-5437860232, "Домашний чат", 100500)]
     assert redis.jobs == []
-    assert "Готовлю ответ" not in "\n".join(str(item["text"]) for item in bot.sent_messages)
+    answer_text = "\n".join(str(item["text"]) for item in bot.sent_messages)
+    assert "Группа добавлена:" in answer_text
+    assert "уже была" not in answer_text
+    assert "Готовлю ответ" not in answer_text
+
+
+@pytest.mark.asyncio
+async def test_add_existing_group_state_reports_already_exists_without_private_llm(
+    fsm_app: tuple[Any, FakeBot, FakeRedis],
+) -> None:
+    app, bot, redis = fsm_app
+    FakeTelegramAccessService.groups = [
+        commands.AccessEntry(entry_type="group", telegram_id=-5437860232, label="Домашний чат")
+    ]
+
+    await post_update(app, callback_update("settings:access:group:add"))
+    await post_update(app, private_update("-5437860232 Домашний чат"))
+
+    assert FakeTelegramAccessService.added_groups == [(-5437860232, "Домашний чат", 100500)]
+    assert redis.jobs == []
+    answer_text = "\n".join(str(item["text"]) for item in bot.sent_messages)
+    assert "Группа уже есть в списке:" in answer_text
+    assert "- -5437860232 — Домашний чат" in answer_text
+    assert "Готовлю ответ" not in answer_text
 
 
 @pytest.mark.asyncio
