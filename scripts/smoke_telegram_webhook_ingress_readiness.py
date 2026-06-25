@@ -32,6 +32,7 @@ def run_readiness() -> TelegramWebhookIngressReadinessResult:
     routes_source = _read("app/api/routes_telegram.py")
     main_source = _read("app/main.py")
     webhook_script = _read("scripts/set_telegram_webhook.py")
+    webhook_setup_service = _read("app/services/telegram_webhook_setup.py")
     polling_readiness = _read("scripts/smoke_polling_readiness.py")
     polling_runner = _read("scripts/run_polling.py")
     ingress_tests = _read("tests/test_telegram_webhook_ingress.py")
@@ -79,7 +80,8 @@ def run_readiness() -> TelegramWebhookIngressReadinessResult:
     )
     result.statuses["webhook_setup_path"] = (
         "OK"
-        if 'return f"{public_base_url.rstrip(\'/\')}/telegram/webhook"' in webhook_script
+        if 'return f"{public_base_url.rstrip(\'/\')}/telegram/webhook"' in webhook_setup_service
+        and "set_webhook_from_values" in webhook_script
         and "/telegram/webhook" in railway_doc
         and "POST /telegram/webhook" in readme
         else "MISSING"
