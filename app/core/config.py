@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     streaming_max_draft_seconds: int = Field(default=25, ge=1, le=300)
     streaming_send_chat_action_interval_seconds: int = Field(default=4, ge=1, le=30)
     streaming_draft_raw_api_fallback: bool = True
+    startup_migrations_enabled: bool | None = None
 
     yandex_ai_base_url: str = ""
     yandex_ai_api_key: str = ""

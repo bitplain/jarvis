@@ -37,6 +37,7 @@ def run_readiness() -> RailwayReadinessResult:
     deploy_doc = _read("docs/RAILWAY_DEPLOY.md")
     api_config = _read("railway.api.toml")
     worker_config = _read("railway.worker.toml")
+    startup_migrations = _read("app/services/startup_migrations.py")
 
     required_env = [
         "APP_ENV=production",
@@ -82,6 +83,14 @@ def run_readiness() -> RailwayReadinessResult:
         if "alembic upgrade head && python -m uvicorn app.main:app" in api_config
         else "MISSING"
     )
+    result.statuses["api_startup_migration_guard"] = (
+        "OK"
+        if "startup_migrations_started" in startup_migrations
+        and "alembic" in startup_migrations
+        and "upgrade" in startup_migrations
+        and "head" in startup_migrations
+        else "MISSING"
+    )
     result.statuses["api_predeploy_migration"] = (
         "OK" if 'preDeployCommand = "alembic upgrade head"' in api_config else "MISSING"
     )
@@ -101,6 +110,8 @@ def run_readiness() -> RailwayReadinessResult:
         "provider_not_configured",
         'relation "messages" does not exist',
         "alembic upgrade head && python -m uvicorn app.main:app",
+        "Railway UI Start Command",
+        "startup migration guard",
     ]
     missing_doc_items = [item for item in required_doc_items if item not in deploy_doc]
     result.statuses["railway_doc_stage_4c"] = (

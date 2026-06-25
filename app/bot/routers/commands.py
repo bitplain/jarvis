@@ -1,6 +1,8 @@
+import logging
 from typing import Any, cast
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import func, select
@@ -34,6 +36,7 @@ PROVIDER_LABELS = {
 SETTINGS_UNAVAILABLE_MESSAGE = (
     "Настройки временно недоступны: миграция БД ещё не применена."
 )
+logger = logging.getLogger(__name__)
 
 
 def _command_argument(message: Message) -> str | None:
@@ -154,6 +157,47 @@ def _runtime_settings_service(session: object) -> RuntimeSettingsService:
     return RuntimeSettingsService(RuntimeSettingRepository(session))  # type: ignore[arg-type]
 
 
+def _is_message_not_modified(exc: TelegramBadRequest) -> bool:
+    return "message is not modified" in str(exc).lower()
+
+
+async def _safe_edit_settings_message(
+    message: object,
+    *,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None,
+) -> str:
+    if not hasattr(message, "edit_text"):
+        return "missing_message"
+    try:
+        await cast(Message, message).edit_text(text, reply_markup=reply_markup)
+    except TelegramBadRequest as exc:
+        if _is_message_not_modified(exc):
+            return "not_modified"
+        logger.warning(
+            "settings_message_edit_failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        return "telegram_error"
+    return "updated"
+
+
+async def _safe_delete_settings_message(message: object) -> str:
+    if not hasattr(message, "delete"):
+        return "missing_message"
+    try:
+        await cast(Message, message).delete()
+    except TelegramBadRequest as exc:
+        if _is_message_not_modified(exc):
+            return "not_modified"
+        logger.warning(
+            "settings_message_delete_failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        return "telegram_error"
+    return "deleted"
+
+
 async def cmd_settings(message: Message, **data: Any) -> None:
     settings = data["settings"]
     if not is_admin_user(_message_user_id(message), settings.admin_ids):
@@ -190,6 +234,14 @@ async def handle_settings_callback(callback: CallbackQuery, **data: Any) -> None
     if callback_data.startswith(SETTINGS_PROVIDER_PREFIX):
         provider_value = callback_data.removeprefix(SETTINGS_PROVIDER_PREFIX)
         try:
+            current_provider = await service.get_active_llm_provider()
+            provider = ActiveLLMProvider(provider_value)
+            if current_provider == provider:
+                await callback.answer(
+                    f"Уже выбрано: {PROVIDER_LABELS[provider]}",
+                    show_alert=False,
+                )
+                return
             provider = await service.set_active_llm_provider(
                 provider_value,
                 updated_by_telegram_id=user_id,
@@ -201,27 +253,42 @@ async def handle_settings_callback(callback: CallbackQuery, **data: Any) -> None
             await callback.answer(SETTINGS_UNAVAILABLE_MESSAGE, show_alert=True)
             return
         saved = True
-        await callback.answer("Настройки сохранены.", show_alert=False)
     elif callback_data == SETTINGS_CALLBACK_REFRESH:
         try:
             provider = await service.get_active_llm_provider()
         except RuntimeSettingsUnavailable:
             await callback.answer(SETTINGS_UNAVAILABLE_MESSAGE, show_alert=True)
             return
-        await callback.answer()
     elif callback_data == SETTINGS_CALLBACK_CLOSE:
-        if callback.message is not None and hasattr(callback.message, "delete"):
-            await cast(Message, callback.message).delete()
         await callback.answer()
+        if callback.message is not None:
+            delete_status = await _safe_delete_settings_message(callback.message)
+            if delete_status not in {"deleted", "not_modified"}:
+                await _safe_edit_settings_message(
+                    callback.message,
+                    text="Настройки закрыты.",
+                    reply_markup=None,
+                )
         return
     else:
         await callback.answer("Неизвестная команда настроек.", show_alert=True)
         return
     if callback.message is not None and hasattr(callback.message, "edit_text"):
-        await cast(Message, callback.message).edit_text(
-            render_settings_text(provider, saved=saved),
+        edit_status = await _safe_edit_settings_message(
+            callback.message,
+            text=render_settings_text(provider, saved=saved),
             reply_markup=build_settings_keyboard(),
         )
+        if edit_status == "not_modified":
+            await callback.answer("Настройки уже актуальны.", show_alert=False)
+            return
+        if edit_status == "telegram_error":
+            await callback.answer("Не удалось обновить сообщение настроек.", show_alert=True)
+            return
+    if saved:
+        await callback.answer("Настройки сохранены.", show_alert=False)
+    else:
+        await callback.answer()
 
 
 async def cmd_status(message: Message, **data: Any) -> None:

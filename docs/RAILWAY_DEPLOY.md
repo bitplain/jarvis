@@ -37,6 +37,8 @@ arq app.workers.arq_settings.WorkerSettings
 
 Важно: API command должен идти через `sh -c`, чтобы `${PORT:-8080}` был раскрыт shell runtime, а не передан в uvicorn буквальной строкой. `alembic upgrade head` выполняется автоматически перед стартом webhook runtime, поэтому новая таблица должна появляться без ручного запуска миграции.
 
+Railway UI Start Command может переопределить `railway.api.toml`. Поэтому Stage 4E добавляет code-level startup migration guard в API startup path: даже если UI запустит только `uvicorn app.main:app`, API при `APP_ENV=production` сначала выполнит Alembic и только потом начнёт принимать webhook requests.
+
 ## Pre-deploy migrations
 
 API service запускает Alembic до старта новой версии:
