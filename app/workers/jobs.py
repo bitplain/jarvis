@@ -12,10 +12,12 @@ from app.bot.streaming.text_limits import split_telegram_text
 from app.core.config import get_settings
 from app.db.models import MessageRole
 from app.db.repositories.messages import MessageRepository
+from app.db.repositories.runtime_settings import RuntimeSettingRepository
 from app.db.session import SessionLocal
 from app.llm.base import LLMProviderError
 from app.llm.factory import build_llm_provider
 from app.services.memory_service import MemoryService
+from app.services.runtime_settings_service import RuntimeSettingsService
 
 logger = logging.getLogger(__name__)
 USER_ERROR_MESSAGE = "Не получилось подготовить ответ. Попробуйте позже."
@@ -236,7 +238,10 @@ async def process_llm_message(ctx: dict[str, Any], payload: dict[str, Any]) -> N
             max_messages=settings.memory_max_messages,
         )
         messages = await memory.build_context(chat_id=chat_id)
-        provider = build_llm_provider(settings)
+        active_provider = await RuntimeSettingsService(
+            RuntimeSettingRepository(session)
+        ).get_active_llm_provider()
+        provider = build_llm_provider(settings, active_provider=active_provider)
         final_text = ""
         sent_final = False
         try:

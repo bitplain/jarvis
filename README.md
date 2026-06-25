@@ -143,6 +143,30 @@ Business-переменные optional и нужны только для Telegra
 - `POST /telegram/webhook` — вход Telegram updates.
 - `GET /admin/models` — диагностика моделей Yandex/OpenRouter, требует Bearer token из `ADMIN_API_TOKEN`.
 
+## Настройки LLM-провайдера
+
+Stage 4D добавляет admin-only Telegram UI для выбора активного LLM-агента без изменения `.env` и без ручного изменения Railway Variables.
+
+Открыть настройки можно командой `/settings` или кнопкой `Настройки` после `/start`.
+
+Варианты:
+
+- `Auto` — использует текущую env-логику `LLM_PRIMARY_PROVIDER` и `LLM_FALLBACK_PROVIDER`.
+- `Yandex` — принудительно выбирает Yandex provider для следующих worker jobs.
+- `OpenRouter` — принудительно выбирает OpenRouter provider для следующих worker jobs.
+
+Выбор хранится в PostgreSQL runtime setting `active_llm_provider` в таблице `runtime_settings`. Если записи нет, Jarvis ведёт себя как `auto`.
+
+Railway Variables всё равно нужны: ключи и model ids `YANDEX_*` и `OPENROUTER_*` остаются только в `jarvis-worker` variables и не отображаются в Telegram UI, логах или документации.
+
+Readiness без секретов:
+
+```bash
+uv run --python 3.12 --extra dev python scripts/smoke_provider_settings_readiness.py
+```
+
+Ожидаемый verdict: `PASS_PROVIDER_SETTINGS_READINESS`.
+
 ## Guest Mode
 
 Stage 2 реализует Telegram Guest Mode через update type `guest_message`.

@@ -128,6 +128,19 @@ class ProviderModelCache(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class RuntimeSetting(Base):
+    __tablename__ = "runtime_settings"
+
+    key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    value: Mapped[str] = mapped_column(String(255))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        onupdate=utcnow,
+    )
+    updated_by_telegram_id: Mapped[int | None] = mapped_column(BigInteger)
+
+
 class BusinessConnectionStub(Base):
     __tablename__ = "business_connections_stub"
 

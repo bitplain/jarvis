@@ -2,6 +2,7 @@ import pytest
 
 from app.core.config import Settings
 from app.llm.types import LLMMessage, LLMResponse, LLMStreamChunk
+from app.services.runtime_settings_service import ActiveLLMProvider
 from app.workers import jobs
 from app.workers.jobs import process_llm_message, try_send_chat_action
 
@@ -101,6 +102,14 @@ class FakeSessionLocal:
         return FakeSessionContext()
 
 
+class FakeRuntimeSettingsService:
+    def __init__(self, repository: object) -> None:
+        del repository
+
+    async def get_active_llm_provider(self) -> ActiveLLMProvider:
+        return ActiveLLMProvider.AUTO
+
+
 @pytest.mark.asyncio
 async def test_worker_group_job_uses_send_message_without_private_streaming(
     monkeypatch: pytest.MonkeyPatch,
@@ -120,8 +129,14 @@ async def test_worker_group_job_uses_send_message_without_private_streaming(
     )
     monkeypatch.setattr(jobs, "SessionLocal", FakeSessionLocal())
     monkeypatch.setattr(jobs, "MessageRepository", lambda session: object())
+    monkeypatch.setattr(jobs, "RuntimeSettingRepository", lambda session: object())
+    monkeypatch.setattr(jobs, "RuntimeSettingsService", FakeRuntimeSettingsService)
     monkeypatch.setattr(jobs, "MemoryService", FakeMemoryService)
-    monkeypatch.setattr(jobs, "build_llm_provider", lambda settings: provider)
+    monkeypatch.setattr(
+        jobs,
+        "build_llm_provider",
+        lambda settings, *, active_provider: provider,
+    )
 
     await process_llm_message(
         {},
@@ -137,3 +152,50 @@ async def test_worker_group_job_uses_send_message_without_private_streaming(
     assert memory.added[0]["user_id"] is None
     assert memory.added[0]["text"] == "group answer"
     assert bot.closed is True
+
+
+@pytest.mark.asyncio
+async def test_worker_reads_active_llm_provider_setting_for_each_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = FakeProvider()
+    selected_providers: list[ActiveLLMProvider] = []
+    FakeBot.instances = []
+    FakeMemoryService.instances = []
+
+    class FakeRuntimeSettingsService:
+        def __init__(self, repository: object) -> None:
+            del repository
+
+        async def get_active_llm_provider(self) -> ActiveLLMProvider:
+            return ActiveLLMProvider.OPENROUTER
+
+    monkeypatch.setattr(jobs, "Bot", FakeBot)
+    monkeypatch.setattr(
+        jobs,
+        "get_settings",
+        lambda: Settings(
+            telegram_bot_token="123456:secret-token",
+            memory_max_messages=5,
+            streaming_group_fallback_enabled=False,
+        ),
+    )
+    monkeypatch.setattr(jobs, "SessionLocal", FakeSessionLocal())
+    monkeypatch.setattr(jobs, "MessageRepository", lambda session: object())
+    monkeypatch.setattr(jobs, "RuntimeSettingRepository", lambda session: object())
+    monkeypatch.setattr(jobs, "RuntimeSettingsService", FakeRuntimeSettingsService)
+    monkeypatch.setattr(jobs, "MemoryService", FakeMemoryService)
+
+    def build_provider(settings: Settings, *, active_provider: ActiveLLMProvider) -> FakeProvider:
+        del settings
+        selected_providers.append(active_provider)
+        return provider
+
+    monkeypatch.setattr(jobs, "build_llm_provider", build_provider)
+
+    await process_llm_message(
+        {},
+        {"chat_id": -100123, "user_id": 456, "private": False},
+    )
+
+    assert selected_providers == [ActiveLLMProvider.OPENROUTER]
