@@ -27,6 +27,7 @@ from app.services.runtime_settings_service import (
 )
 from app.services.telegram_access_service import (
     AccessEntry,
+    AccessMutationResult,
     TelegramAccessService,
     TelegramAccessUnavailable,
 )
@@ -399,6 +400,12 @@ def _render_id_lines(ids: list[int]) -> str:
     return "\n".join(f"- {telegram_id}" for telegram_id in ids)
 
 
+def _render_access_input_lines(parsed: AccessInput, ids: list[int]) -> str:
+    if len(parsed.telegram_ids) == 1 and parsed.label is not None:
+        return "\n".join(f"- {telegram_id} — {parsed.label}" for telegram_id in ids)
+    return _render_id_lines(ids)
+
+
 def _invalid_access_input_message(kind: str) -> str:
     return (
         f"Не понял ID. Отправьте Telegram {kind} ID числом.\n"
@@ -417,6 +424,8 @@ def _render_remove_result(
     *,
     singular_removed: str,
     plural_removed: str,
+    singular_missing: str,
+    plural_missing: str,
     removed_ids: list[int],
     missing_ids: list[int],
     screen_title: str,
@@ -431,10 +440,39 @@ def _render_remove_result(
             lines.append(plural_removed)
             lines.append(_render_id_lines(removed_ids))
     if missing_ids:
-        lines.append("Запись не найдена:")
+        lines.append(singular_missing if len(missing_ids) == 1 else plural_missing)
         lines.append(_render_id_lines(missing_ids))
     if not lines:
-        lines.append("Запись не найдена.")
+        lines.append(singular_missing)
+    lines.extend(["", render_access_entries_text(screen_title, entries)])
+    return "\n".join(lines)
+
+
+def _render_add_result(
+    *,
+    singular_created: str,
+    singular_existing: str,
+    created_ids: list[int],
+    existing_ids: list[int],
+    parsed: AccessInput,
+    screen_title: str,
+    entries: list[AccessEntry],
+) -> str:
+    lines: list[str] = []
+    if len(parsed.telegram_ids) == 1:
+        if created_ids:
+            lines.append(singular_created)
+            lines.append(_render_access_input_lines(parsed, created_ids))
+        else:
+            lines.append(singular_existing)
+            lines.append(_render_access_input_lines(parsed, existing_ids))
+    else:
+        if created_ids:
+            lines.append("Добавлены:")
+            lines.append(_render_access_input_lines(parsed, created_ids))
+        if existing_ids:
+            lines.append("Уже были:")
+            lines.append(_render_access_input_lines(parsed, existing_ids))
     lines.extend(["", render_access_entries_text(screen_title, entries)])
     return "\n".join(lines)
 
@@ -797,18 +835,32 @@ async def handle_access_input_message(
     try:
         if current_state == TelegramAccessInput.add_user.state:
             _validate_positive_ids(parsed.telegram_ids)
+            created_ids: list[int] = []
+            existing_ids: list[int] = []
             for telegram_id in parsed.telegram_ids:
                 label = parsed.label if len(parsed.telegram_ids) == 1 else None
-                await service.add_allowed_user(telegram_id, label, created_by=user_id)
+                mutation_result = await service.add_allowed_user(
+                    telegram_id,
+                    label,
+                    created_by=user_id,
+                )
+                if mutation_result is AccessMutationResult.CREATED:
+                    created_ids.append(telegram_id)
+                else:
+                    existing_ids.append(telegram_id)
             logger.info("telegram_access_user_added")
             await state.clear()
             users = await service.list_allowed_users()
-            if len(parsed.telegram_ids) == 1:
-                prefix = f"Пользователь добавлен/уже был:\n{_render_id_lines(parsed.telegram_ids)}"
-            else:
-                prefix = f"Добавлены пользователи:\n{_render_id_lines(parsed.telegram_ids)}"
             await message.answer(
-                f"{prefix}\n\n{render_access_entries_text('Разрешённые пользователи', users)}",
+                _render_add_result(
+                    singular_created="Пользователь добавлен:",
+                    singular_existing="Пользователь уже есть в списке:",
+                    created_ids=created_ids,
+                    existing_ids=existing_ids,
+                    parsed=parsed,
+                    screen_title="Разрешённые пользователи",
+                    entries=users,
+                ),
                 reply_markup=build_access_users_keyboard(),
             )
             return
@@ -818,7 +870,7 @@ async def handle_access_input_message(
             missing_ids: list[int] = []
             for telegram_id in parsed.telegram_ids:
                 removed = await service.remove_allowed_user(telegram_id)
-                if removed:
+                if removed is AccessMutationResult.REMOVED:
                     removed_ids.append(telegram_id)
                 else:
                     missing_ids.append(telegram_id)
@@ -827,8 +879,10 @@ async def handle_access_input_message(
             users = await service.list_allowed_users()
             await message.answer(
                 _render_remove_result(
-                    singular_removed="Пользователь удалён.",
+                    singular_removed="Пользователь удалён:",
                     plural_removed="Удалены пользователи:",
+                    singular_missing="Пользователь не найден:",
+                    plural_missing="Пользователи не найдены:",
                     removed_ids=removed_ids,
                     missing_ids=missing_ids,
                     screen_title="Разрешённые пользователи",
@@ -838,18 +892,32 @@ async def handle_access_input_message(
             )
             return
         if current_state == TelegramAccessInput.add_group.state:
+            created_ids = []
+            existing_ids = []
             for telegram_id in parsed.telegram_ids:
                 label = parsed.label if len(parsed.telegram_ids) == 1 else None
-                await service.add_allowed_group(telegram_id, label, created_by=user_id)
+                mutation_result = await service.add_allowed_group(
+                    telegram_id,
+                    label,
+                    created_by=user_id,
+                )
+                if mutation_result is AccessMutationResult.CREATED:
+                    created_ids.append(telegram_id)
+                else:
+                    existing_ids.append(telegram_id)
             logger.info("telegram_access_group_added")
             await state.clear()
             groups = await service.list_allowed_groups()
-            if len(parsed.telegram_ids) == 1:
-                prefix = f"Группа добавлена/уже была:\n{_render_id_lines(parsed.telegram_ids)}"
-            else:
-                prefix = f"Добавлены группы:\n{_render_id_lines(parsed.telegram_ids)}"
             await message.answer(
-                f"{prefix}\n\n{render_access_entries_text('Разрешённые группы', groups)}",
+                _render_add_result(
+                    singular_created="Группа добавлена:",
+                    singular_existing="Группа уже есть в списке:",
+                    created_ids=created_ids,
+                    existing_ids=existing_ids,
+                    parsed=parsed,
+                    screen_title="Разрешённые группы",
+                    entries=groups,
+                ),
                 reply_markup=build_access_groups_keyboard(),
             )
             return
@@ -858,7 +926,7 @@ async def handle_access_input_message(
             missing_ids = []
             for telegram_id in parsed.telegram_ids:
                 removed = await service.remove_allowed_group(telegram_id)
-                if removed:
+                if removed is AccessMutationResult.REMOVED:
                     removed_ids.append(telegram_id)
                 else:
                     missing_ids.append(telegram_id)
@@ -867,8 +935,10 @@ async def handle_access_input_message(
             groups = await service.list_allowed_groups()
             await message.answer(
                 _render_remove_result(
-                    singular_removed="Группа удалена.",
+                    singular_removed="Группа удалена:",
                     plural_removed="Удалены группы:",
+                    singular_missing="Группа не найдена:",
+                    plural_missing="Группы не найдены:",
                     removed_ids=removed_ids,
                     missing_ids=missing_ids,
                     screen_title="Разрешённые группы",

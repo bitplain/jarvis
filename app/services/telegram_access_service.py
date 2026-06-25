@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from enum import Enum
 from typing import Protocol
 
 from app.db.models import TelegramAccessEntryType
@@ -6,6 +7,13 @@ from app.db.models import TelegramAccessEntryType
 
 class TelegramAccessUnavailable(Exception):
     pass
+
+
+class AccessMutationResult(Enum):
+    CREATED = "created"
+    ALREADY_EXISTS = "already_exists"
+    REMOVED = "removed"
+    NOT_FOUND = "not_found"
 
 
 @dataclass(frozen=True)
@@ -30,10 +38,10 @@ class TelegramAccessRepositoryProtocol(Protocol):
         telegram_id: int,
         label: str | None,
         created_by: int | None,
-    ) -> None:
+    ) -> AccessMutationResult:
         raise NotImplementedError
 
-    async def delete_entry(self, entry_type: str, telegram_id: int) -> bool:
+    async def delete_entry(self, entry_type: str, telegram_id: int) -> AccessMutationResult:
         raise NotImplementedError
 
 
@@ -76,16 +84,16 @@ class TelegramAccessService:
         label: str | None,
         *,
         created_by: int | None,
-    ) -> None:
+    ) -> AccessMutationResult:
         _validate_user_id(user_id)
-        await self.repository.upsert_entry(
+        return await self.repository.upsert_entry(
             entry_type=TelegramAccessEntryType.USER.value,
             telegram_id=user_id,
             label=_normalize_label(label),
             created_by=created_by,
         )
 
-    async def remove_allowed_user(self, user_id: int) -> bool:
+    async def remove_allowed_user(self, user_id: int) -> AccessMutationResult:
         _validate_user_id(user_id)
         return await self.repository.delete_entry(TelegramAccessEntryType.USER.value, user_id)
 
@@ -95,15 +103,15 @@ class TelegramAccessService:
         label: str | None,
         *,
         created_by: int | None,
-    ) -> None:
-        await self.repository.upsert_entry(
+    ) -> AccessMutationResult:
+        return await self.repository.upsert_entry(
             entry_type=TelegramAccessEntryType.GROUP.value,
             telegram_id=chat_id,
             label=_normalize_label(label),
             created_by=created_by,
         )
 
-    async def remove_allowed_group(self, chat_id: int) -> bool:
+    async def remove_allowed_group(self, chat_id: int) -> AccessMutationResult:
         return await self.repository.delete_entry(TelegramAccessEntryType.GROUP.value, chat_id)
 
 

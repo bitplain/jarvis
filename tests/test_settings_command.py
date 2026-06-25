@@ -7,6 +7,7 @@ from aiogram.methods import DeleteMessage, EditMessageText
 from app.bot.routers import commands
 from app.core.config import Settings
 from app.services.runtime_settings_service import ActiveLLMProvider, RuntimeSettingsUnavailable
+from app.services.telegram_access_service import AccessMutationResult
 
 
 class FakeUser:
@@ -132,12 +133,32 @@ class FakeTelegramAccessService:
         label: str | None,
         *,
         created_by: int | None,
-    ) -> None:
+    ) -> AccessMutationResult:
         self.__class__.added_users.append((user_id, label, created_by))
+        existing = next(
+            (entry for entry in self.__class__.users if entry.telegram_id == user_id),
+            None,
+        )
+        if existing is not None:
+            self.__class__.users = [
+                commands.AccessEntry("user", user_id, label, created_by)
+                if entry.telegram_id == user_id
+                else entry
+                for entry in self.__class__.users
+            ]
+            return AccessMutationResult.ALREADY_EXISTS
+        self.__class__.users.append(commands.AccessEntry("user", user_id, label, created_by))
+        return AccessMutationResult.CREATED
 
-    async def remove_allowed_user(self, user_id: int) -> bool:
+    async def remove_allowed_user(self, user_id: int) -> AccessMutationResult:
         self.__class__.removed_users.append(user_id)
-        return user_id != 404
+        before = len(self.__class__.users)
+        self.__class__.users = [
+            entry for entry in self.__class__.users if entry.telegram_id != user_id
+        ]
+        if len(self.__class__.users) == before:
+            return AccessMutationResult.NOT_FOUND
+        return AccessMutationResult.REMOVED
 
     async def add_allowed_group(
         self,
@@ -145,13 +166,32 @@ class FakeTelegramAccessService:
         label: str | None,
         *,
         created_by: int | None,
-    ) -> None:
+    ) -> AccessMutationResult:
         self.__class__.added_groups.append((chat_id, label, created_by))
+        existing = next(
+            (entry for entry in self.__class__.groups if entry.telegram_id == chat_id),
+            None,
+        )
+        if existing is not None:
+            self.__class__.groups = [
+                commands.AccessEntry("group", chat_id, label, created_by)
+                if entry.telegram_id == chat_id
+                else entry
+                for entry in self.__class__.groups
+            ]
+            return AccessMutationResult.ALREADY_EXISTS
+        self.__class__.groups.append(commands.AccessEntry("group", chat_id, label, created_by))
+        return AccessMutationResult.CREATED
 
-    async def remove_allowed_group(self, chat_id: int) -> bool:
+    async def remove_allowed_group(self, chat_id: int) -> AccessMutationResult:
         self.__class__.removed_groups.append(chat_id)
-        return chat_id != -404
-
+        before = len(self.__class__.groups)
+        self.__class__.groups = [
+            entry for entry in self.__class__.groups if entry.telegram_id != chat_id
+        ]
+        if len(self.__class__.groups) == before:
+            return AccessMutationResult.NOT_FOUND
+        return AccessMutationResult.REMOVED
 
 class FakeState:
     def __init__(self, state: str | None = None) -> None:
@@ -357,7 +397,50 @@ async def test_add_user_fsm_works() -> None:
 
     assert FakeTelegramAccessService.added_users == [(59144850, "Александр", 100500)]
     assert state.cleared is True
-    assert "Пользователь добавлен" in message.answers[0]["text"]
+    assert "Пользователь добавлен:" in message.answers[0]["text"]
+    assert "уже" not in message.answers[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_add_existing_user_fsm_reports_already_exists() -> None:
+    FakeTelegramAccessService.users = [
+        commands.AccessEntry(entry_type="user", telegram_id=59144850, label="Александр")
+    ]
+    state = FakeState(commands.TelegramAccessInput.add_user.state)
+    message = FakeMessage("59144850 Александр", user_id=100500)
+
+    await commands.handle_access_input_message(
+        message,  # type: ignore[arg-type]
+        state=state,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    assert "Пользователь уже есть в списке:" in message.answers[0]["text"]
+    assert "- 59144850 — Александр" in message.answers[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_add_multiple_users_splits_created_and_existing() -> None:
+    FakeTelegramAccessService.users = [
+        commands.AccessEntry(entry_type="user", telegram_id=123456789, label=None)
+    ]
+    state = FakeState(commands.TelegramAccessInput.add_user.state)
+    message = FakeMessage("5117224471 291844566 123456789", user_id=100500)
+
+    await commands.handle_access_input_message(
+        message,  # type: ignore[arg-type]
+        state=state,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    text = message.answers[0]["text"]
+    assert "Добавлены:" in text
+    assert "- 5117224471" in text
+    assert "- 291844566" in text
+    assert "Уже были:" in text
+    assert "- 123456789" in text
 
 
 @pytest.mark.asyncio
@@ -373,7 +456,25 @@ async def test_remove_user_fsm_works() -> None:
     )
 
     assert FakeTelegramAccessService.removed_users == [59144850]
-    assert "Пользователь удалён" in message.answers[0]["text"]
+    assert "Пользователь не найден:" in message.answers[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_remove_existing_user_fsm_reports_removed() -> None:
+    FakeTelegramAccessService.users = [
+        commands.AccessEntry(entry_type="user", telegram_id=59144850, label="Александр")
+    ]
+    state = FakeState(commands.TelegramAccessInput.remove_user.state)
+    message = FakeMessage("59144850", user_id=100500)
+
+    await commands.handle_access_input_message(
+        message,  # type: ignore[arg-type]
+        state=state,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    assert "Пользователь удалён:" in message.answers[0]["text"]
 
 
 @pytest.mark.asyncio
@@ -389,7 +490,29 @@ async def test_add_group_fsm_works() -> None:
     )
 
     assert FakeTelegramAccessService.added_groups == [(-5437860232, "Домашний чат", 100500)]
-    assert "Группа добавлена" in message.answers[0]["text"]
+    assert "Группа добавлена:" in message.answers[0]["text"]
+    assert "- -5437860232 — Домашний чат" in message.answers[0]["text"]
+    assert "уже была" not in message.answers[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_add_existing_group_fsm_reports_already_exists() -> None:
+    FakeTelegramAccessService.groups = [
+        commands.AccessEntry(entry_type="group", telegram_id=-5437860232, label="Домашний чат")
+    ]
+    state = FakeState(commands.TelegramAccessInput.add_group.state)
+    message = FakeMessage("-5437860232 Домашний чат", user_id=100500)
+
+    await commands.handle_access_input_message(
+        message,  # type: ignore[arg-type]
+        state=state,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    text = message.answers[0]["text"]
+    assert "Группа уже есть в списке:" in text
+    assert "- -5437860232 — Домашний чат" in text
 
 
 @pytest.mark.asyncio
@@ -405,7 +528,25 @@ async def test_remove_group_fsm_works() -> None:
     )
 
     assert FakeTelegramAccessService.removed_groups == [-5437860232]
-    assert "Группа удалена" in message.answers[0]["text"]
+    assert "Группа не найдена:" in message.answers[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_remove_existing_group_fsm_reports_removed() -> None:
+    FakeTelegramAccessService.groups = [
+        commands.AccessEntry(entry_type="group", telegram_id=-5437860232, label="Домашний чат")
+    ]
+    state = FakeState(commands.TelegramAccessInput.remove_group.state)
+    message = FakeMessage("-5437860232", user_id=100500)
+
+    await commands.handle_access_input_message(
+        message,  # type: ignore[arg-type]
+        state=state,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    assert "Группа удалена:" in message.answers[0]["text"]
 
 
 @pytest.mark.asyncio

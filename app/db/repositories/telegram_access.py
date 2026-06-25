@@ -1,11 +1,15 @@
-from sqlalchemy import delete
+from sqlalchemy import delete, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import select
 
 from app.db.models import TelegramAccessEntry, utcnow
-from app.services.telegram_access_service import AccessEntry, TelegramAccessUnavailable
+from app.services.telegram_access_service import (
+    AccessEntry,
+    AccessMutationResult,
+    TelegramAccessUnavailable,
+)
 
 
 def _is_missing_access_table(exc: ProgrammingError) -> bool:
@@ -58,9 +62,9 @@ class TelegramAccessRepository:
         telegram_id: int,
         label: str | None,
         created_by: int | None,
-    ) -> None:
+    ) -> AccessMutationResult:
         now = utcnow()
-        statement = (
+        insert_statement = (
             insert(TelegramAccessEntry)
             .values(
                 entry_type=entry_type,
@@ -75,23 +79,33 @@ class TelegramAccessRepository:
                     TelegramAccessEntry.entry_type,
                     TelegramAccessEntry.telegram_id,
                 ],
-                set_={
-                    "label": label,
-                    "created_by": created_by,
-                    "updated_at": now,
-                },
             )
+            .returning(TelegramAccessEntry.telegram_id)
+        )
+        update_statement = (
+            update(TelegramAccessEntry)
+            .where(
+                TelegramAccessEntry.entry_type == entry_type,
+                TelegramAccessEntry.telegram_id == telegram_id,
+            )
+            .values(label=label, created_by=created_by, updated_at=now)
         )
         try:
-            await self.session.execute(statement)
+            result = await self.session.execute(insert_statement)
+            inserted_id = result.scalar_one_or_none()
+            if inserted_id is not None:
+                await self.session.commit()
+                return AccessMutationResult.CREATED
+            await self.session.execute(update_statement)
             await self.session.commit()
+            return AccessMutationResult.ALREADY_EXISTS
         except ProgrammingError as exc:
             await self.session.rollback()
             if _is_missing_access_table(exc):
                 raise TelegramAccessUnavailable("telegram_access_entries_unavailable") from exc
             raise
 
-    async def delete_entry(self, entry_type: str, telegram_id: int) -> bool:
+    async def delete_entry(self, entry_type: str, telegram_id: int) -> AccessMutationResult:
         existing = await self.get_entry(entry_type, telegram_id)
         statement = delete(TelegramAccessEntry).where(
             TelegramAccessEntry.entry_type == entry_type,
@@ -105,7 +119,9 @@ class TelegramAccessRepository:
             if _is_missing_access_table(exc):
                 raise TelegramAccessUnavailable("telegram_access_entries_unavailable") from exc
             raise
-        return existing is not None
+        if existing is None:
+            return AccessMutationResult.NOT_FOUND
+        return AccessMutationResult.REMOVED
 
 
 def _to_access_entry(entry: TelegramAccessEntry) -> AccessEntry:
