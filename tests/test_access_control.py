@@ -3,6 +3,7 @@ from typing import Any
 import pytest
 from aiogram.types import Message
 
+from app.bot.middlewares import access
 from app.bot.middlewares.access import AdminAccessMiddleware, is_admin_user
 
 
@@ -101,3 +102,117 @@ async def test_group_unauthorized_mention_is_silent(monkeypatch: pytest.MonkeyPa
 
     assert answers == []
     assert handler_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_private_db_allowed_user_reaches_handler(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeAccessService:
+        def __init__(self, repository: object, *, admin_ids: set[int]) -> None:
+            del repository, admin_ids
+
+        def is_admin_user(self, user_id: int | None) -> bool:
+            return user_id == 1
+
+        async def is_allowed_user(self, user_id: int | None) -> bool:
+            return user_id == 99
+
+    monkeypatch.setattr(access, "TelegramAccessRepository", lambda session: object())
+    monkeypatch.setattr(access, "TelegramAccessService", FakeAccessService)
+
+    middleware = AdminAccessMiddleware({1})
+    message = build_message(user_id=99, chat_id=99, chat_type="private")
+    handler_calls = 0
+
+    async def handler(event: object, data: dict[str, Any]) -> None:
+        del event, data
+        nonlocal handler_calls
+        handler_calls += 1
+
+    await middleware(handler, message, {"db_session": object()})  # type: ignore[arg-type]
+
+    assert handler_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_group_allowed_user_in_allowed_group_reaches_handler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeAccessService:
+        def __init__(self, repository: object, *, admin_ids: set[int]) -> None:
+            del repository, admin_ids
+
+        def is_admin_user(self, user_id: int | None) -> bool:
+            return user_id == 1
+
+        async def is_allowed_user(self, user_id: int | None) -> bool:
+            return user_id == 99
+
+        async def is_allowed_group(self, chat_id: int) -> bool:
+            return chat_id == -100
+
+    monkeypatch.setattr(access, "TelegramAccessRepository", lambda session: object())
+    monkeypatch.setattr(access, "TelegramAccessService", FakeAccessService)
+
+    middleware = AdminAccessMiddleware({1})
+    message = build_message(user_id=99, chat_id=-100, chat_type="supergroup")
+    handler_calls = 0
+
+    async def handler(event: object, data: dict[str, Any]) -> None:
+        del event, data
+        nonlocal handler_calls
+        handler_calls += 1
+
+    await middleware(handler, message, {"db_session": object()})  # type: ignore[arg-type]
+
+    assert handler_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_group_allowed_user_outside_allowed_group_is_silent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeAccessService:
+        def __init__(self, repository: object, *, admin_ids: set[int]) -> None:
+            del repository, admin_ids
+
+        def is_admin_user(self, user_id: int | None) -> bool:
+            return user_id == 1
+
+        async def is_allowed_user(self, user_id: int | None) -> bool:
+            return user_id == 99
+
+        async def is_allowed_group(self, chat_id: int) -> bool:
+            del chat_id
+            return False
+
+    monkeypatch.setattr(access, "TelegramAccessRepository", lambda session: object())
+    monkeypatch.setattr(access, "TelegramAccessService", FakeAccessService)
+
+    middleware = AdminAccessMiddleware({1})
+    message = build_message(user_id=99, chat_id=-200, chat_type="group")
+    handler_calls = 0
+
+    async def handler(event: object, data: dict[str, Any]) -> None:
+        del event, data
+        nonlocal handler_calls
+        handler_calls += 1
+
+    await middleware(handler, message, {"db_session": object()})  # type: ignore[arg-type]
+
+    assert handler_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_whoami_bypasses_access_middleware_for_id_discovery() -> None:
+    middleware = AdminAccessMiddleware({1})
+    message = build_message(user_id=99, chat_id=99, chat_type="private", text="/whoami")
+    handler_calls = 0
+
+    async def handler(event: object, data: dict[str, Any]) -> None:
+        del event, data
+        nonlocal handler_calls
+        handler_calls += 1
+
+    await middleware(handler, message, {})  # type: ignore[arg-type]
+
+    assert handler_calls == 1

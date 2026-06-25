@@ -134,6 +134,19 @@
 - Settings callbacks должны быть идемпотентными: `settings:refresh`, повторный `settings:provider:*`, `settings:close` и Telegram `message is not modified` не должны давать HTTP 500.
 - Другие `TelegramBadRequest` в settings callbacks нельзя считать успехом молча: нужен sanitized log и безопасный callback answer.
 
+## Stage 4F-1 Access Settings
+
+- Telegram allowlist хранится в PostgreSQL таблице `telegram_access_entries`, а не в `.env`.
+- `ADMIN_TELEGRAM_IDS` остаются главными env admin, всегда имеют доступ и не переносятся в таблицу автоматически.
+- DB allowed user получает доступ к Jarvis, но не становится admin и не может управлять `/settings`.
+- `/settings -> Доступ` и callback `settings:access:*` доступны только admin user из `ADMIN_TELEGRAM_IDS`.
+- `/whoami` доступен всем и показывает только Telegram user ID, chat ID и тип чата текущего сообщения.
+- Если список разрешённых групп пустой, authorized user mention/reply в любой группе работает как раньше.
+- После добавления хотя бы одной разрешённой группы group response требует allowed user и allowed group.
+- Unknown private user получает `Доступ запрещён.`, unknown group/supergroup user молча игнорируется.
+- В логах использовать sanitized события `telegram_access_user_added`, `telegram_access_user_removed`, `telegram_access_group_added`, `telegram_access_group_removed`, `telegram_access_denied_private`, `telegram_access_denied_group_silent`.
+- Prompt Profiles, Shopping List, Reminders, Memory и Smart Watcher в Stage 4F-1 не реализуются.
+
 ## Проверки
 
 Перед финальным отчётом выполнять:
@@ -157,6 +170,7 @@ uv run --python 3.12 --extra dev python scripts/smoke_regular_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_group_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_streaming_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_provider_settings_readiness.py
+uv run --python 3.12 --extra dev python scripts/smoke_access_settings_readiness.py
 git status --short
 ```
 

@@ -16,6 +16,7 @@ class FakeUser:
 
 class FakeChat:
     id = 123
+    type = "private"
 
 
 class FakeMessage:
@@ -102,12 +103,93 @@ class FakeRuntimeSettingsService:
         return self.__class__.provider
 
 
+class FakeTelegramAccessService:
+    instances: list["FakeTelegramAccessService"] = []
+    users: list[Any] = []
+    groups: list[Any] = []
+    added_users: list[tuple[int, str | None, int | None]] = []
+    removed_users: list[int] = []
+    added_groups: list[tuple[int, str | None, int | None]] = []
+    removed_groups: list[int] = []
+
+    def __init__(self, repository: object, *, admin_ids: set[int]) -> None:
+        del repository
+        self.admin_ids = admin_ids
+        self.__class__.instances.append(self)
+
+    def is_admin_user(self, user_id: int | None) -> bool:
+        return user_id is not None and user_id in self.admin_ids
+
+    async def list_allowed_users(self) -> list[Any]:
+        return self.__class__.users
+
+    async def list_allowed_groups(self) -> list[Any]:
+        return self.__class__.groups
+
+    async def add_allowed_user(
+        self,
+        user_id: int,
+        label: str | None,
+        *,
+        created_by: int | None,
+    ) -> None:
+        self.__class__.added_users.append((user_id, label, created_by))
+
+    async def remove_allowed_user(self, user_id: int) -> bool:
+        self.__class__.removed_users.append(user_id)
+        return user_id != 404
+
+    async def add_allowed_group(
+        self,
+        chat_id: int,
+        label: str | None,
+        *,
+        created_by: int | None,
+    ) -> None:
+        self.__class__.added_groups.append((chat_id, label, created_by))
+
+    async def remove_allowed_group(self, chat_id: int) -> bool:
+        self.__class__.removed_groups.append(chat_id)
+        return chat_id != -404
+
+
+class FakeState:
+    def __init__(self, state: str | None = None) -> None:
+        self.current_state = state
+        self.data: dict[str, Any] = {}
+        self.cleared = False
+
+    async def set_state(self, state: Any) -> None:
+        self.current_state = state.state
+
+    async def get_state(self) -> str | None:
+        return self.current_state
+
+    async def update_data(self, **kwargs: Any) -> None:
+        self.data.update(kwargs)
+
+    async def get_data(self) -> dict[str, Any]:
+        return self.data
+
+    async def clear(self) -> None:
+        self.current_state = None
+        self.cleared = True
+
 @pytest.fixture(autouse=True)
 def patch_settings_service(monkeypatch: pytest.MonkeyPatch) -> None:
     FakeRuntimeSettingsService.instances = []
     FakeRuntimeSettingsService.provider = ActiveLLMProvider.AUTO
+    FakeTelegramAccessService.instances = []
+    FakeTelegramAccessService.users = []
+    FakeTelegramAccessService.groups = []
+    FakeTelegramAccessService.added_users = []
+    FakeTelegramAccessService.removed_users = []
+    FakeTelegramAccessService.added_groups = []
+    FakeTelegramAccessService.removed_groups = []
     monkeypatch.setattr(commands, "RuntimeSettingRepository", lambda session: object())
     monkeypatch.setattr(commands, "RuntimeSettingsService", FakeRuntimeSettingsService)
+    monkeypatch.setattr(commands, "TelegramAccessRepository", lambda session: object())
+    monkeypatch.setattr(commands, "TelegramAccessService", FakeTelegramAccessService)
 
 
 @pytest.mark.asyncio
@@ -136,12 +218,11 @@ async def test_settings_command_admin_can_open_menu() -> None:
     answer = message.answers[0]
     keyboard = answer["reply_markup"].inline_keyboard
     assert "Настройки Jarvis" in answer["text"]
-    assert "Активный агент: Auto" in answer["text"]
-    assert [button.text for button in keyboard[0]] == ["Auto", "Yandex", "OpenRouter"]
+    assert "Разделы:" in answer["text"]
+    assert [button.text for button in keyboard[0]] == ["Агент", "Доступ"]
     assert [button.callback_data for button in keyboard[0]] == [
-        "settings:provider:auto",
-        "settings:provider:yandex",
-        "settings:provider:openrouter",
+        "settings:agent",
+        "settings:access",
     ]
 
 
@@ -186,6 +267,164 @@ async def test_provider_callback_saves_setting_and_refreshes_menu(
 
 
 @pytest.mark.asyncio
+async def test_whoami_returns_user_and_chat_ids_in_private() -> None:
+    message = FakeMessage("/whoami", user_id=59144850)
+    message.chat.id = 59144850
+    message.chat.type = "private"
+
+    await commands.cmd_whoami(message)  # type: ignore[arg-type]
+
+    assert message.answers == [
+        {
+            "text": "Ваш Telegram ID: 59144850\nChat ID: 59144850\nТип чата: private"
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_access_section_visible_to_admin() -> None:
+    callback = FakeCallbackQuery("settings:access", user_id=100500)
+
+    await commands.handle_settings_callback(
+        callback,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    edit = callback.message.edits[0]
+    keyboard = edit["reply_markup"].inline_keyboard
+    assert "Доступ Jarvis" in edit["text"]
+    assert "Разрешённые пользователи: 0" in edit["text"]
+    assert "Разрешённые группы: 0" in edit["text"]
+    assert [button.text for button in keyboard[0]] == ["Пользователи", "Группы"]
+
+
+@pytest.mark.asyncio
+async def test_access_users_list_works() -> None:
+    FakeTelegramAccessService.users = [
+        commands.AccessEntry(entry_type="user", telegram_id=59144850, label="Александр")
+    ]
+    callback = FakeCallbackQuery("settings:access:users", user_id=100500)
+
+    await commands.handle_settings_callback(
+        callback,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    assert "Разрешённые пользователи" in callback.message.edits[0]["text"]
+    assert "- 59144850 — Александр" in callback.message.edits[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_access_groups_list_works() -> None:
+    FakeTelegramAccessService.groups = [
+        commands.AccessEntry(entry_type="group", telegram_id=-5437860232, label="Домашний чат")
+    ]
+    callback = FakeCallbackQuery("settings:access:groups", user_id=100500)
+
+    await commands.handle_settings_callback(
+        callback,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    assert "Разрешённые группы" in callback.message.edits[0]["text"]
+    assert "- -5437860232 — Домашний чат" in callback.message.edits[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_add_user_fsm_works() -> None:
+    callback = FakeCallbackQuery("settings:access:user:add", user_id=100500)
+    state = FakeState()
+
+    await commands.handle_settings_callback(
+        callback,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+        state=state,
+    )
+    assert state.current_state == commands.TelegramAccessInput.add_user.state
+    assert "Отправьте Telegram user ID" in callback.message.edits[0]["text"]
+
+    message = FakeMessage("59144850 Александр", user_id=100500)
+    await commands.handle_access_input_message(
+        message,  # type: ignore[arg-type]
+        state=state,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    assert FakeTelegramAccessService.added_users == [(59144850, "Александр", 100500)]
+    assert state.cleared is True
+    assert "Пользователь добавлен" in message.answers[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_remove_user_fsm_works() -> None:
+    state = FakeState(commands.TelegramAccessInput.remove_user.state)
+    message = FakeMessage("59144850", user_id=100500)
+
+    await commands.handle_access_input_message(
+        message,  # type: ignore[arg-type]
+        state=state,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    assert FakeTelegramAccessService.removed_users == [59144850]
+    assert "Пользователь удалён" in message.answers[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_add_group_fsm_works() -> None:
+    state = FakeState(commands.TelegramAccessInput.add_group.state)
+    message = FakeMessage("-5437860232 Домашний чат", user_id=100500)
+
+    await commands.handle_access_input_message(
+        message,  # type: ignore[arg-type]
+        state=state,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    assert FakeTelegramAccessService.added_groups == [(-5437860232, "Домашний чат", 100500)]
+    assert "Группа добавлена" in message.answers[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_remove_group_fsm_works() -> None:
+    state = FakeState(commands.TelegramAccessInput.remove_group.state)
+    message = FakeMessage("-5437860232", user_id=100500)
+
+    await commands.handle_access_input_message(
+        message,  # type: ignore[arg-type]
+        state=state,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    assert FakeTelegramAccessService.removed_groups == [-5437860232]
+    assert "Группа удалена" in message.answers[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_cancel_clears_access_input_state() -> None:
+    state = FakeState(commands.TelegramAccessInput.add_user.state)
+    message = FakeMessage("/cancel", user_id=100500)
+
+    await commands.handle_access_input_message(
+        message,  # type: ignore[arg-type]
+        state=state,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    assert state.cleared is True
+    assert message.answers == [{"text": "Ввод отменён."}]
+
+
+@pytest.mark.asyncio
 async def test_settings_callback_non_admin_is_denied() -> None:
     callback = FakeCallbackQuery("settings:provider:openrouter", user_id=7)
 
@@ -206,16 +445,20 @@ async def test_settings_command_handles_missing_runtime_settings_table() -> None
             raise RuntimeSettingsUnavailable("runtime_settings_unavailable")
 
     commands.RuntimeSettingsService = MissingTableSettingsService  # type: ignore[assignment]
-    message = FakeMessage(user_id=100500)
+    callback = FakeCallbackQuery("settings:agent", user_id=100500)
 
-    await commands.cmd_settings(
-        message,  # type: ignore[arg-type]
+    await commands.handle_settings_callback(
+        callback,  # type: ignore[arg-type]
         settings=Settings(admin_telegram_ids="100500"),
         db_session=object(),
     )
 
-    assert "Настройки временно недоступны" in message.answers[0]["text"]
-    assert "alembic upgrade head" in message.answers[0]["text"]
+    assert callback.answers == [
+        {
+            "text": "Настройки временно недоступны: миграция БД ещё не применена.",
+            "show_alert": True,
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -225,7 +468,7 @@ async def test_settings_callback_handles_missing_runtime_settings_table() -> Non
             raise RuntimeSettingsUnavailable("runtime_settings_unavailable")
 
     commands.RuntimeSettingsService = MissingTableSettingsService  # type: ignore[assignment]
-    callback = FakeCallbackQuery("settings:refresh", user_id=100500)
+    callback = FakeCallbackQuery("settings:agent", user_id=100500)
 
     await commands.handle_settings_callback(
         callback,  # type: ignore[arg-type]

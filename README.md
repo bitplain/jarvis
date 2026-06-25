@@ -175,6 +175,33 @@ uv run --python 3.12 --extra dev python scripts/smoke_provider_settings_readines
 
 Stage 4E также делает callback-кнопки идемпотентными: повторный `Refresh`, повторный выбор текущего provider и Telegram `message is not modified` не должны превращаться в HTTP 500 webhook.
 
+## Настройки доступа
+
+Stage 4F-1 добавляет admin-only раздел `/settings -> Доступ`.
+
+Команда `/whoami` показывает текущие Telegram user ID, chat ID и тип чата. Она доступна всем и нужна, чтобы безопасно узнать ID без просмотра `.env` или логов.
+
+В `/settings -> Доступ` env admin может:
+
+- посмотреть разрешённых пользователей;
+- добавить пользователя по Telegram user ID;
+- удалить пользователя;
+- посмотреть разрешённые группы;
+- добавить группу по Telegram chat ID;
+- удалить группу.
+
+Записи хранятся в PostgreSQL таблице `telegram_access_entries`. `ADMIN_TELEGRAM_IDS` остаются главными админами из env, всегда имеют доступ и не переносятся в таблицу автоматически. DB allowed user получает доступ к Jarvis, но не становится admin и не может управлять `/settings`.
+
+Если разрешённых групп нет, сохраняется старая совместимость: authorized user может вызвать Jarvis в любой группе через mention/reply. После добавления хотя бы одной группы включается group allowlist mode: нужны и разрешённый user, и разрешённая group.
+
+Readiness без секретов:
+
+```bash
+uv run --python 3.12 --extra dev python scripts/smoke_access_settings_readiness.py
+```
+
+Ожидаемый verdict: `PASS_ACCESS_SETTINGS_READINESS`.
+
 ## Guest Mode
 
 Stage 2 реализует Telegram Guest Mode через update type `guest_message`.
