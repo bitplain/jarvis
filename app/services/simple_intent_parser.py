@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 DEFAULT_TIMEZONE = ZoneInfo("Europe/Moscow")
+SHOPPING_COLON_TRIGGERS = ("купить", "покупки", "список покупок")
 
 
 @dataclass(frozen=True)
@@ -72,6 +73,9 @@ def parse_explicit_intent(
 
 
 def _parse_shopping(text: str, *, bot_username: str | None = None) -> ExplicitIntent | None:
+    colon_intent = _parse_shopping_colon_intent(text, bot_username=bot_username)
+    if colon_intent is not None:
+        return colon_intent
     if text in {"покажи список покупок", "список покупок", "список", "что купить?"}:
         return ShoppingListIntent()
     if text in {"помощь список", "как пользоваться списком"}:
@@ -95,6 +99,21 @@ def _parse_shopping(text: str, *, bot_username: str | None = None) -> ExplicitIn
         )
         return ShoppingAddIntent(items) if items else ParserHelpIntent("shopping")
     return None
+
+
+def _parse_shopping_colon_intent(
+    text: str,
+    *,
+    bot_username: str | None = None,
+) -> ExplicitIntent | None:
+    sanitized = sanitize_shopping_items_input(text, bot_username)
+    trigger_pattern = "|".join(re.escape(trigger) for trigger in SHOPPING_COLON_TRIGGERS)
+    match = re.match(rf"^({trigger_pattern})\s*:\s*(.+)$", sanitized)
+    if match is None:
+        return None
+    payload = sanitize_shopping_items_input(match.group(2), bot_username)
+    items = split_shopping_colon_items(payload)
+    return ShoppingAddIntent(items) if items else ParserHelpIntent("shopping")
 
 
 def _parse_reminder(
@@ -181,8 +200,25 @@ def split_shopping_items(text: str) -> list[str]:
     return [_clean_item(item) for item in raw_items if _clean_item(item)][:20]
 
 
+def split_shopping_colon_items(text: str) -> list[str]:
+    if _has_explicit_item_separator(text):
+        return split_shopping_items(text)
+    words = text.split()
+    if 2 <= len(words) <= 10 and all(_is_simple_item_word(word) for word in words):
+        return [_clean_item(word) for word in words if _clean_item(word)][:20]
+    return split_shopping_items(text)
+
+
 def _split_items(text: str) -> list[str]:
     return split_shopping_items(text)
+
+
+def _has_explicit_item_separator(text: str) -> bool:
+    return bool(re.search(r"[,;\n]+|\s+и\s+", text))
+
+
+def _is_simple_item_word(text: str) -> bool:
+    return bool(re.fullmatch(r"[0-9a-zа-яё_-]+", text, flags=re.IGNORECASE))
 
 
 def _clean_item(text: str) -> str:

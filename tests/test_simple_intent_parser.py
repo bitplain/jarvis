@@ -59,6 +59,36 @@ def test_parse_shopping_add_strips_current_bot_mention() -> None:
     assert intent.items == ["творожок"]
 
 
+def test_parse_buy_colon_shopping_add_splits_plain_words() -> None:
+    intent = parse_explicit_intent("Купить: хлеб сок мазик запеканку")
+
+    assert isinstance(intent, ShoppingAddIntent)
+    assert intent.items == ["хлеб", "сок", "мазик", "запеканку"]
+
+
+def test_parse_buy_colon_shopping_add_reuses_existing_splitters() -> None:
+    intent = parse_explicit_intent("купить: хлеб, сок и молоко")
+
+    assert isinstance(intent, ShoppingAddIntent)
+    assert intent.items == ["хлеб", "сок", "молоко"]
+
+
+def test_parse_buy_colon_shopping_add_strips_current_bot_mention() -> None:
+    intent = parse_explicit_intent(
+        "@Home_ai_my_bot купить: творожок",
+        bot_username="Home_ai_my_bot",
+    )
+
+    assert isinstance(intent, ShoppingAddIntent)
+    assert intent.items == ["творожок"]
+
+
+def test_parse_buy_colon_does_not_overbroaden_natural_language() -> None:
+    assert parse_explicit_intent("где купить молоко?") is None
+    assert parse_explicit_intent("можешь купить молоко?") is None
+    assert isinstance(parse_explicit_intent("что купить?"), ShoppingListIntent)
+
+
 def test_parse_shopping_show_and_delete() -> None:
     assert isinstance(parse_explicit_intent("что купить?"), ShoppingListIntent)
     assert isinstance(parse_explicit_intent("список"), ShoppingListIntent)
