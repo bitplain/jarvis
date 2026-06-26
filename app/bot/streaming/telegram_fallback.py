@@ -5,6 +5,7 @@ from aiogram.enums import ChatAction
 from aiogram.exceptions import TelegramBadRequest
 
 from app.bot.streaming.text_limits import clip_telegram_preview, split_telegram_text
+from app.bot.thinking import THINKING_TEXT
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,7 @@ class TelegramGroupEditSink:
         *,
         edit_interval_ms: int = 1000,
         chat_action_interval_seconds: int = 4,
-        provisional_text: str = "Думаю...",
+        provisional_text: str = THINKING_TEXT,
         business_connection_id: str | None = None,
     ) -> None:
         self.bot = bot

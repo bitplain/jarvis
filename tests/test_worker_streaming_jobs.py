@@ -312,7 +312,7 @@ async def test_group_streaming_uses_fallback_edit_without_draft_and_private_fals
     assert bot.rich_drafts == []
     assert bot.sent_messages[0] == {
         "chat_id": -100,
-        "text": "Принял. Готовлю групповой ответ.",
+        "text": "Думаю",
     }
     assert bot.edits[-1] == {
         "chat_id": -100,
@@ -375,7 +375,7 @@ async def test_private_draft_error_falls_back_to_provisional_edit(
 
     bot = FakeBot.instances[0]
     assert bot.drafts == []
-    assert bot.sent_messages[0] == {"chat_id": 100, "text": "Думаю..."}
+    assert bot.sent_messages[0] == {"chat_id": 100, "text": "Думаю"}
     assert bot.sent_messages[-1] == {
         "chat_id": 100,
         "text": "Черновик недоступен. Но ответ готов.",

@@ -30,7 +30,7 @@ Exact Mira letter-growth не полностью контролируется ba
 
 ## Group/Guest boundaries
 
-- Group/supergroup path не использует `sendMessageDraft` и `sendRichMessageDraft`; остаётся текущий `sendChatAction typing`, provisional `Принял. Готовлю групповой ответ.`, throttled `editMessageText` и final edit/send fallback.
+- Group/supergroup path не использует `sendMessageDraft` и `sendRichMessageDraft`; после Stage 4F-4 используется `sendChatAction typing`, provisional `Думаю`, throttled `editMessageText` и final edit/send fallback.
 - Guest Mode остаётся final-only через `answerGuestQuery`.
 - Business / Secretary auto-reply, watcher, shopping list, reminders и чтение всех сообщений не включались.
 

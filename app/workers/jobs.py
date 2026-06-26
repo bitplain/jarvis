@@ -191,7 +191,6 @@ async def _process_group_streaming(
         bot,
         edit_interval_ms=settings.streaming_group_edit_interval_ms,
         chat_action_interval_seconds=settings.streaming_send_chat_action_interval_seconds,
-        provisional_text="Принял. Готовлю групповой ответ.",
     )
     logger.warning(
         "streaming_group_fallback_selected",

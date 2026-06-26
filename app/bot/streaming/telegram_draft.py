@@ -5,10 +5,10 @@ from typing import Any, Protocol, cast
 
 from app.bot.adapters.message_draft_api import TelegramMessageDraftApi
 from app.bot.streaming.text_limits import clip_telegram_preview
+from app.bot.thinking import THINKING_RICH_MESSAGE, THINKING_TEXT
 
 logger = logging.getLogger(__name__)
-THINKING_DRAFT_TEXT = "Думаю"
-THINKING_RICH_MESSAGE: dict[str, object] = {"html": "<tg-thinking>Думаю</tg-thinking>"}
+THINKING_DRAFT_TEXT = THINKING_TEXT
 
 
 class TelegramDraftNotAvailable(Exception):
