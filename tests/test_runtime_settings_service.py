@@ -3,6 +3,7 @@ import pytest
 from app.services.runtime_settings_service import (
     ACTIVE_LLM_PROVIDER_KEY,
     DEFAULT_PROMPTS,
+    LISTS_TIMEZONE_KEY,
     PROMPT_GROUP_KEY,
     PROMPT_PRIVATE_KEY,
     PROMPT_WATCH_KEY,
@@ -202,3 +203,46 @@ async def test_prompt_text_rejects_more_than_4000_characters() -> None:
             "я" * 4001,
             updated_by_telegram_id=100500,
         )
+
+
+@pytest.mark.asyncio
+async def test_lists_timezone_defaults_to_moscow_when_setting_is_missing() -> None:
+    service = RuntimeSettingsService(FakeRuntimeSettingsRepository())
+
+    timezone = await service.get_lists_timezone()
+
+    assert timezone.key == "Europe/Moscow"
+
+
+@pytest.mark.asyncio
+async def test_lists_timezone_can_be_saved() -> None:
+    repository = FakeRuntimeSettingsRepository()
+    service = RuntimeSettingsService(repository)
+
+    timezone = await service.set_lists_timezone(
+        "Europe/Amsterdam",
+        updated_by_telegram_id=100500,
+    )
+
+    assert timezone.key == "Europe/Amsterdam"
+    assert repository.values[LISTS_TIMEZONE_KEY] == "Europe/Amsterdam"
+    assert repository.updated_by[LISTS_TIMEZONE_KEY] == 100500
+
+
+@pytest.mark.asyncio
+async def test_lists_timezone_rejects_unknown_value() -> None:
+    service = RuntimeSettingsService(FakeRuntimeSettingsRepository())
+
+    with pytest.raises(ValueError, match="unsupported_lists_timezone"):
+        await service.set_lists_timezone("Europe/NoSuchCity", updated_by_telegram_id=100500)
+
+
+@pytest.mark.asyncio
+async def test_lists_timezone_treats_invalid_database_value_as_default() -> None:
+    repository = FakeRuntimeSettingsRepository()
+    repository.values[LISTS_TIMEZONE_KEY] = "broken"
+    service = RuntimeSettingsService(repository)
+
+    timezone = await service.get_lists_timezone()
+
+    assert timezone.key == "Europe/Moscow"

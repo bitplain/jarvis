@@ -363,6 +363,9 @@ async def _deliver_one_reminder(
     reminder: Any,
 ) -> bool:
     try:
+        timezone = await RuntimeSettingsService(
+            RuntimeSettingRepository(session)
+        ).get_lists_timezone()
         await bot.send_message(
             chat_id=reminder.chat_id,
             text=format_reminder_due_html(
@@ -374,7 +377,8 @@ async def _deliver_one_reminder(
                     text=reminder.text,
                     remind_at=reminder.remind_at,
                     status=reminder.status,
-                )
+                ),
+                timezone=timezone,
             ),
             parse_mode="HTML",
         )

@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 ACTIVE_LLM_PROVIDER_KEY = "active_llm_provider"
 PROMPT_PROFILE_PRIVATE_KEY = "prompt_profile_private"
@@ -9,6 +10,8 @@ PROMPT_PROFILE_WATCHER_KEY = "prompt_profile_watcher"
 PROMPT_PRIVATE_KEY = "prompt.private"
 PROMPT_GROUP_KEY = "prompt.group"
 PROMPT_WATCH_KEY = "prompt.watch"
+LISTS_TIMEZONE_KEY = "lists.timezone"
+DEFAULT_LISTS_TIMEZONE = "Europe/Moscow"
 MAX_PROMPT_LENGTH = 4000
 
 
@@ -205,3 +208,30 @@ class RuntimeSettingsService:
             text=DEFAULT_PROMPTS[prompt_scope],
             source=PromptSource.DEFAULT,
         )
+
+    async def get_lists_timezone(self) -> ZoneInfo:
+        raw_value = await self.repository.get_value(LISTS_TIMEZONE_KEY)
+        if raw_value is None:
+            return ZoneInfo(DEFAULT_LISTS_TIMEZONE)
+        try:
+            return ZoneInfo(raw_value)
+        except ZoneInfoNotFoundError:
+            return ZoneInfo(DEFAULT_LISTS_TIMEZONE)
+
+    async def set_lists_timezone(
+        self,
+        value: str,
+        *,
+        updated_by_telegram_id: int | None,
+    ) -> ZoneInfo:
+        normalized = value.strip()
+        try:
+            timezone = ZoneInfo(normalized)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError("unsupported_lists_timezone") from exc
+        await self.repository.set_value(
+            LISTS_TIMEZONE_KEY,
+            normalized,
+            updated_by_telegram_id=updated_by_telegram_id,
+        )
+        return timezone

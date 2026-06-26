@@ -71,8 +71,10 @@ def parse_explicit_intent(
 
 
 def _parse_shopping(text: str) -> ExplicitIntent | None:
-    if text in {"покажи список покупок", "список покупок", "что купить?"}:
+    if text in {"покажи список покупок", "список покупок", "список", "что купить?"}:
         return ShoppingListIntent()
+    if text in {"помощь список", "как пользоваться списком"}:
+        return ParserHelpIntent("shopping")
     if text == "очисти купленное":
         return ShoppingClearDoneIntent()
     delete_match = re.match(r"^удали\s+(.+?)\s+из\s+списка(?:\s+покупок)?$", text)
@@ -98,6 +100,8 @@ def _parse_reminder(
 ) -> ExplicitIntent | None:
     if text in {"покажи напоминания", "напоминания", "мои напоминания"}:
         return ReminderListIntent()
+    if text in {"помощь напоминания", "как пользоваться напоминаниями"}:
+        return ParserHelpIntent("reminder")
     if not text.startswith("напомни "):
         return None
     current = now or datetime.now(timezone)

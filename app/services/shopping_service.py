@@ -83,6 +83,9 @@ class ShoppingRepositoryProtocol(Protocol):
     async def clear_done(self, *, scope_type: str, scope_chat_id: int) -> StoredShoppingList:
         raise NotImplementedError
 
+    async def clear_all(self, *, scope_type: str, scope_chat_id: int) -> StoredShoppingList:
+        raise NotImplementedError
+
     async def find_active_by_text(
         self,
         *,
@@ -183,6 +186,19 @@ class ShoppingService:
     ) -> ShoppingListView:
         del actor_user_id
         shopping_list = await self.repository.clear_done(
+            scope_type=_normalize_scope(scope),
+            scope_chat_id=chat_id,
+        )
+        return await self._view(shopping_list)
+
+    async def clear_all(
+        self,
+        scope: str,
+        chat_id: int,
+        actor_user_id: int,
+    ) -> ShoppingListView:
+        del actor_user_id
+        shopping_list = await self.repository.clear_all(
             scope_type=_normalize_scope(scope),
             scope_chat_id=chat_id,
         )
@@ -306,6 +322,17 @@ class InMemoryShoppingRepository:
         )
         for item_id, item in list(self.items.items()):
             if item.list_id == shopping_list.id and item.status == "done":
+                del self.items[item_id]
+        return shopping_list
+
+    async def clear_all(self, *, scope_type: str, scope_chat_id: int) -> StoredShoppingList:
+        shopping_list = await self.get_or_create_list(
+            scope_type=scope_type,
+            scope_chat_id=scope_chat_id,
+            owner_user_id=scope_chat_id if scope_type == "private" else None,
+        )
+        for item_id, item in list(self.items.items()):
+            if item.list_id == shopping_list.id:
                 del self.items[item_id]
         return shopping_list
 

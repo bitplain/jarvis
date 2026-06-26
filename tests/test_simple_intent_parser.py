@@ -29,6 +29,7 @@ def test_parse_shopping_add_multiple_items_by_comma() -> None:
 
 def test_parse_shopping_show_and_delete() -> None:
     assert isinstance(parse_explicit_intent("что купить?"), ShoppingListIntent)
+    assert isinstance(parse_explicit_intent("список"), ShoppingListIntent)
 
     intent = parse_explicit_intent("удали молоко из списка")
 
@@ -67,3 +68,24 @@ def test_parse_reminder_list_invalid_and_ambiguous() -> None:
     assert isinstance(parse_explicit_intent("покажи напоминания"), ReminderListIntent)
     assert parse_explicit_intent("напомни когда-нибудь купить молоко") is not None
     assert parse_explicit_intent("обычный разговор про хлеб и молоко") is None
+
+
+def test_parse_help_triggers() -> None:
+    assert parse_explicit_intent("помощь список") is not None
+    assert parse_explicit_intent("помощь напоминания") is not None
+    assert parse_explicit_intent("как пользоваться списком") is not None
+    assert parse_explicit_intent("как пользоваться напоминаниями") is not None
+
+
+def test_parse_reminder_uses_custom_timezone_for_tomorrow() -> None:
+    amsterdam = ZoneInfo("Europe/Amsterdam")
+    now = datetime(2026, 6, 26, 23, 30, tzinfo=amsterdam)
+
+    intent = parse_explicit_intent(
+        "напомни завтра в 10 купить молоко",
+        now=now,
+        timezone=amsterdam,
+    )
+
+    assert isinstance(intent, ReminderCreateIntent)
+    assert intent.remind_at == datetime(2026, 6, 27, 10, 0, tzinfo=amsterdam)
