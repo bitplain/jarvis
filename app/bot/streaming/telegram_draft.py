@@ -7,6 +7,8 @@ from app.bot.adapters.message_draft_api import TelegramMessageDraftApi
 from app.bot.streaming.text_limits import clip_telegram_preview
 
 logger = logging.getLogger(__name__)
+THINKING_DRAFT_TEXT = "Думаю"
+THINKING_RICH_MESSAGE: dict[str, object] = {"html": "<tg-thinking>Думаю</tg-thinking>"}
 
 
 class TelegramDraftNotAvailable(Exception):
@@ -31,12 +33,14 @@ class TelegramPrivateDraftSink:
         raw_call: RawTelegramCall | None = None,
         timeout: float = 15.0,
         raw_api_fallback: bool = True,
+        rich_thinking_enabled: bool = False,
     ) -> None:
         self.bot = bot
         self.draft_id = draft_id or self.generate_draft_id()
         self.raw_call = raw_call
         self.timeout = timeout
         self.raw_api_fallback = raw_api_fallback
+        self.rich_thinking_enabled = rich_thinking_enabled
         self.available = True
 
     @staticmethod
@@ -44,7 +48,25 @@ class TelegramPrivateDraftSink:
         return max(1, secrets.randbits(31))
 
     async def start(self, *, chat_id: int, message_thread_id: int | None = None) -> None:
-        await self.publish(chat_id=chat_id, text="", message_thread_id=message_thread_id)
+        if not self.rich_thinking_enabled:
+            await self.publish(chat_id=chat_id, text="", message_thread_id=message_thread_id)
+            return
+        try:
+            await self._publish_rich_thinking(
+                chat_id=chat_id,
+                message_thread_id=message_thread_id,
+            )
+            return
+        except TelegramDraftNotAvailable as exc:
+            logger.warning(
+                "telegram_private_draft_streaming_failed",
+                extra={"stage": "rich_thinking", "error_type": type(exc).__name__},
+            )
+        await self.publish(
+            chat_id=chat_id,
+            text=THINKING_DRAFT_TEXT,
+            message_thread_id=message_thread_id,
+        )
 
     async def publish(
         self,
@@ -130,10 +152,26 @@ class TelegramPrivateDraftSink:
     async def _raw(self, method: str, payload: dict[str, object]) -> dict[str, Any]:
         if self.raw_call is not None:
             return await self.raw_call(method, payload)
-        if method != "sendMessageDraft":
+        if method not in {"sendMessageDraft", "sendRichMessageDraft"}:
             return {"ok": False}
         adapter = TelegramMessageDraftApi(self.bot, timeout=self.timeout)
         message_thread_id = payload.get("message_thread_id")
+        if method == "sendRichMessageDraft":
+            rich_message = payload.get("rich_message")
+            return await adapter.send_rich_message_draft(
+                chat_id=int(cast(int | str, payload["chat_id"])),
+                draft_id=int(cast(int | str, payload["draft_id"])),
+                rich_text=(
+                    cast(dict[str, object], rich_message)
+                    if isinstance(rich_message, dict)
+                    else {}
+                ),
+                message_thread_id=(
+                    int(cast(int | str, message_thread_id))
+                    if message_thread_id is not None
+                    else None
+                ),
+            )
         return await adapter.send_message_draft(
             chat_id=int(cast(int | str, payload["chat_id"])),
             draft_id=int(cast(int | str, payload["draft_id"])),
@@ -143,6 +181,50 @@ class TelegramPrivateDraftSink:
                 if message_thread_id is not None
                 else None
             ),
+        )
+
+    async def _publish_rich_thinking(
+        self,
+        *,
+        chat_id: int,
+        message_thread_id: int | None = None,
+    ) -> None:
+        typed_method = getattr(self.bot, "send_rich_message_draft", None)
+        if callable(typed_method):
+            try:
+                payload: dict[str, object] = {
+                    "chat_id": chat_id,
+                    "draft_id": self.draft_id,
+                    "rich_message": THINKING_RICH_MESSAGE,
+                }
+                if message_thread_id is not None:
+                    payload["message_thread_id"] = message_thread_id
+                await typed_method(**payload)
+                logger.warning(
+                    "telegram_send_rich_message_draft_called",
+                    extra={"draft_id": self.draft_id, "adapter": "typed"},
+                )
+                return
+            except Exception as exc:
+                raise TelegramDraftNotAvailable("typed_rich_draft_failed") from exc
+        if not self.raw_api_fallback:
+            raise TelegramDraftNotAvailable("typed_rich_draft_missing")
+        payload = {
+            "chat_id": chat_id,
+            "draft_id": self.draft_id,
+            "rich_message": THINKING_RICH_MESSAGE,
+        }
+        if message_thread_id is not None:
+            payload["message_thread_id"] = message_thread_id
+        try:
+            result = await self._raw("sendRichMessageDraft", payload)
+        except Exception as exc:
+            raise TelegramDraftNotAvailable("raw_rich_draft_failed") from exc
+        if result.get("ok") is not True:
+            raise TelegramDraftNotAvailable("raw_rich_draft_not_ok")
+        logger.warning(
+            "telegram_send_rich_message_draft_called",
+            extra={"draft_id": self.draft_id, "adapter": "raw"},
         )
 
     def _disable(self, reason: str, exc: BaseException | None) -> None:

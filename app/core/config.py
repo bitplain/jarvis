@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     streaming_enabled: bool = True
     streaming_private_draft_enabled: bool = True
     streaming_group_fallback_enabled: bool = True
+    telegram_private_draft_streaming_enabled: bool = False
     streaming_draft_update_interval_ms: int = Field(default=800, ge=100, le=30_000)
     streaming_group_edit_interval_ms: int = Field(default=1000, ge=100, le=30_000)
     streaming_min_chars_delta: int = Field(default=120, ge=1, le=5000)

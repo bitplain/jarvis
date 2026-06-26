@@ -27,10 +27,17 @@ class FakeBot:
         self.chat_actions: list[dict[str, object]] = []
         self.edits: list[dict[str, object]] = []
         self.drafts: list[dict[str, object]] = []
+        self.rich_drafts: list[dict[str, object]] = []
         self.session = self
         self.closed = False
         self.fail_draft = False
+        self.fail_rich_draft = False
         self.__class__.instances.append(self)
+
+    async def send_rich_message_draft(self, **kwargs: object) -> None:
+        if self.fail_rich_draft:
+            raise RuntimeError("rich draft unavailable")
+        self.rich_drafts.append(kwargs)
 
     async def send_message_draft(self, **kwargs: object) -> None:
         if self.fail_draft:
@@ -202,6 +209,82 @@ async def test_private_streaming_uses_draft_then_final_and_saves_only_final(
 
 
 @pytest.mark.asyncio
+async def test_private_mira_streaming_uses_rich_thinking_then_same_draft_id_updates(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    provider = FakeProvider(chunks=["Первый фрагмент. ", "Второй фрагмент."])
+    caplog.set_level(logging.INFO)
+    patch_worker(
+        monkeypatch,
+        provider=provider,
+        settings=Settings(
+            telegram_bot_token="123456:secret-token",
+            streaming_enabled=True,
+            streaming_private_draft_enabled=True,
+            telegram_private_draft_streaming_enabled=True,
+            streaming_min_chars_delta=5,
+        ),
+    )
+
+    await process_llm_message({}, {"chat_id": 100, "user_id": 456, "private": True})
+
+    bot = FakeBot.instances[0]
+    messages = [record.message for record in caplog.records]
+    draft_id = bot.rich_drafts[0]["draft_id"]
+    assert bot.rich_drafts == [
+        {
+            "chat_id": 100,
+            "draft_id": draft_id,
+            "rich_message": {"html": "<tg-thinking>Думаю</tg-thinking>"},
+        }
+    ]
+    assert bot.drafts
+    assert all(item["draft_id"] == draft_id for item in bot.drafts)
+    assert all(item["text"] != "" for item in bot.drafts)
+    assert bot.sent_messages == [{"chat_id": 100, "text": "Первый фрагмент. Второй фрагмент."}]
+    assert "telegram_send_rich_message_draft_called" in messages
+    assert "telegram_final_send_message_called" in messages
+
+
+@pytest.mark.asyncio
+async def test_private_mira_rich_failure_falls_back_to_text_draft_without_job_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    provider = FakeProvider(chunks=["Черновик обычный. ", "Ответ готов."])
+    caplog.set_level(logging.INFO)
+    patch_worker(
+        monkeypatch,
+        provider=provider,
+        settings=Settings(
+            telegram_bot_token="123456:secret-token",
+            streaming_enabled=True,
+            streaming_private_draft_enabled=True,
+            telegram_private_draft_streaming_enabled=True,
+            streaming_min_chars_delta=5,
+        ),
+    )
+    original_init = FakeBot.__init__
+
+    def init_with_failed_rich_draft(self: FakeBot, token: str) -> None:
+        original_init(self, token)
+        self.fail_rich_draft = True
+
+    monkeypatch.setattr(FakeBot, "__init__", init_with_failed_rich_draft)
+
+    await process_llm_message({}, {"chat_id": 100, "user_id": 456, "private": True})
+
+    bot = FakeBot.instances[0]
+    messages = [record.message for record in caplog.records]
+    assert bot.rich_drafts == []
+    assert bot.drafts[0]["text"] == "Думаю"
+    assert bot.sent_messages == [{"chat_id": 100, "text": "Черновик обычный. Ответ готов."}]
+    assert "telegram_private_draft_streaming_failed" in messages
+    assert "telegram_final_send_message_called" in messages
+
+
+@pytest.mark.asyncio
 async def test_group_streaming_uses_fallback_edit_without_draft_and_private_false(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -226,6 +309,7 @@ async def test_group_streaming_uses_fallback_edit_without_draft_and_private_fals
     messages = [record.message for record in caplog.records]
     assert provider.stream_called is True
     assert bot.drafts == []
+    assert bot.rich_drafts == []
     assert bot.sent_messages[0] == {
         "chat_id": -100,
         "text": "Принял. Готовлю групповой ответ.",

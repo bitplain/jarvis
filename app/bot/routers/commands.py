@@ -1166,6 +1166,9 @@ async def cmd_status(message: Message, **data: Any) -> None:
     private_draft_streaming = (
         "enabled" if settings.streaming_private_draft_enabled else "disabled"
     )
+    mira_private_draft_streaming = (
+        "enabled" if settings.telegram_private_draft_streaming_enabled else "disabled"
+    )
     group_fallback_streaming = (
         "enabled" if settings.streaming_group_fallback_enabled else "disabled"
     )
@@ -1188,6 +1191,7 @@ async def cmd_status(message: Message, **data: Any) -> None:
         f"Business Active Connections: {business_active_count}\n"
         f"Streaming: {streaming}\n"
         f"Private Draft Streaming: {private_draft_streaming}\n"
+        f"Mira Private Draft Streaming: {mira_private_draft_streaming}\n"
         f"Group Fallback Streaming: {group_fallback_streaming}\n"
         f"Draft Raw API Fallback: {draft_raw_api_fallback}"
     )

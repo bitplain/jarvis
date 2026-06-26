@@ -93,6 +93,7 @@ async def _process_private_streaming(
     draft = TelegramPrivateDraftSink(
         bot,
         raw_api_fallback=settings.streaming_draft_raw_api_fallback,
+        rich_thinking_enabled=settings.telegram_private_draft_streaming_enabled,
     )
     logger.warning(
         "streaming_private_draft_selected",
@@ -100,6 +101,7 @@ async def _process_private_streaming(
             "draft_id": draft.draft_id,
             "draft_update_interval_ms": settings.streaming_draft_update_interval_ms,
             "min_chars_delta": settings.streaming_min_chars_delta,
+            "mira_style_enabled": settings.telegram_private_draft_streaming_enabled,
         },
     )
     fallback: TelegramGroupEditSink | None = None

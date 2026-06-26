@@ -26,9 +26,10 @@ Jarvis не использует userbot/MTProto.
 6. Worker собирает system prompt и последние `MEMORY_MAX_MESSAGES`.
 7. Worker вызывает LLM provider через streaming interface, если `STREAMING_ENABLED=true`.
 8. В private chat worker пробует Telegram `sendMessageDraft` с non-zero `draft_id`.
-9. `StreamBuffer` обновляет draft не на каждый token, а по интервалу, приросту текста, границе предложения или финалу.
-10. Если draft API недоступен, текущий job переключается на fallback sink.
-11. После генерации worker отправляет финальный `sendMessage` и сохраняет только финальный ответ.
+9. Если включён `TELEGRAM_PRIVATE_DRAFT_STREAMING_ENABLED=true`, worker сначала пробует `sendRichMessageDraft` с rich thinking block `Думаю`, затем обновляет тот же `draft_id` обычным text draft.
+10. `StreamBuffer` обновляет draft не на каждый token, а по интервалу, приросту текста, границе предложения или финалу.
+11. Если draft API недоступен, текущий job переключается на fallback sink.
+12. После генерации worker отправляет финальный `sendMessage` и сохраняет только финальный ответ.
 
 ## Forwarded Message Assistant
 
@@ -149,6 +150,10 @@ Stage 4F-2 hotfix использует ту же таблицу `runtime_setting
 
 Private draft не считается постоянным сообщением и не пишется в БД. В БД пишется только финальный assistant response после `sendMessage` или финального group edit/send.
 Guest Mode не использует streaming. Business Mode не включает auto-reply в Stage 3A-S, но fallback abstraction учитывает `business_connection_id` для `sendChatAction`.
+
+Stage 4F-3 добавляет Mira-style private streaming через официальный Telegram draft/rich draft API. Новый режим включается отдельно через `TELEGRAM_PRIVATE_DRAFT_STREAMING_ENABLED=true`: private chat получает rich thinking draft `Думаю`, а последующие chunks обновляют тот же `draft_id`. Если rich draft недоступен, job возвращается к text draft `Думаю`; если text draft тоже падает, worker использует существующий fallback. Group/supergroup path не использует `sendMessageDraft` или `sendRichMessageDraft`, потому что draft methods предназначены для private chat.
+
+Визуальный эффект посимвольного роста полностью не управляется backend: Jarvis отправляет throttled draft updates, а Telegram client сам анимирует изменение draft preview.
 
 Telegram text limits:
 
