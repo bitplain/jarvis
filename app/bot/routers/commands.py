@@ -31,6 +31,7 @@ from app.services.runtime_settings_service import (
     RuntimeSettingsService,
     RuntimeSettingsUnavailable,
 )
+from app.services.status_service import StatusService, render_status_html
 from app.services.telegram_access_service import (
     AccessEntry,
     AccessMutationResult,
@@ -603,7 +604,8 @@ def render_prompt_editor_text(prompt: PromptSetting, *, saved: bool = False) -> 
 
 
 def _message_user_id(message: Message) -> int | None:
-    return message.from_user.id if message.from_user else None
+    from_user = getattr(message, "from_user", None)
+    return from_user.id if from_user else None
 
 
 def _callback_user_id(callback: CallbackQuery) -> int | None:
@@ -1316,48 +1318,20 @@ async def cmd_status(message: Message, **data: Any) -> None:
     bot_username = await _resolve_bot_username(data, settings.telegram_bot_username)
     if _is_command_for_other_bot(message, bot_username):
         return
-    personal_chat = "enabled" if settings.regular_assistant_enabled else "disabled"
-    group_assistant = "enabled" if settings.group_assistant_enabled else "disabled"
-    guest_status = "enabled" if settings.guest_mode_enabled else "disabled"
-    guest_access = "admin-only" if settings.guest_mode_admin_only else "open"
-    forwarded_status = "enabled" if settings.forwarded_message_assistant_enabled else "disabled"
-    draft_status = "enabled" if settings.draft_reply_enabled else "disabled"
-    business_mode = "enabled" if settings.business_mode_enabled else "optional/disabled"
-    business_reply = "enabled" if settings.business_reply_enabled else "disabled"
-    business_admin_only = "true" if settings.business_admin_only else "false"
-    streaming = "enabled" if settings.streaming_enabled else "disabled"
-    private_draft_streaming = (
-        "enabled" if settings.streaming_private_draft_enabled else "disabled"
-    )
-    mira_private_draft_streaming = (
-        "enabled" if settings.telegram_private_draft_streaming_enabled else "disabled"
-    )
-    group_fallback_streaming = (
-        "enabled" if settings.streaming_group_fallback_enabled else "disabled"
-    )
-    draft_raw_api_fallback = (
-        "enabled" if settings.streaming_draft_raw_api_fallback else "disabled"
-    )
-    business_count, business_active_count = await resolve_business_counts(data)
-    await message.answer(
-        "Статус: Regular Assistant Mode активен.\n"
-        f"Personal Chat: {personal_chat}\n"
-        f"Group Assistant: {group_assistant}\n"
-        f"Guest Mode: {guest_status}\n"
-        f"Guest access: {guest_access}\n"
-        f"Forwarded Assistant: {forwarded_status}\n"
-        f"Draft Reply: {draft_status}\n"
-        f"Business Mode: {business_mode}\n"
-        f"Business Reply: {business_reply}\n"
-        f"Business Admin Only: {business_admin_only}\n"
-        f"Business Connections: {business_count}\n"
-        f"Business Active Connections: {business_active_count}\n"
-        f"Streaming: {streaming}\n"
-        f"Private Draft Streaming: {private_draft_streaming}\n"
-        f"Mira Private Draft Streaming: {mira_private_draft_streaming}\n"
-        f"Group Fallback Streaming: {group_fallback_streaming}\n"
-        f"Draft Raw API Fallback: {draft_raw_api_fallback}"
-    )
+    user_id = _message_user_id(message)
+    if not is_admin_user(user_id, settings.admin_ids):
+        chat = getattr(message, "chat", None)
+        if getattr(chat, "type", "private") == "private":
+            await message.answer("Доступ запрещён.")
+        return
+    snapshot = data.get("status_snapshot")
+    if not isinstance(snapshot, dict):
+        snapshot = await StatusService(
+            settings,
+            session=data.get("db_session"),
+            redis=data.get("redis"),
+        ).collect()
+    await message.answer(render_status_html(snapshot), parse_mode="HTML")
 
 
 async def _handle_context_command(

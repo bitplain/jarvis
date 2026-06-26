@@ -100,8 +100,10 @@ class FakeMemoryService:
         system_prompt: str | None = None,
         prompt_profile: PromptProfile | None = None,
         chat_kind: str | None = None,
+        household_memory: object | None = None,
+        household_scope_type: str | None = None,
     ) -> list[LLMMessage]:
-        del system_prompt, prompt_profile, chat_kind
+        del system_prompt, prompt_profile, chat_kind, household_memory, household_scope_type
         return [LLMMessage(role="user", content=f"question {chat_id}")]
 
     async def add_message(

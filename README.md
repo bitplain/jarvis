@@ -146,6 +146,57 @@ Business-переменные optional и нужны только для Telegra
 - `POST /telegram/webhook` — вход Telegram updates.
 - `GET /admin/models` — диагностика моделей Yandex/OpenRouter, требует Bearer token из `ADMIN_API_TOKEN`.
 
+## `/status` и ручная память
+
+Stage 4I заменяет старый `/status` на admin-only диагностику Telegram-бота.
+
+Команда `/status` доступна только env admin из `ADMIN_TELEGRAM_IDS`. В private chat non-admin получает `Доступ запрещён.`, в group/supergroup системный статус не раскрывается обычным пользователям.
+
+Поля `/status`:
+
+- API process;
+- PostgreSQL connectivity и latency;
+- Redis connectivity и latency;
+- worker heartbeat `jarvis:worker:heartbeat`;
+- webhook configured/unknown без live destructive calls;
+- due reminders count без текста напоминаний;
+- active LLM provider (`Auto`, `Yandex`, `OpenRouter`);
+- draft streaming enabled/disabled;
+- prompt profiles DB status;
+- access DB status.
+
+Stage 4I также добавляет household context foundation: ручную память только по явным командам.
+
+Примеры private chat:
+
+- `запомни: у нас семейный чат Фемилис`
+- `запомни что молоко обычно добавлять в список покупок`
+- `что ты помнишь?`
+- `забудь: у нас семейный чат Фемилис`
+
+В group/supergroup память работает только через mention/reply, например:
+
+- `@bot_username запомни: это семейный чат Фемилис`
+- `@bot_username что ты помнишь?`
+
+Данные хранятся в PostgreSQL таблице `household_memory_entries`, отдельно по scope `private` или `group`. Active entries текущего scope добавляются в LLM system prompt коротким блоком `Память о текущем чате`, максимум 20 записей / 2000 символов. Память из других чатов не подмешивается и не используется для access decisions.
+
+Безопасность Stage 4I:
+
+- watcher не включается;
+- авто-запоминания из обычных сообщений нет;
+- group messages без mention/reply не читаются ради памяти;
+- voice/media/transcription не добавляются;
+- secret-looking текст (`token`, `password`, `api key`, `Authorization`) не сохраняется.
+
+Readiness без live Telegram calls:
+
+```bash
+uv run --python 3.12 --extra dev python scripts/smoke_status_household_context_readiness.py
+```
+
+Ожидаемый verdict: `PASS_STATUS_HOUSEHOLD_CONTEXT_READINESS`.
+
 ## Настройки LLM-провайдера
 
 Stage 4D добавляет admin-only Telegram UI для выбора активного LLM-агента без изменения `.env` и без ручного изменения Railway Variables.

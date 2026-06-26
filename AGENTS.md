@@ -225,6 +225,24 @@
 - Callback data остаётся коротким (`shop:*`, `rem:*`, `settings:lists:*`) и не содержит пользовательский текст.
 - Stage 4G-1 не включает watcher, voice/transcription, Telegram Business integration, Railway Variables changes и PR #5.
 
+## Stage 4I Status And Household Context
+
+- `/status` — admin-only diagnostics, а не публичный список режимов.
+- Non-admin private `/status` получает `Доступ запрещён.`, group/supergroup status для non-admin не раскрывает системные данные.
+- `/status` показывает только sanitized сведения: API, PostgreSQL, Redis, worker heartbeat, webhook configured/unknown, due reminders count, active provider, draft streaming, prompt profiles, access DB.
+- `/status` не выводит Telegram IDs, tokens, API keys, Authorization headers, model secret values, prompt text или private message text.
+- Worker heartbeat хранится в Redis key `jarvis:worker:heartbeat`; stale/missing heartbeat считается degraded, но не ломает worker jobs.
+- Household context memory работает только по явным командам `запомни:`, `запомни что`, `что ты помнишь?`, `забудь:`.
+- В group/supergroup memory-команды работают только через mention/reply по текущей access policy; обычные group messages без trigger игнорируются и не читаются ради памяти.
+- Memory хранится в PostgreSQL `household_memory_entries`, scoped отдельно для `private` user chat и `group` chat.
+- Memory text limit: 500 chars; active limit: 100 entries per scope; delete is soft-delete.
+- Secret-looking memory text (`token`, `password`, `api key`, `Authorization`) должен отклоняться сообщением `Похоже на секрет. Я не буду это сохранять.`
+- В Telegram HTML выводе memory text обязательно escaping через `html.escape`.
+- Active scoped memory можно inject в LLM system prompt коротким блоком `Память о текущем чате`, максимум 20 записей / 2000 символов.
+- DB error при memory injection не должен ломать LLM answer; нужно sanitized log без текста памяти.
+- Household memory не используется для access decisions и не смешивается между private/group/другими chat ids.
+- Stage 4I не включает watcher, auto-memory, чтение всех сообщений, voice/transcription/media, Telegram Business integration, Railway Variables changes и live destructive Telegram calls.
+
 ## Проверки
 
 Перед финальным отчётом выполнять:
@@ -255,6 +273,7 @@ uv run --python 3.12 --extra dev python scripts/smoke_provider_settings_readines
 uv run --python 3.12 --extra dev python scripts/smoke_access_settings_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_private_ingress_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_prompt_profiles_readiness.py
+uv run --python 3.12 --extra dev python scripts/smoke_status_household_context_readiness.py
 git status --short
 ```
 

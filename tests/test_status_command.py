@@ -7,37 +7,43 @@ from app.core.config import Settings
 
 
 class FakeMessage:
-    def __init__(self, text: str = "/status") -> None:
+    def __init__(self, text: str = "/status", *, user_id: int = 100500) -> None:
         self.text = text
         self.caption = None
-        self.answers: list[str] = []
+        self.from_user = type("User", (), {"id": user_id})()
+        self.chat = type("Chat", (), {"type": "private"})()
+        self.answers: list[dict[str, Any]] = []
 
     async def answer(self, text: str, **kwargs: Any) -> None:
-        self.answers.append(text)
+        self.answers.append({"text": text, **kwargs})
 
 
 @pytest.mark.asyncio
-async def test_status_command_shows_business_flags_and_counts_without_ids() -> None:
+async def test_status_command_shows_diagnostics_without_ids() -> None:
     message = FakeMessage()
 
     await cmd_status(
         message,  # type: ignore[arg-type]
         settings=Settings(
             admin_telegram_ids="100500",
-            guest_mode_enabled=True,
-            business_mode_enabled=True,
-            business_reply_enabled=False,
-            business_admin_only=True,
         ),
-        business_status_counts=(3, 1),
+        status_snapshot={
+            "api": {"ok": True},
+            "postgres": {"ok": True, "latency_ms": 1},
+            "redis": {"ok": True, "latency_ms": 1},
+            "worker": {"ok": True, "age_seconds": 1},
+            "webhook": {"state": "unknown"},
+            "reminders": {"ok": True, "due_count": 0},
+            "provider": {"label": "Auto"},
+            "draft_streaming": {"ok": False},
+            "prompt_profiles": {"ok": True},
+            "access_db": {"ok": True},
+        },
     )
 
-    rendered = message.answers[0]
-    assert "Business Mode: enabled" in rendered
-    assert "Business Reply: disabled" in rendered
-    assert "Business Admin Only: true" in rendered
-    assert "Business Connections: 3" in rendered
-    assert "Business Active Connections: 1" in rendered
+    rendered = message.answers[0]["text"]
+    assert "<b>Jarvis status</b>" in rendered
+    assert "LLM provider: Auto" in rendered
     assert "100500" not in rendered
 
 
@@ -47,8 +53,8 @@ async def test_status_command_for_other_bot_is_ignored() -> None:
 
     await cmd_status(
         message,  # type: ignore[arg-type]
-        settings=Settings(telegram_bot_username="Home_ai_my_bot"),
-        business_status_counts=(0, 0),
+        settings=Settings(admin_telegram_ids="100500", telegram_bot_username="Home_ai_my_bot"),
+        status_snapshot={},
     )
 
     assert message.answers == []

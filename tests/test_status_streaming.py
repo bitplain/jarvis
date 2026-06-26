@@ -10,10 +10,12 @@ class FakeMessage:
     def __init__(self) -> None:
         self.text = "/status"
         self.caption = None
-        self.answers: list[str] = []
+        self.from_user = type("User", (), {"id": 100500})()
+        self.chat = type("Chat", (), {"type": "private"})()
+        self.answers: list[dict[str, Any]] = []
 
     async def answer(self, text: str, **kwargs: Any) -> None:
-        self.answers.append(text)
+        self.answers.append({"text": text, **kwargs})
 
 
 @pytest.mark.asyncio
@@ -29,12 +31,21 @@ async def test_status_shows_streaming_flags_without_secrets() -> None:
             streaming_group_fallback_enabled=True,
             streaming_draft_raw_api_fallback=True,
         ),
-        business_status_counts=(0, 0),
+        status_snapshot={
+            "api": {"ok": True},
+            "postgres": {"ok": True, "latency_ms": 1},
+            "redis": {"ok": True, "latency_ms": 1},
+            "worker": {"ok": True, "age_seconds": 1},
+            "webhook": {"state": "configured"},
+            "reminders": {"ok": True, "due_count": 0},
+            "provider": {"label": "Auto"},
+            "draft_streaming": {"ok": True},
+            "prompt_profiles": {"ok": True},
+            "access_db": {"ok": True},
+        },
     )
 
-    rendered = message.answers[0]
-    assert "Streaming: enabled" in rendered
-    assert "Private Draft Streaming: enabled" in rendered
-    assert "Group Fallback Streaming: enabled" in rendered
-    assert "Draft Raw API Fallback: enabled" in rendered
+    rendered = message.answers[0]["text"]
+    assert "Draft streaming: ✅ enabled" in rendered
+    assert "Webhook: ✅ configured" in rendered
     assert "100500" not in rendered
