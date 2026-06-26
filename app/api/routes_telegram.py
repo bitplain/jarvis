@@ -1,3 +1,4 @@
+import logging
 from typing import Annotated, Any
 
 from aiogram import Bot
@@ -14,6 +15,7 @@ from app.db.session import get_session
 from app.services.business_service import BusinessService
 
 router = APIRouter(prefix="/telegram")
+logger = logging.getLogger(__name__)
 
 
 def verify_webhook_secret(settings: Settings, secret: str | None) -> None:
@@ -46,7 +48,16 @@ async def telegram_webhook(
         request.app.state.dispatcher = dispatcher
     redis = getattr(request.app.state, "redis_pool", None)
     if redis is None:
-        redis = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+        try:
+            redis = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+        except Exception as exc:
+            logger.warning(
+                "telegram_webhook_redis_unavailable",
+                extra={"error_type": type(exc).__name__},
+            )
+            redis = None
+        else:
+            request.app.state.redis_pool = redis
     update = Update.model_validate(payload, context={"bot": bot})
     await dispatcher.feed_update(bot, update, db_session=session, redis=redis, settings=settings)
     return {"status": "accepted"}

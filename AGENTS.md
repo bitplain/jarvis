@@ -151,6 +151,21 @@
 - Access input поддерживает один ID с label, несколько IDs через пробел и несколько IDs по строкам; `/cancel` очищает state.
 - Prompt Profiles, Shopping List, Reminders, Memory и Smart Watcher в Stage 4F-1 не реализуются.
 
+## Stage 4F-2 Prompt Profiles
+
+- Prompt Profiles управляются только через admin-only `/settings -> Профили`.
+- Выбор хранится в PostgreSQL `runtime_settings` ключами `prompt_profile_private`, `prompt_profile_group`, `prompt_profile_watcher`.
+- Допустимые значения: `balanced`, `short`, `deep`, `draft`, `watcher`; отсутствие записи означает `balanced`.
+- В БД, Telegram UI, docs и logs нельзя сохранять или печатать произвольные пользовательские prompt-тексты как runtime profile.
+- Private worker jobs используют `prompt_profile_private`; group/supergroup mention/reply jobs используют `prompt_profile_group`.
+- `prompt_profile_watcher` в Stage 4F-2 только настраивается для будущего watcher и не запускает Smart Watcher.
+- Prompt Profiles callbacks не должны ставить FSM state и не должны перехватывать следующий обычный private text.
+- Synthetic private ingress тесты для `/start`, обычного private text от admin/allowed user и denial unknown user обязательны перед принятием Stage 4F-2.
+- Webhook ingress не должен падать до command/private handler из-за временно недоступного Redis; Redis unavailable логируется sanitized, `/start` и другие non-worker handlers продолжают обрабатываться.
+- Все profiles сохраняют базовые правила Jarvis: ответы только на русском, честное признание неизвестности и запрет выдумывать факты.
+- Guest Mode, Business Mode и streaming sinks не меняются из-за Prompt Profiles.
+- Smart Watcher, списки покупок, напоминания, чтение всех сообщений, изменение streaming и эффект Mira в Stage 4F-2 не реализуются.
+
 ## Проверки
 
 Перед финальным отчётом выполнять:
@@ -175,6 +190,8 @@ uv run --python 3.12 --extra dev python scripts/smoke_group_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_streaming_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_provider_settings_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_access_settings_readiness.py
+uv run --python 3.12 --extra dev python scripts/smoke_private_ingress_readiness.py
+uv run --python 3.12 --extra dev python scripts/smoke_prompt_profiles_readiness.py
 git status --short
 ```
 

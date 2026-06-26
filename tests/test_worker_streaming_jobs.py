@@ -6,7 +6,11 @@ from app.bot.streaming.text_limits import TELEGRAM_TEXT_LIMIT
 from app.core.config import Settings
 from app.llm.base import LLMProviderError
 from app.llm.types import LLMMessage, LLMResponse, LLMStreamChunk
-from app.services.runtime_settings_service import ActiveLLMProvider
+from app.services.runtime_settings_service import (
+    ActiveLLMProvider,
+    PromptProfile,
+    PromptProfileScope,
+)
 from app.workers import jobs
 from app.workers.jobs import process_llm_message
 
@@ -79,7 +83,14 @@ class FakeMemoryService:
         self.added: list[dict[str, object]] = []
         self.__class__.instances.append(self)
 
-    async def build_context(self, *, chat_id: int) -> list[LLMMessage]:
+    async def build_context(
+        self,
+        *,
+        chat_id: int,
+        prompt_profile: PromptProfile | None = None,
+        chat_kind: str | None = None,
+    ) -> list[LLMMessage]:
+        del prompt_profile, chat_kind
         return [LLMMessage(role="user", content=f"question {chat_id}")]
 
     async def add_message(
@@ -121,6 +132,10 @@ class FakeRuntimeSettingsService:
 
     async def get_active_llm_provider(self) -> ActiveLLMProvider:
         return ActiveLLMProvider.AUTO
+
+    async def get_prompt_profile(self, scope: PromptProfileScope) -> PromptProfile:
+        del scope
+        return PromptProfile.BALANCED
 
 
 def patch_worker(

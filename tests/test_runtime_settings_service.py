@@ -3,6 +3,8 @@ import pytest
 from app.services.runtime_settings_service import (
     ACTIVE_LLM_PROVIDER_KEY,
     ActiveLLMProvider,
+    PromptProfile,
+    PromptProfileScope,
     RuntimeSettingsService,
 )
 
@@ -64,3 +66,73 @@ async def test_active_llm_provider_treats_invalid_database_value_as_auto() -> No
     service = RuntimeSettingsService(repository)
 
     assert await service.get_active_llm_provider() == ActiveLLMProvider.AUTO
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scope",
+    [PromptProfileScope.PRIVATE, PromptProfileScope.GROUP, PromptProfileScope.WATCHER],
+)
+async def test_prompt_profile_defaults_to_balanced_when_setting_is_missing(
+    scope: PromptProfileScope,
+) -> None:
+    service = RuntimeSettingsService(FakeRuntimeSettingsRepository())
+
+    assert await service.get_prompt_profile(scope) == PromptProfile.BALANCED
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("scope", "key"),
+    [
+        (PromptProfileScope.PRIVATE, "prompt_profile_private"),
+        (PromptProfileScope.GROUP, "prompt_profile_group"),
+        (PromptProfileScope.WATCHER, "prompt_profile_watcher"),
+    ],
+)
+async def test_prompt_profile_can_be_saved_per_scope(
+    scope: PromptProfileScope,
+    key: str,
+) -> None:
+    repository = FakeRuntimeSettingsRepository()
+    service = RuntimeSettingsService(repository)
+
+    saved = await service.set_prompt_profile(
+        scope,
+        PromptProfile.DEEP.value,
+        updated_by_telegram_id=100500,
+    )
+
+    assert saved == PromptProfile.DEEP
+    assert await service.get_prompt_profile(scope) == PromptProfile.DEEP
+    assert repository.values[key] == PromptProfile.DEEP.value
+    assert repository.updated_by[key] == 100500
+
+
+@pytest.mark.asyncio
+async def test_prompt_profile_rejects_unknown_value() -> None:
+    service = RuntimeSettingsService(FakeRuntimeSettingsRepository())
+
+    with pytest.raises(ValueError, match="unsupported_prompt_profile"):
+        await service.set_prompt_profile(
+            PromptProfileScope.PRIVATE,
+            "mira",
+            updated_by_telegram_id=100500,
+        )
+
+
+@pytest.mark.asyncio
+async def test_prompt_profile_rejects_unknown_scope() -> None:
+    service = RuntimeSettingsService(FakeRuntimeSettingsRepository())
+
+    with pytest.raises(ValueError, match="unsupported_prompt_profile_scope"):
+        await service.get_prompt_profile("secretary")  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_prompt_profile_treats_invalid_database_value_as_balanced() -> None:
+    repository = FakeRuntimeSettingsRepository()
+    repository.values["prompt_profile_group"] = "broken"
+    service = RuntimeSettingsService(repository)
+
+    assert await service.get_prompt_profile(PromptProfileScope.GROUP) == PromptProfile.BALANCED

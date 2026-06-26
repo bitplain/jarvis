@@ -19,6 +19,8 @@ from app.llm.factory import build_llm_provider
 from app.services.memory_service import MemoryService
 from app.services.runtime_settings_service import (
     ActiveLLMProvider,
+    PromptProfile,
+    PromptProfileScope,
     RuntimeSettingsService,
     RuntimeSettingsUnavailable,
 )
@@ -242,14 +244,23 @@ async def process_llm_message(ctx: dict[str, Any], payload: dict[str, Any]) -> N
             MessageRepository(session),
             max_messages=settings.memory_max_messages,
         )
-        messages = await memory.build_context(chat_id=chat_id)
+        runtime_settings = RuntimeSettingsService(RuntimeSettingRepository(session))
         try:
-            active_provider = await RuntimeSettingsService(
-                RuntimeSettingRepository(session)
-            ).get_active_llm_provider()
+            active_provider = await runtime_settings.get_active_llm_provider()
         except RuntimeSettingsUnavailable:
             logger.warning("runtime_settings_unavailable_using_auto_provider")
             active_provider = ActiveLLMProvider.AUTO
+        profile_scope = PromptProfileScope.PRIVATE if is_private else PromptProfileScope.GROUP
+        try:
+            prompt_profile = await runtime_settings.get_prompt_profile(profile_scope)
+        except RuntimeSettingsUnavailable:
+            logger.warning("runtime_settings_unavailable_using_balanced_prompt_profile")
+            prompt_profile = PromptProfile.BALANCED
+        messages = await memory.build_context(
+            chat_id=chat_id,
+            prompt_profile=prompt_profile,
+            chat_kind=profile_scope.value,
+        )
         provider = build_llm_provider(settings, active_provider=active_provider)
         final_text = ""
         sent_final = False

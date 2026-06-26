@@ -4,6 +4,7 @@ from typing import Protocol
 
 from app.db.models import MessageRole
 from app.llm.types import LLMMessage
+from app.services.runtime_settings_service import PromptProfile
 
 
 @dataclass
@@ -70,6 +71,27 @@ class MemoryService:
         "Отвечай кратко, полезно и структурированно. "
         "Если не знаешь ответ, честно скажи, что не знаешь. Не выдумывай факты."
     )
+    profile_prompts = {
+        PromptProfile.BALANCED: "Сохраняй обычный сбалансированный стиль Jarvis.",
+        PromptProfile.SHORT: "Отвечай коротко: сразу к сути, без лишних пояснений.",
+        PromptProfile.DEEP: (
+            "Дай подробный разбор: явно отделяй факты, выводы и неизвестные места."
+        ),
+        PromptProfile.DRAFT: (
+            "Помогай составлять черновик текста. Не утверждай, что сообщение уже отправлено."
+        ),
+        PromptProfile.WATCHER: (
+            "Подготовь наблюдательный анализ для будущего watcher, без автономных действий."
+        ),
+    }
+    chat_kind_prompts = {
+        "private": "Контекст пришёл в личном чате с пользователем.",
+        "group": (
+            "Контекст пришёл в групповом чате; отвечай только на переданный запрос "
+            "и не делай вид, что видишь всю историю группы."
+        ),
+        "watcher": "Контекст относится к будущему watcher, но автономные действия запрещены.",
+    }
 
     def __init__(self, repository: MessageRepositoryProtocol, *, max_messages: int) -> None:
         self.repository = repository
@@ -95,9 +117,40 @@ class MemoryService:
     async def recent_messages(self, *, chat_id: int) -> Sequence[StoredMessage]:
         return await self.repository.recent_messages(chat_id=chat_id, limit=self.max_messages)
 
-    async def build_context(self, *, chat_id: int) -> list[LLMMessage]:
+    def build_system_prompt(
+        self,
+        *,
+        prompt_profile: PromptProfile | None = None,
+        chat_kind: str | None = None,
+    ) -> str:
+        if prompt_profile is None and chat_kind is None:
+            return self.system_prompt
+        prompt_profile = prompt_profile or PromptProfile.BALANCED
+        chat_kind = chat_kind or "private"
+        profile_prompt = self.profile_prompts.get(
+            prompt_profile,
+            self.profile_prompts[PromptProfile.BALANCED],
+        )
+        chat_prompt = self.chat_kind_prompts.get(chat_kind, self.chat_kind_prompts["private"])
+        return f"{self.system_prompt} {profile_prompt} {chat_prompt}"
+
+    async def build_context(
+        self,
+        *,
+        chat_id: int,
+        prompt_profile: PromptProfile | None = None,
+        chat_kind: str | None = None,
+    ) -> list[LLMMessage]:
         recent = await self.recent_messages(chat_id=chat_id)
-        messages = [LLMMessage(role="system", content=self.system_prompt)]
+        messages = [
+            LLMMessage(
+                role="system",
+                content=self.build_system_prompt(
+                    prompt_profile=prompt_profile,
+                    chat_kind=chat_kind,
+                ),
+            )
+        ]
         for message in recent:
             messages.append(LLMMessage(role=message.role.value, content=message.content))
         return messages
