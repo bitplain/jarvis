@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
@@ -5,6 +6,8 @@ from typing import Protocol
 from app.db.models import MessageRole
 from app.llm.types import LLMMessage
 from app.services.runtime_settings_service import PromptProfile
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -36,6 +39,11 @@ class MessageRepositoryProtocol(Protocol):
         ...
 
     async def clear_chat(self, *, chat_id: int) -> None:
+        ...
+
+
+class HouseholdMemoryPromptProtocol(Protocol):
+    async def list_memory_texts_for_prompt(self, scope_type: str, chat_id: int) -> list[str]:
         ...
 
 
@@ -123,11 +131,12 @@ class MemoryService:
         system_prompt: str | None = None,
         prompt_profile: PromptProfile | None = None,
         chat_kind: str | None = None,
+        household_memory_texts: Sequence[str] | None = None,
     ) -> str:
         if system_prompt is not None:
-            return system_prompt
+            return append_household_memory_prompt(system_prompt, household_memory_texts)
         if prompt_profile is None and chat_kind is None:
-            return self.system_prompt
+            return append_household_memory_prompt(self.system_prompt, household_memory_texts)
         prompt_profile = prompt_profile or PromptProfile.BALANCED
         chat_kind = chat_kind or "private"
         profile_prompt = self.profile_prompts.get(
@@ -135,7 +144,10 @@ class MemoryService:
             self.profile_prompts[PromptProfile.BALANCED],
         )
         chat_prompt = self.chat_kind_prompts.get(chat_kind, self.chat_kind_prompts["private"])
-        return f"{self.system_prompt} {profile_prompt} {chat_prompt}"
+        return append_household_memory_prompt(
+            f"{self.system_prompt} {profile_prompt} {chat_prompt}",
+            household_memory_texts,
+        )
 
     async def build_context(
         self,
@@ -144,8 +156,23 @@ class MemoryService:
         system_prompt: str | None = None,
         prompt_profile: PromptProfile | None = None,
         chat_kind: str | None = None,
+        household_memory: HouseholdMemoryPromptProtocol | None = None,
+        household_scope_type: str | None = None,
     ) -> list[LLMMessage]:
         recent = await self.recent_messages(chat_id=chat_id)
+        household_memory_texts: Sequence[str] | None = None
+        if household_memory is not None and household_scope_type is not None:
+            try:
+                household_memory_texts = await household_memory.list_memory_texts_for_prompt(
+                    household_scope_type,
+                    chat_id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "household_memory_prompt_unavailable",
+                    extra={"error_type": type(exc).__name__},
+                )
+                household_memory_texts = None
         messages = [
             LLMMessage(
                 role="system",
@@ -153,6 +180,7 @@ class MemoryService:
                     system_prompt=system_prompt,
                     prompt_profile=prompt_profile,
                     chat_kind=chat_kind,
+                    household_memory_texts=household_memory_texts,
                 ),
             )
         ]
@@ -162,3 +190,25 @@ class MemoryService:
 
     async def reset_chat(self, *, chat_id: int) -> None:
         await self.repository.clear_chat(chat_id=chat_id)
+
+
+def append_household_memory_prompt(
+    base_prompt: str,
+    household_memory_texts: Sequence[str] | None,
+) -> str:
+    if not household_memory_texts:
+        return base_prompt
+    lines = ["", "Память о текущем чате:"]
+    total = 0
+    for text in household_memory_texts[:20]:
+        clean = " ".join(str(text).split())
+        if not clean:
+            continue
+        next_line = f"- {clean}"
+        if total + len(next_line) > 2000:
+            break
+        lines.append(next_line)
+        total += len(next_line)
+    if len(lines) == 2:
+        return base_prompt
+    return f"{base_prompt}\n" + "\n".join(lines)

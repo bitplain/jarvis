@@ -82,7 +82,10 @@ class FakeMemoryService:
         chat_id: int,
         prompt_profile: PromptProfile | None = None,
         chat_kind: str | None = None,
+        household_memory: object | None = None,
+        household_scope_type: str | None = None,
     ) -> list[LLMMessage]:
+        del household_memory, household_scope_type
         self.context_calls.append(
             {
                 "chat_id": chat_id,

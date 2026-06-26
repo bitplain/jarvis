@@ -97,6 +97,11 @@ class ReminderStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class HouseholdMemoryStatus(StrEnum):
+    ACTIVE = "active"
+    DELETED = "deleted"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -179,6 +184,34 @@ class RuntimeSetting(Base):
         onupdate=utcnow,
     )
     updated_by_telegram_id: Mapped[int | None] = mapped_column(BigInteger)
+
+
+class HouseholdMemoryEntry(Base):
+    __tablename__ = "household_memory_entries"
+    __table_args__ = (
+        CheckConstraint(
+            "scope_type IN ('private', 'group')",
+            name="ck_household_memory_entries_scope_type",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'deleted')",
+            name="ck_household_memory_entries_status",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    scope_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    scope_chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    created_by_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        onupdate=utcnow,
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class TelegramAccessEntry(Base):
@@ -411,3 +444,14 @@ Index("ix_shopping_list_items_list_created", ShoppingListItem.list_id, ShoppingL
 Index("ix_reminders_status_remind_at", Reminder.status, Reminder.remind_at)
 Index("ix_reminders_chat_status_remind_at", Reminder.chat_id, Reminder.status, Reminder.remind_at)
 Index("ix_reminders_user_status_remind_at", Reminder.user_id, Reminder.status, Reminder.remind_at)
+Index(
+    "ix_household_memory_scope_status",
+    HouseholdMemoryEntry.scope_type,
+    HouseholdMemoryEntry.scope_chat_id,
+    HouseholdMemoryEntry.status,
+)
+Index(
+    "ix_household_memory_created_by_status",
+    HouseholdMemoryEntry.created_by_user_id,
+    HouseholdMemoryEntry.status,
+)

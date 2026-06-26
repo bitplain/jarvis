@@ -11,12 +11,14 @@ from app.bot.streaming.telegram_fallback import TelegramGroupEditSink
 from app.bot.streaming.text_limits import split_telegram_text
 from app.core.config import get_settings
 from app.db.models import MessageRole, utcnow
+from app.db.repositories.household_memory import HouseholdMemoryRepository
 from app.db.repositories.messages import MessageRepository
 from app.db.repositories.reminders import ReminderRepository
 from app.db.repositories.runtime_settings import RuntimeSettingRepository
 from app.db.session import SessionLocal
 from app.llm.base import LLMProviderError
 from app.llm.factory import build_llm_provider
+from app.services.household_memory_service import HouseholdMemoryService
 from app.services.memory_service import MemoryService
 from app.services.reminder_service import ReminderService, ReminderView
 from app.services.runtime_settings_service import (
@@ -26,6 +28,7 @@ from app.services.runtime_settings_service import (
     RuntimeSettingsService,
     RuntimeSettingsUnavailable,
 )
+from app.services.status_service import record_worker_heartbeat
 from app.services.telegram_formatting import format_reminder_due_html
 
 logger = logging.getLogger(__name__)
@@ -238,16 +241,18 @@ async def _process_group_streaming(
 
 
 async def process_llm_message(ctx: dict[str, Any], payload: dict[str, Any]) -> None:
-    del ctx
     settings = get_settings()
     bot = Bot(token=settings.telegram_bot_token)
     chat_id = int(payload["chat_id"])
     is_private = bool(payload.get("private"))
     async with SessionLocal() as session:
+        redis = ctx.get("redis") if isinstance(ctx, dict) else None
+        await record_worker_heartbeat(redis)
         memory = MemoryService(
             MessageRepository(session),
             max_messages=settings.memory_max_messages,
         )
+        household_memory = HouseholdMemoryService(HouseholdMemoryRepository(session))
         runtime_settings = RuntimeSettingsService(RuntimeSettingRepository(session))
         try:
             active_provider = await runtime_settings.get_active_llm_provider()
@@ -265,6 +270,8 @@ async def process_llm_message(ctx: dict[str, Any], payload: dict[str, Any]) -> N
         messages = await memory.build_context(
             chat_id=chat_id,
             system_prompt=prompt_text,
+            household_memory=household_memory,
+            household_scope_type="private" if is_private else "group",
         )
         provider = build_llm_provider(settings, active_provider=active_provider)
         final_text = ""
@@ -337,11 +344,11 @@ async def process_llm_message(ctx: dict[str, Any], payload: dict[str, Any]) -> N
 
 
 async def deliver_due_reminders(ctx: dict[str, Any]) -> None:
-    del ctx
     settings = get_settings()
     bot = Bot(token=settings.telegram_bot_token)
     logger.info("reminder_due_delivery_started")
     try:
+        await record_worker_heartbeat(ctx.get("redis") if isinstance(ctx, dict) else None)
         async with SessionLocal() as session:
             repository = ReminderRepository(session)
             service = ReminderService(repository)
