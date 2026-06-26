@@ -124,7 +124,7 @@ async def handle_private_text(message: Message, **data: Any) -> None:
                 "user_id": message.from_user.id,
                 "private": True,
             },
-            job_id=job_id,
+            _job_id=job_id,
         )
         log_kwargs: dict[str, Any] = safe_extra(
             chat_type=message.chat.type,

@@ -423,7 +423,7 @@ async def test_duplicate_private_update_id_is_accepted_without_second_enqueue(
     assert redis.jobs == [
         ("process_llm_message", {"chat_id": 100500, "user_id": 100500, "private": True})
     ]
-    assert redis.job_calls[0]["job_id"] == "llm:100500:77"
+    assert redis.job_calls[0]["_job_id"] == "llm:100500:77"
     assert [message["text"] for message in bot.sent_messages] == ["Думаю"]
     assert "telegram_webhook_duplicate_update_skipped" in caplog.text
     assert "Привет" not in caplog.text
@@ -445,7 +445,7 @@ async def test_duplicate_group_update_id_is_accepted_without_second_enqueue(
     assert redis.jobs == [
         ("process_llm_message", {"chat_id": -100123, "user_id": 100500, "private": False})
     ]
-    assert redis.job_calls[0]["job_id"] == "llm:-100123:88"
+    assert redis.job_calls[0]["_job_id"] == "llm:-100123:88"
     assert len(bot.chat_actions) == 1
 
 

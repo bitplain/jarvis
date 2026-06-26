@@ -32,7 +32,7 @@
 - При Redis failure guard работает fail-open:
   - логирует sanitized `telegram_webhook_dedup_unavailable`;
   - продолжает webhook processing, чтобы Redis outage не ломал `/start` и settings callbacks.
-- Private/group LLM enqueue теперь использует стабильный arq `job_id=llm:<chat_id>:<message_id>`.
+- Private/group LLM enqueue теперь использует стабильный arq `_job_id=llm:<chat_id>:<message_id>`.
 - Логи не содержат token, webhook secret, Authorization headers, полный Telegram update или текст сообщения.
 
 ## Tests

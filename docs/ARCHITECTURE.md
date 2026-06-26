@@ -25,7 +25,7 @@ Jarvis не использует userbot/MTProto.
 5. FastAPI передаёт новый update в aiogram Dispatcher.
 6. Middleware пропускает env admin из `ADMIN_TELEGRAM_IDS` или пользователя из PostgreSQL allowlist.
 7. Private handler сохраняет входящее сообщение в PostgreSQL.
-8. Handler ставит arq job `process_llm_message` со стабильным `job_id=llm:<chat_id>:<message_id>`.
+8. Handler ставит arq job `process_llm_message` со стабильным `_job_id=llm:<chat_id>:<message_id>`.
 9. Worker собирает system prompt и последние `MEMORY_MAX_MESSAGES`.
 10. Worker вызывает LLM provider через streaming interface, если `STREAMING_ENABLED=true`.
 11. В private chat worker пробует Telegram `sendMessageDraft` с non-zero `draft_id`.
@@ -160,7 +160,7 @@ Production Telegram ingress остаётся `POST /telegram/webhook`; router п
 При `APP_ENV=production` API startup после startup migrations выполняет Telegram webhook self-healing setup через общую sanitized logic `app.services.telegram_webhook_setup`. Это восстанавливает state Telegram webhook после deploy, если ранее он был удалён, но не делает live Telegram calls в dev/test и не запускается в worker.
 Если `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET` или `PUBLIC_BASE_URL` отсутствуют, либо Telegram API временно недоступен, API startup не падает: пишется sanitized `telegram_webhook_setup_failed` с `webhook_host` и `webhook_path`, без token/secret/header.
 Webhook route защищён от повторной доставки одного Telegram update через Redis `SET NX` guard по `update_id` с TTL 10 минут. Duplicate delivery логируется как `telegram_webhook_duplicate_update_skipped` с sanitized `update_id`, `message_id`, masked chat/user ids и chat type; полный текст сообщения, token, secret и headers не логируются. Если Redis недоступен, guard fail-open логирует `telegram_webhook_dedup_unavailable` и продолжает обработку, чтобы временная Redis проблема не превратилась в потерю `/start`/settings callbacks.
-Private и group routers ставят LLM jobs со стабильным arq `job_id=llm:<chat_id>:<message_id>`. Это дополнительная защита от duplicate enqueue при повторной доставке одного и того же Telegram message.
+Private и group routers ставят LLM jobs со стабильным arq `_job_id=llm:<chat_id>:<message_id>`. Это дополнительная защита от duplicate enqueue при повторной доставке одного и того же Telegram message.
 Polling readiness и polling runner могут удалять webhook только для local/Mac polling smoke. При `APP_ENV=production` они не выполняют `deleteWebhook`, чтобы production webhook не замолчал после диагностического smoke.
 
 ## Guest Mode

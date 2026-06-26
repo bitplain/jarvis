@@ -48,7 +48,7 @@ Railway production запускается в webhook mode: отдельный se
 
 При `APP_ENV=production` `jarvis-api` выполняет Telegram webhook self-healing setup на startup после миграций: использует `PUBLIC_BASE_URL`, `TELEGRAM_BOT_TOKEN` и `TELEGRAM_WEBHOOK_SECRET`, логирует только sanitized `webhook_host`/`webhook_path` и не валит startup при отсутствующем env или временной ошибке Telegram API. Worker webhook setup не выполняет.
 
-Webhook ingress идемпотентен по Telegram `update_id`: перед передачей update в aiogram Dispatcher API ставит Redis key `telegram:update:<update_id>` через `SET NX` с коротким TTL. Повторный delivery того же update возвращает `200 OK`, логирует sanitized `telegram_webhook_duplicate_update_skipped` и не создаёт второй `process_llm_message`. Если Redis временно недоступен, guard fail-open логирует `telegram_webhook_dedup_unavailable` и не ломает `/start`/webhook обработку. LLM enqueue дополнительно использует стабильный arq `job_id=llm:<chat_id>:<message_id>`.
+Webhook ingress идемпотентен по Telegram `update_id`: перед передачей update в aiogram Dispatcher API ставит Redis key `telegram:update:<update_id>` через `SET NX` с коротким TTL. Повторный delivery того же update возвращает `200 OK`, логирует sanitized `telegram_webhook_duplicate_update_skipped` и не создаёт второй `process_llm_message`. Если Redis временно недоступен, guard fail-open логирует `telegram_webhook_dedup_unavailable` и не ломает `/start`/webhook обработку. LLM enqueue дополнительно использует стабильный arq `_job_id=llm:<chat_id>:<message_id>`.
 
 ## Куда вставлять секреты
 

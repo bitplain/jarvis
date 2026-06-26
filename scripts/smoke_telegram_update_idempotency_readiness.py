@@ -57,8 +57,8 @@ def run_readiness() -> TelegramUpdateIdempotencyReadinessResult:
         "OK"
         if 'job_id = f"llm:{message.chat.id}:{message.message_id}"' in private_router
         and 'job_id = f"llm:{message.chat.id}:{message.message_id}"' in group_router
-        and "job_id=job_id" in private_router
-        and "job_id=job_id" in group_router
+        and "_job_id=job_id" in private_router
+        and "_job_id=job_id" in group_router
         else "MISSING"
     )
     result.statuses["duplicate_private_test"] = (

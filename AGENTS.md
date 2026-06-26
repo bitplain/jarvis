@@ -117,7 +117,7 @@
 - Production webhook route должен быть идемпотентен по Telegram `update_id`: повторный delivery одного update возвращает `200 OK` и не вызывает aiogram Dispatcher второй раз.
 - Dedup guard использует Redis key `telegram:update:<update_id>` через `SET NX` с коротким TTL; при Redis error guard fail-open логирует sanitized `telegram_webhook_dedup_unavailable` и продолжает обработку, чтобы не ломать `/start` и settings callbacks.
 - Duplicate skip логируется sanitized событием `telegram_webhook_duplicate_update_skipped` с `update_id`, `message_id`, chat type и masked chat/user ids; полный текст сообщения, token, secret, Authorization headers и полный update не логируются.
-- Private/group LLM enqueue должен использовать стабильный arq `job_id=llm:<chat_id>:<message_id>`, чтобы повторная доставка одного Telegram message не создавала несколько `process_llm_message`.
+- Private/group LLM enqueue должен передавать стабильный arq `_job_id=llm:<chat_id>:<message_id>`, чтобы повторная доставка одного Telegram message не создавала несколько `process_llm_message`.
 - Readiness script `scripts/smoke_telegram_update_idempotency_readiness.py` не должен вызывать Telegram API, `getUpdates`, `setWebhook` или `deleteWebhook`.
 
 ## Stage 4D Provider Settings
