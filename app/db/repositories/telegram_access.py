@@ -74,7 +74,7 @@ class TelegramAccessRepository:
                 created_at=now,
                 updated_at=now,
             )
-            .on_conflict_do_update(
+            .on_conflict_do_nothing(
                 index_elements=[
                     TelegramAccessEntry.entry_type,
                     TelegramAccessEntry.telegram_id,

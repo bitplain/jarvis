@@ -121,7 +121,9 @@ async def run_readiness() -> AccessSettingsReadinessResult:
 
     commands = _read("app/bot/routers/commands.py")
     result.statuses["whoami"] = (
-        "OK" if "Command(\"whoami\")" in commands and "Ваш Telegram ID" in commands else "MISSING"
+        "OK"
+        if "Command(\"whoami\")" in commands and "Ваш Telegram user ID" in commands
+        else "MISSING"
     )
     required_callbacks = [
         "settings:access",

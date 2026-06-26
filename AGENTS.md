@@ -140,11 +140,12 @@
 - `ADMIN_TELEGRAM_IDS` остаются главными env admin, всегда имеют доступ и не переносятся в таблицу автоматически.
 - DB allowed user получает доступ к Jarvis, но не становится admin и не может управлять `/settings`.
 - `/settings -> Доступ` и callback `settings:access:*` доступны только admin user из `ADMIN_TELEGRAM_IDS`.
-- `/whoami` доступен всем и показывает только Telegram user ID, chat ID и тип чата текущего сообщения.
+- `/whoami` доступен всем и показывает только Telegram user ID, тип чата и chat ID текущего сообщения; в group/supergroup он дополнительно показывает, разрешены ли именно текущий user и текущая group, без раскрытия списков.
 - Если список разрешённых групп пустой, authorized user mention/reply в любой группе работает как раньше.
 - После добавления хотя бы одной разрешённой группы group response требует allowed user и allowed group.
 - Unknown private user получает `Доступ запрещён.`, unknown group/supergroup user молча игнорируется.
-- В логах использовать sanitized события `telegram_access_user_added`, `telegram_access_user_removed`, `telegram_access_group_added`, `telegram_access_group_removed`, `telegram_access_denied_private`, `telegram_access_denied_group_silent`.
+- В логах использовать sanitized события `telegram_access_user_added`, `telegram_access_user_removed`, `telegram_access_group_added`, `telegram_access_group_removed`, `telegram_access_denied_private`, `telegram_access_denied_group_silent`, `telegram_access_decision`.
+- `telegram_access_decision` допускает только sanitized поля `chat_type`, `chat_id`, `user_id`, `is_admin`, `is_user_allowed`, `has_group_allowlist`, `is_group_allowed`, `is_mention_or_reply`, `decision`, `reason`; текст сообщений, labels, токены, Authorization headers, prompts и полный Telegram update не логируются.
 - Access settings FSM input должен перехватывать следующий private text до generic private LLM handler: не должно быть `process_llm_message` и `Принял. Готовлю ответ.` во время add/remove user/group state.
 - Webhook runtime должен переиспользовать persistent aiogram Dispatcher на app instance; transient Dispatcher per update ломает FSM MemoryStorage между callback и message.
 - Access input поддерживает один ID с label, несколько IDs через пробел и несколько IDs по строкам; `/cancel` очищает state.

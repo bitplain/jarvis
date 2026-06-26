@@ -488,11 +488,26 @@ async def cmd_whoami(message: Message, **data: Any) -> None:
     if message.from_user is None:
         await message.answer("Не удалось определить Telegram user ID.")
         return
-    text = (
-        f"Ваш Telegram ID: {message.from_user.id}\n"
-        f"Chat ID: {message.chat.id}\n"
-        f"Тип чата: {message.chat.type}"
-    )
+    lines = [
+        f"Ваш Telegram user ID: {message.from_user.id}",
+        f"Тип чата: {message.chat.type}",
+        f"Telegram chat ID: {message.chat.id}",
+    ]
+    if message.chat.type in {"group", "supergroup"} and settings is not None:
+        user_allowed = False
+        group_allowed = False
+        session = data.get("db_session")
+        if session is not None:
+            try:
+                access_service = _telegram_access_service(session, settings.admin_ids)
+                user_allowed = await access_service.is_allowed_user(message.from_user.id)
+                group_allowed = await access_service.is_allowed_group(message.chat.id)
+            except TelegramAccessUnavailable:
+                user_allowed = False
+                group_allowed = False
+        lines.append(f"Пользователь разрешён: {'да' if user_allowed else 'нет'}")
+        lines.append(f"Группа разрешена: {'да' if group_allowed else 'нет'}")
+    text = "\n".join(lines)
     kwargs: dict[str, Any] = {}
     if message.chat.type in {"group", "supergroup"}:
         kwargs["reply_to_message_id"] = message.message_id
