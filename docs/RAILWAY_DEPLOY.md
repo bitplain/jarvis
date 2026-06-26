@@ -237,7 +237,7 @@ PASS_PROVIDER_SETTINGS_READINESS
 | `relation "messages" does not exist` или `relation "runtime_settings" does not exist` | PostgreSQL migrations не применились до обработки webhook/job. | Проверить `preDeployCommand = "alembic upgrade head"` и start command `alembic upgrade head && python -m uvicorn...` в `railway.api.toml`, затем логи API deploy/startup. |
 | `provider_not_configured` | LLM provider variables не заданы в worker service. | Добавить Yandex/OpenRouter variables в `jarvis-worker`. |
 | `llm_failed` | Provider доступен, но запрос завершился ошибкой модели, сети или auth. | Проверить worker logs, provider status, model id и ключи без вывода секретов. |
-| Railway logs show `[err]`, but task has `●` | Railway может помечать stderr как `[err]`, хотя task ещё выполняется. | Смотреть verdict, traceback, exit code и последующие строки; не считать один marker `[err]` падением без контекста. |
+| Railway logs show `[err]`, but task has `●` | Railway может помечать stderr как `[err]`, хотя task ещё выполняется. | Смотреть verdict, traceback, exit code и последующие строки; не считать один marker `[err]` падением без контекста. App-controlled `DEBUG`/`INFO` logs должны идти в stdout после logging hygiene hotfix. |
 
 ## Logs
 
@@ -248,6 +248,13 @@ PASS_PROVIDER_SETTINGS_READINESS
 - PostgreSQL/Redis service status: connection errors и restarts.
 
 В логах нельзя печатать Telegram token, provider keys, Authorization headers, `ADMIN_API_TOKEN`, полные Telegram IDs и приватный текст сообщений.
+
+Logging hygiene contract:
+
+- `app/core/logging.py` направляет normal operational `DEBUG`/`INFO` logs в stdout, а `WARNING`/`ERROR`/`exception` в stderr.
+- Redaction filter маскирует Telegram Bot API URLs вида `https://api.telegram.org/bot<TOKEN>/...`, Authorization/Bearer headers, token/key/password/secret fields и nested structured `extra`.
+- `httpx`, `httpcore` и `aiohttp` request info logs понижены до `WARNING`, чтобы Telegram request URL не печатался как routine log.
+- arq worker подключает тот же config через `on_startup`; если сама arq/Railway runtime пишет ранний сторонний stderr до app startup, это documented limitation, и такой `[err]` нужно оценивать по traceback/job status.
 
 ## Rollback
 

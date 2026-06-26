@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 import httpx
 
 from app.core.config import Settings
+from app.core.logging import redact
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +54,8 @@ class WebhookResult:
 
 
 def sanitize_webhook_error(value: str) -> str:
-    sanitized = re.sub(r"bot\d+:[A-Za-z0-9_-]+", "bot<redacted>", value)
-    sanitized = re.sub(r"Bearer\s+[A-Za-z0-9._~+/=-]+", "Bearer <redacted>", sanitized)
+    sanitized = str(redact(value))
+    sanitized = re.sub(r"bot\d+:[A-Za-z0-9_-]+", "bot<redacted>", sanitized)
     return sanitized[:240]
 
 
