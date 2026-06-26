@@ -172,6 +172,19 @@
 - Guest Mode, Business Mode и streaming sinks не меняются из-за Prompt Profiles.
 - Smart Watcher, списки покупок, напоминания, чтение всех сообщений, изменение streaming и эффект Mira в Stage 4F-2 не реализуются.
 
+## Stage 4F-3 Mira-style Private Streaming
+
+- Mira-style draft streaming включается отдельным env flag `TELEGRAM_PRIVATE_DRAFT_STREAMING_ENABLED`; default `false`.
+- `STREAMING_ENABLED=true` и `STREAMING_PRIVATE_DRAFT_ENABLED=true` остаются общими условиями private streaming.
+- Новый режим работает только в private chat: сначала rich draft thinking `Думаю` через `sendRichMessageDraft`, затем text draft updates того же non-zero `draft_id`.
+- Финальный ответ всегда отправляется обычным `sendMessage`; в БД сохраняется только один полный assistant response.
+- Если rich draft недоступен или падает, job должен безопасно вернуться к text draft `Думаю`; если text draft тоже падает, используется старый private fallback без падения job.
+- Group/supergroup path не использует `sendMessageDraft` и `sendRichMessageDraft`; остаётся текущий `sendChatAction` + provisional/edit/final fallback.
+- Guest Mode остаётся final-only через `answerGuestQuery`, без draft/rich draft/streaming.
+- В логах нельзя выводить token/key/header, полный Telegram update, приватный текст chunks или provider response body; draft failures логируются sanitized событиями.
+- Exact Mira letter-growth не гарантируется backend: Jarvis обновляет один draft, а Telegram client сам анимирует изменение preview.
+- Watcher, shopping list, reminders, чтение всех сообщений и Railway Variables в Stage 4F-3 не меняются.
+
 ## Проверки
 
 Перед финальным отчётом выполнять:
@@ -194,6 +207,7 @@ uv run --python 3.12 --extra dev python scripts/smoke_polling_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_regular_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_group_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_streaming_readiness.py
+uv run --python 3.12 --extra dev python scripts/smoke_mira_private_streaming_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_provider_settings_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_access_settings_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_private_ingress_readiness.py
