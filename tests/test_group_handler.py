@@ -41,7 +41,8 @@ class FakeRedis:
     def __init__(self) -> None:
         self.jobs: list[tuple[str, dict[str, Any]]] = []
 
-    async def enqueue_job(self, name: str, payload: dict[str, Any]) -> None:
+    async def enqueue_job(self, name: str, payload: dict[str, Any], **kwargs: Any) -> None:
+        del kwargs
         self.jobs.append((name, payload))
 
 

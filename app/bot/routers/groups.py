@@ -171,6 +171,7 @@ async def handle_group_message(message: Message, **data: Any) -> None:
     if redis is None:
         await message.answer("Worker временно недоступен.")
         return
+    job_id = f"llm:{message.chat.id}:{message.message_id}"
     await redis.enqueue_job(
         "process_llm_message",
         {
@@ -178,7 +179,17 @@ async def handle_group_message(message: Message, **data: Any) -> None:
             "user_id": message.from_user.id,
             "private": False,
         },
+        job_id=job_id,
     )
+    log_kwargs: dict[str, Any] = safe_extra(
+        chat_type=message.chat.type,
+        chat_id_masked=_mask_int(message.chat.id),
+        user_id_masked=_mask_int(message.from_user.id),
+        message_id=message.message_id,
+        private=False,
+        job_id=job_id,
+    )
+    logger.info("telegram_llm_job_enqueued", **log_kwargs)
     _log_group_routing(message=message, decision=decision, enqueue_job=True)
     await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
 

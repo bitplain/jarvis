@@ -19,17 +19,20 @@ Jarvis не использует userbot/MTProto.
 ## Поток Telegram private chat
 
 1. Telegram отправляет update в `POST /telegram/webhook`.
-2. FastAPI проверяет webhook secret и передаёт update в aiogram Dispatcher.
-3. Middleware пропускает env admin из `ADMIN_TELEGRAM_IDS` или пользователя из PostgreSQL allowlist.
-4. Private handler сохраняет входящее сообщение в PostgreSQL.
-5. Handler ставит arq job `process_llm_message`.
-6. Worker собирает system prompt и последние `MEMORY_MAX_MESSAGES`.
-7. Worker вызывает LLM provider через streaming interface, если `STREAMING_ENABLED=true`.
-8. В private chat worker пробует Telegram `sendMessageDraft` с non-zero `draft_id`.
-9. Если включён `TELEGRAM_PRIVATE_DRAFT_STREAMING_ENABLED=true`, worker сначала пробует `sendRichMessageDraft` с rich thinking block `Думаю`, затем обновляет тот же `draft_id` обычным text draft.
-10. `StreamBuffer` обновляет draft не на каждый token, а по интервалу, приросту текста, границе предложения или финалу.
-11. Если draft API недоступен, текущий job переключается на fallback sink.
-12. После генерации worker отправляет финальный `sendMessage` и сохраняет только финальный ответ.
+2. FastAPI проверяет webhook secret и claim-ит Telegram `update_id` в Redis key `telegram:update:<update_id>` через `SET NX`.
+3. Если такой `update_id` уже был принят, route возвращает `200 OK`, логирует sanitized duplicate event и не вызывает aiogram Dispatcher второй раз.
+4. Если Redis dedup временно недоступен, route fail-open продолжает обработку, чтобы не ломать `/start` и webhook ingress.
+5. FastAPI передаёт новый update в aiogram Dispatcher.
+6. Middleware пропускает env admin из `ADMIN_TELEGRAM_IDS` или пользователя из PostgreSQL allowlist.
+7. Private handler сохраняет входящее сообщение в PostgreSQL.
+8. Handler ставит arq job `process_llm_message` со стабильным `job_id=llm:<chat_id>:<message_id>`.
+9. Worker собирает system prompt и последние `MEMORY_MAX_MESSAGES`.
+10. Worker вызывает LLM provider через streaming interface, если `STREAMING_ENABLED=true`.
+11. В private chat worker пробует Telegram `sendMessageDraft` с non-zero `draft_id`.
+12. Если включён `TELEGRAM_PRIVATE_DRAFT_STREAMING_ENABLED=true`, worker сначала пробует `sendRichMessageDraft` с rich thinking block `Думаю`, затем обновляет тот же `draft_id` обычным text draft.
+13. `StreamBuffer` обновляет draft не на каждый token, а по интервалу, приросту текста, границе предложения или финалу.
+14. Если draft API недоступен, текущий job переключается на fallback sink.
+15. После генерации worker отправляет финальный `sendMessage` и сохраняет только финальный ответ.
 
 ## Forwarded Message Assistant
 
@@ -156,6 +159,8 @@ Access input FSM принимает один ID с label или нескольк
 Production Telegram ingress остаётся `POST /telegram/webhook`; router подключается в `app/main.py` через `routes_telegram.router`, а setup script формирует URL как `<PUBLIC_BASE_URL>/telegram/webhook`.
 При `APP_ENV=production` API startup после startup migrations выполняет Telegram webhook self-healing setup через общую sanitized logic `app.services.telegram_webhook_setup`. Это восстанавливает state Telegram webhook после deploy, если ранее он был удалён, но не делает live Telegram calls в dev/test и не запускается в worker.
 Если `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET` или `PUBLIC_BASE_URL` отсутствуют, либо Telegram API временно недоступен, API startup не падает: пишется sanitized `telegram_webhook_setup_failed` с `webhook_host` и `webhook_path`, без token/secret/header.
+Webhook route защищён от повторной доставки одного Telegram update через Redis `SET NX` guard по `update_id` с TTL 10 минут. Duplicate delivery логируется как `telegram_webhook_duplicate_update_skipped` с sanitized `update_id`, `message_id`, masked chat/user ids и chat type; полный текст сообщения, token, secret и headers не логируются. Если Redis недоступен, guard fail-open логирует `telegram_webhook_dedup_unavailable` и продолжает обработку, чтобы временная Redis проблема не превратилась в потерю `/start`/settings callbacks.
+Private и group routers ставят LLM jobs со стабильным arq `job_id=llm:<chat_id>:<message_id>`. Это дополнительная защита от duplicate enqueue при повторной доставке одного и того же Telegram message.
 Polling readiness и polling runner могут удалять webhook только для local/Mac polling smoke. При `APP_ENV=production` они не выполняют `deleteWebhook`, чтобы production webhook не замолчал после диагностического smoke.
 
 ## Guest Mode

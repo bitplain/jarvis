@@ -1,5 +1,6 @@
 import logging
 from collections.abc import AsyncIterator
+from itertools import count
 from typing import Any
 
 import pytest
@@ -22,6 +23,8 @@ from app.services.runtime_settings_service import (
 )
 from app.services.shopping_service import InMemoryShoppingRepository
 from app.services.telegram_access_service import AccessEntry
+
+UPDATE_IDS = count(1000)
 
 
 class FakeTelegramMessage:
@@ -86,13 +89,29 @@ class FakeBot:
 class FakeRedis:
     def __init__(self) -> None:
         self.jobs: list[tuple[str, dict[str, Any]]] = []
+        self.job_calls: list[dict[str, Any]] = []
+        self.keys: dict[str, str] = {}
 
-    async def enqueue_job(self, name: str, payload: dict[str, Any]) -> None:
+    async def enqueue_job(self, name: str, payload: dict[str, Any], **kwargs: Any) -> None:
         self.jobs.append((name, payload))
+        self.job_calls.append({"name": name, "payload": payload, **kwargs})
+
+    async def set(self, key: str, value: str, *, ex: int, nx: bool) -> bool | None:
+        del ex
+        if nx and key in self.keys:
+            return None
+        self.keys[key] = value
+        return True
 
 
 class BrokenRedisConnect(RuntimeError):
     pass
+
+
+class BrokenDedupRedis(FakeRedis):
+    async def set(self, key: str, value: str, *, ex: int, nx: bool) -> bool | None:
+        del key, value, ex, nx
+        raise BrokenRedisConnect("redis unavailable")
 
 
 class FakeMessageRepository:
@@ -224,11 +243,17 @@ class FakeRuntimeSettingsService:
         return timezone
 
 
-def private_update(*, user_id: int, text: str = "тест") -> dict[str, object]:
+def private_update(
+    *,
+    user_id: int,
+    text: str = "тест",
+    update_id: int | None = None,
+    message_id: int = 10,
+) -> dict[str, object]:
     return {
-        "update_id": 101,
+        "update_id": next(UPDATE_IDS) if update_id is None else update_id,
         "message": {
-            "message_id": 10,
+            "message_id": message_id,
             "date": 1_700_000_000,
             "chat": {"id": user_id, "type": "private", "first_name": "User"},
             "from": {"id": user_id, "is_bot": False, "first_name": "User"},
@@ -243,10 +268,11 @@ def callback_update(
     user_id: int = 100500,
     chat_id: int | None = None,
     chat_type: str = "private",
+    update_id: int | None = None,
 ) -> dict[str, object]:
     chat_id = chat_id or user_id
     return {
-        "update_id": 103,
+        "update_id": next(UPDATE_IDS) if update_id is None else update_id,
         "callback_query": {
             "id": "callback-1",
             "from": {"id": user_id, "is_bot": False, "first_name": "User"},
@@ -270,9 +296,11 @@ def group_update(
     chat_type: str = "supergroup",
     text: str = "@jarvis_bot тест",
     reply_to_user_id: int | None = None,
+    update_id: int | None = None,
+    message_id: int = 11,
 ) -> dict[str, object]:
     message: dict[str, object] = {
-        "message_id": 11,
+        "message_id": message_id,
         "date": 1_700_000_000,
         "chat": {"id": chat_id, "type": chat_type, "title": "Test group"},
         "from": {"id": user_id, "is_bot": False, "first_name": "User"},
@@ -291,7 +319,7 @@ def group_update(
             "text": "предыдущее сообщение",
         }
     return {
-        "update_id": 102,
+        "update_id": next(UPDATE_IDS) if update_id is None else update_id,
         "message": message,
     }
 
@@ -374,6 +402,94 @@ async def test_webhook_private_admin_update_enqueues_once(
         ("process_llm_message", {"chat_id": 100500, "user_id": 100500, "private": True})
     ]
     assert [message["text"] for message in bot.sent_messages] == ["Думаю"]
+
+
+@pytest.mark.asyncio
+async def test_duplicate_private_update_id_is_accepted_without_second_enqueue(
+    ingress_app: tuple[Any, FakeBot, FakeRedis],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    app, bot, redis = ingress_app
+    update = private_update(user_id=100500, text="Привет", update_id=901, message_id=77)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        first_response = await client.post("/telegram/webhook", json=update)
+        second_response = await client.post("/telegram/webhook", json=update)
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert first_response.json() == {"status": "accepted"}
+    assert second_response.json() == {"status": "accepted"}
+    assert redis.jobs == [
+        ("process_llm_message", {"chat_id": 100500, "user_id": 100500, "private": True})
+    ]
+    assert redis.job_calls[0]["job_id"] == "llm:100500:77"
+    assert [message["text"] for message in bot.sent_messages] == ["Думаю"]
+    assert "telegram_webhook_duplicate_update_skipped" in caplog.text
+    assert "Привет" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_duplicate_group_update_id_is_accepted_without_second_enqueue(
+    ingress_app: tuple[Any, FakeBot, FakeRedis],
+) -> None:
+    app, bot, redis = ingress_app
+    update = group_update(user_id=100500, update_id=902, message_id=88)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        first_response = await client.post("/telegram/webhook", json=update)
+        second_response = await client.post("/telegram/webhook", json=update)
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert redis.jobs == [
+        ("process_llm_message", {"chat_id": -100123, "user_id": 100500, "private": False})
+    ]
+    assert redis.job_calls[0]["job_id"] == "llm:-100123:88"
+    assert len(bot.chat_actions) == 1
+
+
+@pytest.mark.asyncio
+async def test_duplicate_start_update_id_is_accepted_without_second_reply(
+    ingress_app: tuple[Any, FakeBot, FakeRedis],
+) -> None:
+    app, bot, redis = ingress_app
+    update = private_update(user_id=100500, text="/start", update_id=903, message_id=89)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        first_response = await client.post("/telegram/webhook", json=update)
+        second_response = await client.post("/telegram/webhook", json=update)
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert redis.jobs == []
+    assert [message["text"] for message in bot.sent_messages] == [
+        "Jarvis готов. Пишите вопрос на русском языке."
+    ]
+
+
+@pytest.mark.asyncio
+async def test_webhook_dedup_redis_failure_still_feeds_dispatcher(
+    ingress_app: tuple[Any, FakeBot, FakeRedis],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    app, bot, _ = ingress_app
+    broken_redis = BrokenDedupRedis()
+    app.state.redis_pool = broken_redis
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/telegram/webhook",
+            json=private_update(user_id=100500, text="Привет", update_id=904, message_id=90),
+        )
+
+    assert response.status_code == 200
+    assert broken_redis.jobs == [
+        ("process_llm_message", {"chat_id": 100500, "user_id": 100500, "private": True})
+    ]
+    assert [message["text"] for message in bot.sent_messages] == ["Думаю"]
+    assert "telegram_webhook_dedup_unavailable" in caplog.text
+    assert "Привет" not in caplog.text
 
 
 @pytest.mark.asyncio
