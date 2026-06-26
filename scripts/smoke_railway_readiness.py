@@ -38,6 +38,7 @@ def run_readiness() -> RailwayReadinessResult:
     api_config = _read("railway.api.toml")
     worker_config = _read("railway.worker.toml")
     startup_migrations = _read("app/services/startup_migrations.py")
+    arq_settings = _read("app/workers/arq_settings.py")
 
     required_env = [
         "APP_ENV=production",
@@ -96,6 +97,12 @@ def run_readiness() -> RailwayReadinessResult:
     )
     result.statuses["worker_start_command"] = (
         "OK" if "arq app.workers.arq_settings.WorkerSettings" in worker_config else "MISSING"
+    )
+    result.statuses["worker_reminder_job"] = (
+        "OK"
+        if "deliver_due_reminders" in arq_settings
+        and "cron(deliver_due_reminders" in arq_settings
+        else "MISSING"
     )
     result.statuses["worker_no_alembic"] = (
         "OK" if "alembic" not in worker_config.lower() else "UNEXPECTED_ALEMBIC"

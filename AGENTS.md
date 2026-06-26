@@ -196,6 +196,21 @@
 - Старые длинные accepted/provisional тексты не используются в актуальном app/tests/docs, кроме исторических отчётов.
 - Watcher, shopping list, reminders, prompt profiles, access settings, webhook self-healing, Railway Variables и PR #5 в Stage 4F-4 не меняются.
 
+## Stage 4G Lists And Reminders
+
+- Списки покупок и напоминания реализуются собственной логикой Jarvis, а не Telegram Business checklists.
+- Stage 4G принимает только явные команды/обращения пользователя; watcher, авто-чтение всех сообщений и “бот сам заметил надо купить” не включаются.
+- Parser deterministic и ограниченный: shopping add/show/delete/clear_done и reminders `через N минут/часов`, `сегодня/завтра в HH[:MM]`, `DD.MM в HH[:MM]`.
+- Ambiguous normal chat должен идти в обычный LLM path; command-like, но непонятное напоминание получает help text и не вызывает LLM.
+- Private commands доступны admin или DB allowed user; group commands доступны только mention/reply от allowed user в allowed group по текущей access policy.
+- Telegram UI использует messages + inline buttons; пользовательский текст в HTML обязательно escaping через `html.escape`.
+- Raw MarkdownV2 не используется для списков/напоминаний; inline button labels plain text.
+- Данные хранятся в PostgreSQL таблицах `shopping_lists`, `shopping_list_items`, `reminders`.
+- Private shopping scope: `scope_type=private`, `scope_chat_id=user_id`, `owner_user_id=user_id`; group scope: `scope_type=group`, `scope_chat_id=group_chat_id`, `owner_user_id=null`.
+- Reminder timezone по умолчанию `Europe/Moscow`, хранение в БД UTC.
+- Reminder delivery выполняет arq worker job `deliver_due_reminders`; reminder помечается `sent` только после успешного Telegram send.
+- Stage 4G не трогает Railway Variables, Telegram Business integration, watcher, private ingress, access routing, prompt profiles, webhook self-healing, Mira streaming и group fallback dedup.
+
 ## Проверки
 
 Перед финальным отчётом выполнять:
@@ -220,6 +235,7 @@ uv run --python 3.12 --extra dev python scripts/smoke_group_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_streaming_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_mira_private_streaming_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_thinking_text_readiness.py
+uv run --python 3.12 --extra dev python scripts/smoke_lists_reminders_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_provider_settings_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_access_settings_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_private_ingress_readiness.py

@@ -3,8 +3,8 @@
 ## Компоненты
 
 - `api` — FastAPI приложение с health, ready, Telegram webhook и admin diagnostics.
-- `worker` — arq worker, который выполняет LLM generation jobs.
-- `postgres` — хранилище пользователей, чатов, сообщений, LLM-запросов и stub-событий.
+- `worker` — arq worker, который выполняет LLM generation jobs и scheduled reminder delivery.
+- `postgres` — хранилище пользователей, чатов, сообщений, LLM-запросов, списков покупок, напоминаний и stub-событий.
 - `redis` — очередь arq.
 - `llm` — общий интерфейс провайдеров и fallback Yandex -> OpenRouter.
 
@@ -67,6 +67,26 @@ Group fallback finalization защищена `final_delivered`: повторны
 Обычные group messages без mention/reply должны игнорироваться без записи в regular memory и без LLM job.
 Сообщения от неразрешённых пользователей в group/supergroup молча отсекаются middleware; в private chat middleware по-прежнему отвечает `Доступ запрещён.`
 Если privacy mode Telegram ограничивает updates или Telegram присылает `guest_message` вместо обычного `message`, Jarvis не обещает чтение всей истории группы, а такой вызов не считается Group Assistant.
+
+## Списки покупок и напоминания
+
+Stage 4G добавляет только явные команды пользователя. Router `app/bot/routers/lists_reminders.py` подключён до generic private/group LLM handlers, поэтому clear intent не создаёт `process_llm_message`, а обычный разговор продолжает идти в LLM.
+
+Shopping list commands поддерживают добавление, показ списка, удаление exact active item и очистку купленного. Private list scoped как `scope_type=private`, `scope_chat_id=user_id`, `owner_user_id=user_id`; group list scoped как `scope_type=group`, `scope_chat_id=group_chat_id`, `owner_user_id=null`.
+
+Reminder commands поддерживают простые deterministic patterns: `через N минут/часов`, `сегодня/завтра в HH[:MM]`, `DD.MM в HH[:MM]`. Timezone по умолчанию — `Europe/Moscow`; в PostgreSQL сохраняется UTC.
+
+PostgreSQL таблицы:
+
+- `shopping_lists`
+- `shopping_list_items`
+- `reminders`
+
+Telegram UI использует обычные сообщения и inline buttons. Ответы форматируются Telegram HTML с обязательным escaping пользовательского текста через `html.escape`; raw MarkdownV2 не используется. Callback data короткие: `shop:*` и `rem:*`. Повторные clicks и уже изменённые entities обрабатываются как безопасные no-op/update.
+
+Worker delivery реализован в `deliver_due_reminders` через существующий arq worker и cron tick каждые 30 секунд. Worker берёт due scheduled reminders, отправляет HTML message через Telegram и помечает reminder `sent` только после успешной отправки. При send failure запись остаётся retryable scheduled после rollback.
+
+Stage 4G не включает watcher, авто-чтение всех сообщений, Telegram Business checklists, native Telegram reminders и LLM parsing списков/напоминаний.
 
 ## Access Settings
 

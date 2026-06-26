@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
+from uuid import UUID, uuid4
 
 from sqlalchemy import (
     BigInteger,
@@ -14,6 +15,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    Uuid,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -72,6 +74,27 @@ class BusinessMessageStatus(StrEnum):
 class TelegramAccessEntryType(StrEnum):
     USER = "user"
     GROUP = "group"
+
+
+class ShoppingScopeType(StrEnum):
+    PRIVATE = "private"
+    GROUP = "group"
+
+
+class ShoppingItemStatus(StrEnum):
+    ACTIVE = "active"
+    DONE = "done"
+
+
+class ReminderScopeType(StrEnum):
+    PRIVATE = "private"
+    GROUP = "group"
+
+
+class ReminderStatus(StrEnum):
+    SCHEDULED = "scheduled"
+    SENT = "sent"
+    CANCELLED = "cancelled"
 
 
 class User(Base):
@@ -185,6 +208,94 @@ class TelegramAccessEntry(Base):
     )
 
 
+class ShoppingList(Base):
+    __tablename__ = "shopping_lists"
+    __table_args__ = (
+        CheckConstraint(
+            "scope_type IN ('private', 'group')",
+            name="ck_shopping_lists_scope_type",
+        ),
+        UniqueConstraint(
+            "scope_type",
+            "scope_chat_id",
+            name="uq_shopping_lists_scope",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    scope_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    scope_chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    owner_user_id: Mapped[int | None] = mapped_column(BigInteger)
+    title: Mapped[str] = mapped_column(Text, default="Список покупок")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        onupdate=utcnow,
+    )
+    items: Mapped[list["ShoppingListItem"]] = relationship(
+        back_populates="shopping_list",
+        cascade="all, delete-orphan",
+    )
+
+
+class ShoppingListItem(Base):
+    __tablename__ = "shopping_list_items"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'done')",
+            name="ck_shopping_list_items_status",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    list_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("shopping_lists.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+    created_by_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        onupdate=utcnow,
+    )
+    done_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    shopping_list: Mapped[ShoppingList] = relationship(back_populates="items")
+
+
+class Reminder(Base):
+    __tablename__ = "reminders"
+    __table_args__ = (
+        CheckConstraint(
+            "scope_type IN ('private', 'group')",
+            name="ck_reminders_scope_type",
+        ),
+        CheckConstraint(
+            "status IN ('scheduled', 'sent', 'cancelled')",
+            name="ck_reminders_status",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    scope_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    remind_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="scheduled")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        onupdate=utcnow,
+    )
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class BusinessConnectionStub(Base):
     __tablename__ = "business_connections_stub"
 
@@ -295,3 +406,8 @@ Index(
     BusinessMessage.chat_id,
     BusinessMessage.telegram_message_id,
 )
+Index("ix_shopping_list_items_list_status", ShoppingListItem.list_id, ShoppingListItem.status)
+Index("ix_shopping_list_items_list_created", ShoppingListItem.list_id, ShoppingListItem.created_at)
+Index("ix_reminders_status_remind_at", Reminder.status, Reminder.remind_at)
+Index("ix_reminders_chat_status_remind_at", Reminder.chat_id, Reminder.status, Reminder.remind_at)
+Index("ix_reminders_user_status_remind_at", Reminder.user_id, Reminder.status, Reminder.remind_at)

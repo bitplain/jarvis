@@ -10,13 +10,15 @@ from app.bot.streaming.telegram_draft import TelegramDraftNotAvailable, Telegram
 from app.bot.streaming.telegram_fallback import TelegramGroupEditSink
 from app.bot.streaming.text_limits import split_telegram_text
 from app.core.config import get_settings
-from app.db.models import MessageRole
+from app.db.models import MessageRole, utcnow
 from app.db.repositories.messages import MessageRepository
+from app.db.repositories.reminders import ReminderRepository
 from app.db.repositories.runtime_settings import RuntimeSettingRepository
 from app.db.session import SessionLocal
 from app.llm.base import LLMProviderError
 from app.llm.factory import build_llm_provider
 from app.services.memory_service import MemoryService
+from app.services.reminder_service import ReminderService, ReminderView
 from app.services.runtime_settings_service import (
     DEFAULT_PROMPTS,
     ActiveLLMProvider,
@@ -24,6 +26,7 @@ from app.services.runtime_settings_service import (
     RuntimeSettingsService,
     RuntimeSettingsUnavailable,
 )
+from app.services.telegram_formatting import format_reminder_due_html
 
 logger = logging.getLogger(__name__)
 USER_ERROR_MESSAGE = "Не получилось подготовить ответ. Попробуйте позже."
@@ -331,3 +334,60 @@ async def process_llm_message(ctx: dict[str, Any], payload: dict[str, Any]) -> N
             text=final_text,
         )
     await bot.session.close()
+
+
+async def deliver_due_reminders(ctx: dict[str, Any]) -> None:
+    del ctx
+    settings = get_settings()
+    bot = Bot(token=settings.telegram_bot_token)
+    logger.info("reminder_due_delivery_started")
+    try:
+        async with SessionLocal() as session:
+            repository = ReminderRepository(session)
+            service = ReminderService(repository)
+            for _ in range(50):
+                reminders = await repository.due(utcnow(), limit=1)
+                if not reminders:
+                    break
+                reminder = reminders[0]
+                if not await _deliver_one_reminder(bot, service, session, reminder):
+                    break
+    finally:
+        await bot.session.close()
+
+
+async def _deliver_one_reminder(
+    bot: Bot,
+    service: ReminderService,
+    session: Any,
+    reminder: Any,
+) -> bool:
+    try:
+        await bot.send_message(
+            chat_id=reminder.chat_id,
+            text=format_reminder_due_html(
+                ReminderView(
+                    id=reminder.id,
+                    scope_type=reminder.scope_type,
+                    chat_id=reminder.chat_id,
+                    user_id=reminder.user_id,
+                    text=reminder.text,
+                    remind_at=reminder.remind_at,
+                    status=reminder.status,
+                )
+            ),
+            parse_mode="HTML",
+        )
+        await service.mark_sent(reminder.id)
+        logger.info(
+            "reminder_due_delivery_sent",
+            extra={"scope_type": reminder.scope_type},
+        )
+        return True
+    except Exception as exc:
+        await session.rollback()
+        logger.warning(
+            "reminder_due_delivery_failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        return False
