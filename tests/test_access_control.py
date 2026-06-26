@@ -5,6 +5,7 @@ from aiogram.types import Message
 
 from app.bot.middlewares import access
 from app.bot.middlewares.access import AdminAccessMiddleware, is_admin_user
+from app.core.config import Settings
 
 
 def build_message(*, user_id: int, chat_id: int, chat_type: str, text: str = "текст") -> Message:
@@ -128,7 +129,11 @@ async def test_private_db_allowed_user_reaches_handler(monkeypatch: pytest.Monke
         nonlocal handler_calls
         handler_calls += 1
 
-    await middleware(handler, message, {"db_session": object()})  # type: ignore[arg-type]
+    await middleware(  # type: ignore[arg-type]
+        handler,
+        message,
+        {"db_session": object(), "settings": Settings(telegram_bot_username="jarvis_bot")},
+    )
 
     assert handler_calls == 1
 
@@ -150,11 +155,19 @@ async def test_group_allowed_user_in_allowed_group_reaches_handler(
         async def is_allowed_group(self, chat_id: int) -> bool:
             return chat_id == -100
 
+        async def list_allowed_groups(self) -> list[Any]:
+            return [type("Entry", (), {"telegram_id": -100})()]
+
     monkeypatch.setattr(access, "TelegramAccessRepository", lambda session: object())
     monkeypatch.setattr(access, "TelegramAccessService", FakeAccessService)
 
     middleware = AdminAccessMiddleware({1})
-    message = build_message(user_id=99, chat_id=-100, chat_type="supergroup")
+    message = build_message(
+        user_id=99,
+        chat_id=-100,
+        chat_type="supergroup",
+        text="@jarvis_bot вопрос",
+    )
     handler_calls = 0
 
     async def handler(event: object, data: dict[str, Any]) -> None:
@@ -162,7 +175,11 @@ async def test_group_allowed_user_in_allowed_group_reaches_handler(
         nonlocal handler_calls
         handler_calls += 1
 
-    await middleware(handler, message, {"db_session": object()})  # type: ignore[arg-type]
+    await middleware(  # type: ignore[arg-type]
+        handler,
+        message,
+        {"db_session": object(), "settings": Settings(telegram_bot_username="jarvis_bot")},
+    )
 
     assert handler_calls == 1
 
@@ -185,11 +202,19 @@ async def test_group_allowed_user_outside_allowed_group_is_silent(
             del chat_id
             return False
 
+        async def list_allowed_groups(self) -> list[Any]:
+            return [type("Entry", (), {"telegram_id": -100})()]
+
     monkeypatch.setattr(access, "TelegramAccessRepository", lambda session: object())
     monkeypatch.setattr(access, "TelegramAccessService", FakeAccessService)
 
     middleware = AdminAccessMiddleware({1})
-    message = build_message(user_id=99, chat_id=-200, chat_type="group")
+    message = build_message(
+        user_id=99,
+        chat_id=-200,
+        chat_type="group",
+        text="@jarvis_bot вопрос",
+    )
     handler_calls = 0
 
     async def handler(event: object, data: dict[str, Any]) -> None:

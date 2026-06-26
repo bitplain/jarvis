@@ -19,12 +19,12 @@ Stage 4F-1 добавляет управление доступом к Jarvis ч
 В private она показывает:
 
 ```text
-Ваш Telegram ID: 59144850
-Chat ID: 59144850
+Ваш Telegram user ID: 59144850
 Тип чата: private
+Telegram chat ID: 59144850
 ```
 
-В group/supergroup она отвечает reply-сообщением и показывает user ID, chat ID и тип чата.
+В group/supergroup она отвечает reply-сообщением, показывает user ID, chat ID, тип чата и статус разрешения только для текущего пользователя и текущей группы.
 
 ## Как добавить пользователя
 
