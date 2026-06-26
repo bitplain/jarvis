@@ -232,9 +232,11 @@
 - `/status` показывает только sanitized сведения: API, PostgreSQL, Redis, worker heartbeat, webhook configured/unknown, due reminders count, active provider, draft streaming, prompt profiles, access DB.
 - `/status` не выводит Telegram IDs, tokens, API keys, Authorization headers, model secret values, prompt text или private message text.
 - Worker heartbeat хранится в Redis key `jarvis:worker:heartbeat`; stale/missing heartbeat считается degraded, но не ломает worker jobs.
-- Household context memory работает только по явным командам `запомни:`, `запомни что`, `что ты помнишь?`, `забудь:`.
+- Household context memory работает только по явным командам `запомни:`, `запомни что`, `что ты помнишь?`, `забудь:`, `забудь 1`, `забудь #1`, `удали память 1`.
+- `что ты помнишь?` показывает нумерованный список; удаление поддерживает номер текущего списка и нормализованный fuzzy/contains match по тексту.
+- Если delete по тексту находит несколько похожих записей, бот показывает выбор с кнопками и не удаляет автоматически; если совпадений нет, бот предлагает открыть список и удалить по номеру.
 - В group/supergroup memory-команды работают только через mention/reply по текущей access policy; обычные group messages без trigger игнорируются и не читаются ради памяти.
-- Memory callbacks (`mem:*`) должны отдельно проверять текущую access policy, потому что message middleware не покрывает callback queries.
+- Memory callbacks (`mem:*`) должны отдельно проверять текущую access policy, потому что message middleware не покрывает callback queries, и удалять только записи текущего private/group scope.
 - Memory хранится в PostgreSQL `household_memory_entries`, scoped отдельно для `private` user chat и `group` chat.
 - Memory text limit: 500 chars; active limit: 100 entries per scope; delete is soft-delete.
 - Secret-looking memory text (`token`, `password`, `api key`, `Authorization`) должен отклоняться сообщением `Похоже на секрет. Я не буду это сохранять.`
