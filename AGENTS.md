@@ -203,6 +203,7 @@
 - Parser deterministic и ограниченный: shopping add/show/delete/clear_done и reminders `через N минут/часов`, `сегодня/завтра в HH[:MM]`, `DD.MM в HH[:MM]`.
 - Shopping item parser делит позиции по запятой, точке с запятой, newline и простому connector `и` между словами; `мазик и молоко` должно сохраняться как два item.
 - Shopping item sanitizer вырезает только текущий bot mention из add payload, case-insensitive; `@Home_ai_my_bot творожок` должно сохраняться как `творожок`, а пустой payload после mention не сохраняется и не уходит в LLM.
+- Strong shopping colon triggers `купить:`, `покупки:` и `список покупок:` идут в deterministic shopping add, не в LLM. Для colon payload без запятых/`;`/newline/`и` допускается split 2-10 простых слов по пробелам: `Купить: хлеб сок молоко` -> `хлеб`, `сок`, `молоко`. Вопросы вроде `где купить молоко?`, `можешь купить молоко?` и `что купить?` не становятся add intent.
 - Ambiguous normal chat должен идти в обычный LLM path; command-like, но непонятное напоминание получает help text и не вызывает LLM.
 - Private commands доступны admin или DB allowed user; group commands доступны только mention/reply от allowed user в allowed group по текущей access policy.
 - Telegram UI использует messages + inline buttons; пользовательский текст в HTML обязательно escaping через `html.escape`.

@@ -329,6 +329,7 @@ def ingress_app(monkeypatch: pytest.MonkeyPatch) -> tuple[Any, FakeBot, FakeRedi
     app = create_app(settings=settings)
     app.state.bot = fake_bot
     app.state.redis_pool = fake_redis
+    app.state.shopping_repository = shopping_repository
     app.dependency_overrides[app_get_settings] = lambda: settings
     app.dependency_overrides[routes_telegram.get_session] = fake_get_session
     monkeypatch.setattr(private, "MessageRepository", FakeMessageRepository)
@@ -459,6 +460,30 @@ async def test_private_shopping_add_returns_html_without_llm_job(
     assert "хлеб" in str(bot.sent_messages[0]["text"])
     assert bot.sent_messages[0]["parse_mode"] == "HTML"
     assert "➕ Добавить" in markup_button_texts(bot.sent_messages[0])
+
+
+@pytest.mark.asyncio
+async def test_private_buy_colon_adds_items_without_llm_job(
+    ingress_app: tuple[Any, FakeBot, FakeRedis],
+) -> None:
+    app, bot, redis = ingress_app
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/telegram/webhook",
+            json=private_update(user_id=100500, text="Купить: хлеб сок мазик запеканку"),
+        )
+
+    assert response.status_code == 200
+    assert redis.jobs == []
+    repository = app.state.shopping_repository
+    list_id = repository.scope_index[("private", 100500)]
+    items = await repository.list_items(list_id)
+    assert [item.text for item in items] == ["хлеб", "сок", "мазик", "запеканку"]
+    assert "хлеб" in str(bot.sent_messages[0]["text"])
+    assert "сок" in str(bot.sent_messages[0]["text"])
+    assert "мазик" in str(bot.sent_messages[0]["text"])
+    assert "запеканку" in str(bot.sent_messages[0]["text"])
 
 
 @pytest.mark.asyncio
@@ -962,6 +987,31 @@ async def test_group_shopping_mention_returns_html_without_llm_job(
 
 
 @pytest.mark.asyncio
+async def test_group_buy_colon_mention_adds_item_without_llm_job(
+    ingress_app: tuple[Any, FakeBot, FakeRedis],
+) -> None:
+    app, bot, redis = ingress_app
+    FakeBotUser.username = "Home_ai_my_bot"
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/telegram/webhook",
+            json=group_update(user_id=100500, text="@Home_ai_my_bot купить: творожок"),
+        )
+
+    assert response.status_code == 200
+    assert redis.jobs == []
+    repository = app.state.shopping_repository
+    list_id = repository.scope_index[("group", -100123)]
+    items = await repository.list_items(list_id)
+    assert [item.text for item in items] == ["творожок"]
+    final_text = str(bot.sent_messages[0]["text"])
+    assert "творожок" in final_text
+    assert "@home_ai_my_bot" not in final_text.lower()
+    assert bot.chat_actions == []
+
+
+@pytest.mark.asyncio
 async def test_webhook_group_db_allowed_user_mention_enqueues_once(
     ingress_app: tuple[Any, FakeBot, FakeRedis],
 ) -> None:
@@ -1148,6 +1198,25 @@ async def test_allowed_user_without_mention_is_ignored(
 
     assert response.status_code == 200
     assert redis.jobs == []
+    assert bot.sent_messages == []
+    assert bot.chat_actions == []
+
+
+@pytest.mark.asyncio
+async def test_group_buy_colon_without_mention_is_ignored(
+    ingress_app: tuple[Any, FakeBot, FakeRedis],
+) -> None:
+    app, bot, redis = ingress_app
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/telegram/webhook",
+            json=group_update(user_id=100500, text="купить: хлеб"),
+        )
+
+    assert response.status_code == 200
+    assert redis.jobs == []
+    assert ("group", -100123) not in app.state.shopping_repository.scope_index
     assert bot.sent_messages == []
     assert bot.chat_actions == []
 

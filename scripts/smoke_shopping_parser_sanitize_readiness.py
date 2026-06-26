@@ -4,6 +4,7 @@ from app.services.simple_intent_parser import (
     ShoppingAddIntent,
     parse_explicit_intent,
     sanitize_shopping_items_input,
+    split_shopping_colon_items,
     split_shopping_items,
 )
 
@@ -28,6 +29,8 @@ def main() -> None:
         raise SystemExit("comma plus connector split is broken")
     if sanitize_shopping_items_input("@Home_ai_my_bot творожок", "Home_ai_my_bot") != "творожок":
         raise SystemExit("bot mention sanitizer is broken")
+    if split_shopping_colon_items("хлеб сок молоко") != ["хлеб", "сок", "молоко"]:
+        raise SystemExit("buy-colon plain payload split is broken")
     parsed = parse_explicit_intent(
         "добавь @Home_ai_my_bot хлеб и молоко в список",
         bot_username="Home_ai_my_bot",
@@ -38,6 +41,7 @@ def main() -> None:
     for needle in [
         "def sanitize_shopping_items_input",
         "def split_shopping_items",
+        "def split_shopping_colon_items",
         "re.IGNORECASE",
         "re.split",
         r"\s+и\s+",
