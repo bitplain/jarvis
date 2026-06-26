@@ -26,6 +26,7 @@ from app.services.telegram_access_service import TelegramAccessService
 
 MEMORY_CALLBACK_ADD = "mem:add"
 MEMORY_CALLBACK_DELETE_PREFIX = "mem:del:"
+MEMORY_CALLBACK_CANCEL = "mem:cancel"
 
 
 class HouseholdMemoryInput(StatesGroup):
@@ -100,6 +101,12 @@ def parse_memory_intent(text: str) -> MemoryIntent | None:
         return MemoryIntent("list")
     if lowered.startswith("забудь:"):
         return MemoryIntent("delete", normalized.split(":", maxsplit=1)[1].strip())
+    match = re.match(r"^забудь\s+(#?\d+)$", normalized, flags=re.IGNORECASE)
+    if match:
+        return MemoryIntent("delete", match.group(1).strip())
+    match = re.match(r"^удали\s+память\s+(#?\d+)$", normalized, flags=re.IGNORECASE)
+    if match:
+        return MemoryIntent("delete", match.group(1).strip())
     return None
 
 
@@ -145,6 +152,19 @@ async def handle_household_memory_message(
         )
         return
     if household_memory_intent.action == "delete":
+        delete_number = parse_delete_number(household_memory_intent.text)
+        if delete_number is not None:
+            deleted = await service.delete_memory_by_number(
+                household_memory_scope,
+                household_memory_chat_id,
+                delete_number,
+                actor_user_id=message.from_user.id,
+            )
+            if deleted is None:
+                await message.answer("Нет записи с таким номером.")
+                return
+            await message.answer(f"Удалил из памяти:\n{deleted.text}")
+            return
         matches = await service.delete_memory_by_text(
             household_memory_scope,
             household_memory_chat_id,
@@ -152,17 +172,21 @@ async def handle_household_memory_message(
             message.from_user.id,
         )
         if len(matches) == 1 and getattr(matches[0], "status", "") == "deleted":
-            await message.answer("Забыл.")
+            await message.answer(f"Удалил из памяти:\n{matches[0].text}")
             return
         if len(matches) > 1:
             await message.answer(
-                "Нашёл несколько похожих записей. Выберите, что удалить:\n\n"
+                "Нашёл несколько похожих записей. Что удалить?\n\n"
                 f"{render_memory_list_html(matches)}",
                 parse_mode="HTML",
                 reply_markup=build_memory_keyboard(matches, add_button=False),
             )
             return
-        await message.answer("Не нашёл такую запись в памяти.")
+        await message.answer(
+            "Не нашёл похожую запись.\n"
+            'Напишите "что ты помнишь?", чтобы увидеть список.\n'
+            'Можно удалить по номеру: "забудь 1".'
+        )
 
 
 async def handle_household_memory_callback(
@@ -193,17 +217,22 @@ async def handle_household_memory_callback(
         )
         await callback.answer()
         return
+    if callback_data == MEMORY_CALLBACK_CANCEL:
+        await callback.answer("Отменено.")
+        return
     if callback_data.startswith(MEMORY_CALLBACK_DELETE_PREFIX):
         service = _service(data)
         if service is None:
             await callback.answer("Память временно недоступна.", show_alert=True)
             return
-        deleted = await service.delete_memory_by_id(
+        scope, chat_id = _callback_scope(callback)
+        deleted = await service.delete_memory_by_id_in_scope(
+            scope,
+            chat_id,
             callback_data.removeprefix(MEMORY_CALLBACK_DELETE_PREFIX),
-            callback.from_user.id,
+            actor_user_id=callback.from_user.id,
         )
         await callback.answer("Удалено." if deleted is not None else "Уже удалено.")
-        scope, chat_id = _callback_scope(callback)
         memories = await service.list_memories(scope, chat_id)
         await callback.message.answer(
             render_memory_list_html(memories),
@@ -278,6 +307,13 @@ def render_memory_list_html(memories: list[Any]) -> str:
     return "\n".join(lines)
 
 
+def parse_delete_number(text: str) -> int | None:
+    match = re.fullmatch(r"#?(\d+)", text.strip())
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
 def build_memory_keyboard(memories: list[Any], *, add_button: bool = True) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     delete_buttons = [
@@ -291,6 +327,8 @@ def build_memory_keyboard(memories: list[Any], *, add_button: bool = True) -> In
         rows.append(delete_buttons[offset : offset + 4])
     if add_button:
         rows.append([InlineKeyboardButton(text="➕ Запомнить", callback_data=MEMORY_CALLBACK_ADD)])
+    else:
+        rows.append([InlineKeyboardButton(text="Отмена", callback_data=MEMORY_CALLBACK_CANCEL)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -339,6 +377,7 @@ def build_router() -> Router:
     router.message(PrivateHouseholdMemoryFilter())(handle_household_memory_message)
     router.message(GroupHouseholdMemoryFilter())(handle_household_memory_message)
     router.callback_query(F.data == MEMORY_CALLBACK_ADD)(handle_household_memory_callback)
+    router.callback_query(F.data == MEMORY_CALLBACK_CANCEL)(handle_household_memory_callback)
     router.callback_query(F.data.startswith(MEMORY_CALLBACK_DELETE_PREFIX))(
         handle_household_memory_callback
     )

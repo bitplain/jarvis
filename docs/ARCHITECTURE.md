@@ -116,9 +116,16 @@ Household context foundation реализован отдельным router `app
 - `запомни: <факт>`;
 - `запомни что <факт>`;
 - `что ты помнишь?`;
-- `забудь: <текст>`.
+- `забудь: <текст>`;
+- `забудь 1`;
+- `забудь #1`;
+- `удали память 1`.
+
+List UX всегда показывает нумерованный список и inline-кнопки `🗑 N` / `➕ Запомнить`. Delete by number удаляет запись с этим номером только в текущем scope. Delete by text использует нормализованное fuzzy/contains matching: case-insensitive, `ё -> е`, без пунктуации, с удалением слабых слов delete-query (`что`, `это`, `про`, connector `и`) и token-overlap fallback. Если найден один кандидат, он soft-delete-ится и больше не попадает в LLM injection. Если кандидатов несколько, router показывает выбор с кнопками и не удаляет автоматически. Если совпадений нет, пользователь получает подсказку открыть `что ты помнишь?` и удалить по номеру.
 
 Private memory scoped как `scope_type=private`, `scope_chat_id=user_id`. Group memory scoped как `scope_type=group`, `scope_chat_id=group_chat_id` и доступна только через mention/reply по текущей access policy. Обычные group messages без trigger не используются для памяти.
+
+Callback-delete (`mem:*`) повторно проверяет access policy и перед удалением сверяет memory id с active entries текущего private/group scope. Crafted или устаревший callback из другого scope не должен удалять чужую запись.
 
 PostgreSQL таблица `household_memory_entries` хранит soft-deletable записи: `id`, `scope_type`, `scope_chat_id`, `created_by_user_id`, `text`, `status`, timestamps. Active limit: 100 entries per scope, text limit: 500 chars. Secret-looking text отклоняется до записи в БД.
 

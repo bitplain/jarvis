@@ -6,6 +6,7 @@ from typing import Any, Protocol
 MAX_HOUSEHOLD_MEMORY_TEXT_LENGTH = 500
 MAX_HOUSEHOLD_MEMORIES_PER_SCOPE = 100
 SECRET_REJECTION_MESSAGE = "Похоже на секрет. Я не буду это сохранять."
+DELETE_QUERY_FILLER_WORDS = frozenset({"что", "это", "про", "и"})
 SECRET_PATTERNS = (
     re.compile(r"\btoken\b", re.IGNORECASE),
     re.compile(r"\bpassword\b", re.IGNORECASE),
@@ -139,6 +140,36 @@ class HouseholdMemoryService:
             actor_user_id=actor_user_id,
         )
 
+    async def delete_memory_by_number(
+        self,
+        scope_type: str,
+        chat_id: int,
+        number: int,
+        *,
+        actor_user_id: int,
+    ) -> HouseholdMemoryEntryProtocol | None:
+        if number < 1:
+            return None
+        memories = await self.list_memories(scope_type, chat_id)
+        if number > len(memories):
+            return None
+        return await self.delete_memory_by_id(str(memories[number - 1].id), actor_user_id)
+
+    async def delete_memory_by_id_in_scope(
+        self,
+        scope_type: str,
+        chat_id: int,
+        memory_id: str,
+        *,
+        actor_user_id: int,
+    ) -> HouseholdMemoryEntryProtocol | None:
+        memories = await self.list_memories(scope_type, chat_id)
+        for memory in memories:
+            current_id = str(memory.id)
+            if current_id == memory_id:
+                return await self.delete_memory_by_id(current_id, actor_user_id)
+        return None
+
     async def delete_memory_by_text(
         self,
         scope_type: str,
@@ -146,14 +177,16 @@ class HouseholdMemoryService:
         text: str,
         actor_user_id: int,
     ) -> list[HouseholdMemoryEntryProtocol]:
-        query = normalize_memory_text(text).casefold()
+        query = normalize_delete_query_text(text)
         if not query:
             return []
-        matches = [
-            memory
-            for memory in await self.list_memories(scope_type, chat_id)
-            if query == memory.text.casefold() or query in memory.text.casefold()
-        ]
+        scored_matches: list[tuple[int, HouseholdMemoryEntryProtocol]] = []
+        for memory in await self.list_memories(scope_type, chat_id):
+            score = memory_match_score(query, normalize_memory_match_text(memory.text))
+            if score > 0:
+                scored_matches.append((score, memory))
+        scored_matches.sort(key=lambda item: item[0], reverse=True)
+        matches = [memory for _, memory in scored_matches]
         if len(matches) == 1:
             deleted = await self.delete_memory_by_id(str(matches[0].id), actor_user_id)
             return [deleted] if deleted is not None else []
@@ -167,6 +200,41 @@ def validate_scope(scope_type: str) -> None:
 
 def normalize_memory_text(text: str) -> str:
     return " ".join(text.strip().split())
+
+
+def normalize_memory_match_text(text: str) -> str:
+    normalized = text.casefold().replace("ё", "е")
+    normalized = re.sub(r"[^\w\s]", " ", normalized, flags=re.UNICODE)
+    return " ".join(normalized.split())
+
+
+def normalize_delete_query_text(text: str) -> str:
+    normalized = normalize_memory_match_text(text)
+    tokens = [token for token in normalized.split() if token not in DELETE_QUERY_FILLER_WORDS]
+    return " ".join(tokens)
+
+
+def memory_match_score(query: str, stored: str) -> int:
+    if not query or not stored:
+        return 0
+    if query == stored:
+        return 100
+    if query in stored:
+        return 90
+    if stored in query:
+        return 80
+    query_tokens = query.split()
+    stored_tokens = stored.split()
+    if not query_tokens or not stored_tokens:
+        return 0
+    overlap = len(set(query_tokens) & set(stored_tokens))
+    if overlap < 2:
+        return 0
+    query_ratio = overlap / len(set(query_tokens))
+    stored_ratio = overlap / len(set(stored_tokens))
+    if query_ratio >= 0.75 or stored_ratio >= 0.75:
+        return 50 + overlap
+    return 0
 
 
 def looks_like_secret(text: str) -> bool:

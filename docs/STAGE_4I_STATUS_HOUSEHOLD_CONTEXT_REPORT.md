@@ -14,6 +14,11 @@
   - `запомни что <факт>`
   - `что ты помнишь?`
   - `забудь: <текст>`
+- Hotfix delete UX:
+  - `что ты помнишь?` показывает нумерованный список.
+  - `забудь 1`, `забудь #1`, `удали память 1` удаляют запись по номеру текущего scope.
+  - `забудь: <текст>` использует нормализованное fuzzy/contains matching и не требует точного текста записи.
+  - При нескольких похожих записях Jarvis показывает выбор и не удаляет автоматически.
 - Inline UI: delete buttons и `➕ Запомнить` FSM.
 - Scoped LLM injection: `Память о текущем чате` только для текущего private/group scope.
 
@@ -33,12 +38,13 @@
 1. Admin private `/status` показывает diagnostics без секретов.
 2. Non-admin private `/status` получает `Доступ запрещён.`
 3. `запомни: у нас семейный чат Фемилис` сохраняет факт.
-4. `что ты помнишь?` показывает сохранённый факт.
-5. `забудь: у нас семейный чат Фемилис` soft-delete-ит факт.
-6. Следующий LLM ответ учитывает active memory текущего scope.
-7. Group mention `@bot_username запомни: ...` сохраняет group memory.
-8. Group non-mention memory phrase игнорируется.
-9. Списки покупок и напоминания продолжают работать.
+4. `что ты помнишь?` показывает сохранённый факт с номером и кнопкой `🗑`.
+5. `забудь 1` soft-delete-ит факт по номеру.
+6. Повторно сохранить факт и выполнить `забудь: что я Александр и системный администратор`; нормализованный delete должен удалить matching запись.
+7. Следующий LLM ответ учитывает только active memory текущего scope и не использует deleted memory.
+8. Group mention `@bot_username запомни: ...` сохраняет group memory.
+9. Group non-mention memory phrase игнорируется.
+10. Списки покупок и напоминания продолжают работать.
 
 ## Verification
 
@@ -46,6 +52,7 @@
 uv run --python 3.12 --extra dev ruff check .
 uv run --python 3.12 --extra dev mypy app
 uv run --python 3.12 --extra dev pytest -q
+uv run --python 3.12 --extra dev python scripts/smoke_household_memory_delete_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_status_household_context_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_lists_reminders_ux_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_lists_reminders_readiness.py
