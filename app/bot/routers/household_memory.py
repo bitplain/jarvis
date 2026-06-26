@@ -12,14 +12,17 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.bot.middlewares.access import is_admin_user
 from app.bot.routers.groups import GROUP_CHAT_TYPES, classify_group_message
 from app.db.repositories.household_memory import HouseholdMemoryRepository
+from app.db.repositories.telegram_access import TelegramAccessRepository
 from app.services.household_memory_service import (
     SECRET_REJECTION_MESSAGE,
     HouseholdMemoryLimitExceeded,
     HouseholdMemorySecretRejected,
     HouseholdMemoryService,
 )
+from app.services.telegram_access_service import TelegramAccessService
 
 MEMORY_CALLBACK_ADD = "mem:add"
 MEMORY_CALLBACK_DELETE_PREFIX = "mem:del:"
@@ -171,6 +174,16 @@ async def handle_household_memory_callback(
     if callback.message is None:
         await callback.answer()
         return
+    session = cast(AsyncSession | None, data.get("db_session"))
+    if session is None:
+        await callback.answer("Память временно недоступна.", show_alert=True)
+        return
+    if not await _is_callback_allowed(callback, session, data):
+        if callback.message.chat.type in GROUP_CHAT_TYPES:
+            await callback.answer()
+        else:
+            await callback.answer("Доступ запрещён.", show_alert=True)
+        return
     if callback_data == MEMORY_CALLBACK_ADD:
         scope, chat_id = _callback_scope(callback)
         await state.set_state(HouseholdMemoryInput.add)
@@ -301,6 +314,23 @@ def _service(data: dict[str, Any]) -> HouseholdMemoryService | None:
     if session is None:
         return None
     return HouseholdMemoryService(HouseholdMemoryRepository(session))
+
+
+async def _is_callback_allowed(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    data: dict[str, Any],
+) -> bool:
+    settings = data["settings"]
+    user_id = callback.from_user.id
+    if is_admin_user(user_id, settings.admin_ids):
+        return True
+    access = TelegramAccessService(TelegramAccessRepository(session), admin_ids=settings.admin_ids)
+    if not await access.is_allowed_user(user_id):
+        return False
+    if callback.message is None or callback.message.chat.type not in GROUP_CHAT_TYPES:
+        return True
+    return await access.is_allowed_group(callback.message.chat.id)
 
 
 def build_router() -> Router:

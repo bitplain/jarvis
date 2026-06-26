@@ -18,11 +18,13 @@ def main() -> None:
     require("app/db/repositories/household_memory.py", "HouseholdMemoryRepository")
     require("app/services/household_memory_service.py", "Похоже на секрет")
     require("app/bot/routers/household_memory.py", "HouseholdMemoryInput")
+    require("app/bot/routers/household_memory.py", "_is_callback_allowed")
     require("app/bot/dispatcher.py", "household_memory")
     require("app/services/memory_service.py", "Память о текущем чате")
     require("tests/test_status_diagnostics.py", "is_worker_heartbeat_fresh")
     require("tests/test_household_memory_service.py", "secret")
     require("tests/test_household_memory_router.py", "does_not_enqueue")
+    require("tests/test_household_memory_router.py", "unknown_user_is_silent")
     require("tests/test_household_memory_llm_injection.py", "другая группа")
     require("AGENTS.md", "Stage 4I Status And Household Context")
     print("PASS_STATUS_HOUSEHOLD_CONTEXT_READINESS")  # noqa: T201

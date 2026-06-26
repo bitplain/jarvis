@@ -9,6 +9,7 @@ from app.bot.routers.household_memory import (
     handle_household_memory_message,
     parse_memory_intent,
 )
+from app.core.config import Settings
 
 
 class FakeState:
@@ -53,10 +54,22 @@ class FakeMessage:
 
 
 class FakeCallback:
-    def __init__(self, data: str = "mem:add") -> None:
+    def __init__(
+        self,
+        data: str = "mem:add",
+        *,
+        user_id: int = 100500,
+        chat_id: int = 100500,
+        chat_type: str = "private",
+    ) -> None:
         self.data = data
-        self.from_user = type("User", (), {"id": 100500})()
-        self.message = FakeMessage("callback")
+        self.from_user = type("User", (), {"id": user_id})()
+        self.message = FakeMessage(
+            "callback",
+            user_id=user_id,
+            chat_id=chat_id,
+            chat_type=chat_type,
+        )
         self.answers: list[dict[str, Any]] = []
 
     async def answer(self, text: str | None = None, **kwargs: Any) -> None:
@@ -87,6 +100,24 @@ class FakeMemoryService:
         del scope_type, chat_id, actor_user_id
         self.deleted_texts.append(text)
         return []
+
+    async def delete_memory_by_id(self, memory_id: str, actor_user_id: int):
+        del memory_id, actor_user_id
+        self.deleted_texts.append("by_id")
+        return object()
+
+
+class FakeTelegramAccessService:
+    def __init__(self, repository: object, *, admin_ids: set[int]) -> None:
+        del repository, admin_ids
+
+    async def is_allowed_user(self, user_id: int | None) -> bool:
+        del user_id
+        return False
+
+    async def is_allowed_group(self, group_id: int) -> bool:
+        del group_id
+        return False
 
 
 def test_parse_memory_intents() -> None:
@@ -124,7 +155,12 @@ async def test_memory_add_button_fsm_saves_text_and_clears_state() -> None:
     callback = FakeCallback("mem:add")
     state = FakeState()
 
-    await handle_household_memory_callback(callback, state=state)  # type: ignore[arg-type]
+    await handle_household_memory_callback(
+        callback,
+        state=state,  # type: ignore[arg-type]
+        db_session=object(),
+        settings=Settings(admin_telegram_ids="100500"),
+    )
 
     assert state.state == HouseholdMemoryInput.add.state
     assert "Что запомнить?" in callback.message.answers[0]["text"]
@@ -156,3 +192,26 @@ async def test_memory_cancel_does_not_save_or_enqueue() -> None:
 
     assert service.added == []
     assert message.answers == [{"text": "Ввод отменён."}]
+
+
+@pytest.mark.asyncio
+async def test_group_memory_callback_from_unknown_user_is_silent_and_does_not_mutate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.bot.routers import household_memory
+
+    monkeypatch.setattr(household_memory, "TelegramAccessService", FakeTelegramAccessService)
+    callback = FakeCallback("mem:del:abc", user_id=200600, chat_id=-100123, chat_type="group")
+    state = FakeState()
+    service = FakeMemoryService()
+
+    await handle_household_memory_callback(
+        callback,  # type: ignore[arg-type]
+        state=state,  # type: ignore[arg-type]
+        household_memory_service=service,
+        db_session=object(),
+        settings=Settings(admin_telegram_ids="100500"),
+    )
+
+    assert callback.answers == [{"text": None}]
+    assert service.deleted_texts == []

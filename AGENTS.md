@@ -234,6 +234,7 @@
 - Worker heartbeat хранится в Redis key `jarvis:worker:heartbeat`; stale/missing heartbeat считается degraded, но не ломает worker jobs.
 - Household context memory работает только по явным командам `запомни:`, `запомни что`, `что ты помнишь?`, `забудь:`.
 - В group/supergroup memory-команды работают только через mention/reply по текущей access policy; обычные group messages без trigger игнорируются и не читаются ради памяти.
+- Memory callbacks (`mem:*`) должны отдельно проверять текущую access policy, потому что message middleware не покрывает callback queries.
 - Memory хранится в PostgreSQL `household_memory_entries`, scoped отдельно для `private` user chat и `group` chat.
 - Memory text limit: 500 chars; active limit: 100 entries per scope; delete is soft-delete.
 - Secret-looking memory text (`token`, `password`, `api key`, `Authorization`) должен отклоняться сообщением `Похоже на секрет. Я не буду это сохранять.`
