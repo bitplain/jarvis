@@ -249,6 +249,15 @@
 - Household memory не используется для access decisions и не смешивается между private/group/другими chat ids.
 - Stage 4I не включает watcher, auto-memory, чтение всех сообщений, voice/transcription/media, Telegram Business integration, Railway Variables changes и live destructive Telegram calls.
 
+## Logging Hygiene
+
+- Normal operational app logs уровня `DEBUG`/`INFO` должны писаться в stdout; реальные warning/error/exception остаются на stderr.
+- Central logging config находится в `app/core/logging.py`; API startup и arq worker должны использовать один и тот же redaction filter.
+- Redaction обязана маскировать Telegram Bot API URLs вида `https://api.telegram.org/bot<TOKEN>/...`, Telegram token, Authorization/Bearer headers, API keys, passwords, webhook secrets и nested `extra` values.
+- `httpx`, `httpcore` и `aiohttp` request info logs не должны печатать полный Telegram Bot API URL; по умолчанию они понижены до `WARNING`.
+- Webhook self-healing logs остаются только sanitized событиями `telegram_webhook_setup_started`, `telegram_webhook_setup_completed`, `telegram_webhook_setup_failed`, `webhook_host`, `webhook_path` и sanitized error fields.
+- Если arq или Railway помечают сторонний runtime stderr как `[err]`, это не считается ошибкой без traceback, failed exit code или failed job marker; app-controlled logs должны быть stdout/stderr-clean.
+
 ## Проверки
 
 Перед финальным отчётом выполнять:

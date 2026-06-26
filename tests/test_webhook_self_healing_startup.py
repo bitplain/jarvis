@@ -4,7 +4,36 @@ import pytest
 
 from app.core.config import Settings
 from app.main import create_app
-from app.services.telegram_webhook_setup import WebhookResult
+from app.services.telegram_webhook_setup import WebhookResult, set_webhook_from_values
+
+
+class FakeTelegramFailureResponse:
+    status_code = 400
+
+    def json(self) -> dict[str, object]:
+        return {
+            "ok": False,
+            "description": (
+                "Bad Request: https://api.telegram.org/bot123456:abcdefghijklmnopqrstuvwxyz/"
+                "setWebhook Authorization: Bearer secret-value"
+            ),
+        }
+
+
+class FakeTelegramFailureHttp:
+    def post(
+        self,
+        url: str,
+        *,
+        json: dict[str, object] | None = None,
+        timeout: float | None = None,
+    ) -> FakeTelegramFailureResponse:
+        del url, json, timeout
+        return FakeTelegramFailureResponse()
+
+    def get(self, url: str, *, timeout: float | None = None) -> FakeTelegramFailureResponse:
+        del url, timeout
+        return FakeTelegramFailureResponse()
 
 
 @pytest.mark.asyncio
@@ -179,3 +208,23 @@ def test_worker_startup_does_not_import_webhook_setup() -> None:
 
     assert all("telegram_webhook_setup" not in source for source in worker_sources)
     assert all("set_webhook" not in source for source in worker_sources)
+
+
+def test_webhook_setup_result_redacts_telegram_url_and_authorization() -> None:
+    token = "123456:abcdefghijklmnopqrstuvwxyz"
+
+    result = set_webhook_from_values(
+        {
+            "TELEGRAM_BOT_TOKEN": token,
+            "TELEGRAM_WEBHOOK_SECRET": "secret",
+            "PUBLIC_BASE_URL": "https://jarvis.example.com",
+        },
+        http=FakeTelegramFailureHttp(),
+    )
+
+    rendered = result.render_sanitized()
+    assert token not in rendered
+    assert "abcdefghijklmnopqrstuvwxyz" not in rendered
+    assert "secret-value" not in rendered
+    assert "https://api.telegram.org/bot<redacted>/setWebhook" in rendered
+    assert "Authorization: <redacted>" in rendered
