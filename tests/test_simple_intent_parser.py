@@ -1,0 +1,69 @@
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+from app.services.simple_intent_parser import (
+    ReminderCreateIntent,
+    ReminderListIntent,
+    ShoppingAddIntent,
+    ShoppingDeleteIntent,
+    ShoppingListIntent,
+    parse_explicit_intent,
+)
+
+MSK = ZoneInfo("Europe/Moscow")
+
+
+def test_parse_shopping_add_single_item() -> None:
+    intent = parse_explicit_intent("добавь хлеб в список покупок")
+
+    assert isinstance(intent, ShoppingAddIntent)
+    assert intent.items == ["хлеб"]
+
+
+def test_parse_shopping_add_multiple_items_by_comma() -> None:
+    intent = parse_explicit_intent("добавь молоко, яйца, сыр в список")
+
+    assert isinstance(intent, ShoppingAddIntent)
+    assert intent.items == ["молоко", "яйца", "сыр"]
+
+
+def test_parse_shopping_show_and_delete() -> None:
+    assert isinstance(parse_explicit_intent("что купить?"), ShoppingListIntent)
+
+    intent = parse_explicit_intent("удали молоко из списка")
+
+    assert isinstance(intent, ShoppingDeleteIntent)
+    assert intent.query == "молоко"
+
+
+def test_parse_reminder_relative_minutes_and_hours() -> None:
+    now = datetime(2026, 6, 26, 12, 0, tzinfo=MSK)
+
+    minutes = parse_explicit_intent("напомни через 30 минут проверить духовку", now=now)
+    hours = parse_explicit_intent("напомни через 2 часа проверить доставку", now=now)
+
+    assert isinstance(minutes, ReminderCreateIntent)
+    assert minutes.text == "проверить духовку"
+    assert minutes.remind_at == datetime(2026, 6, 26, 12, 30, tzinfo=MSK)
+    assert isinstance(hours, ReminderCreateIntent)
+    assert hours.remind_at == datetime(2026, 6, 26, 14, 0, tzinfo=MSK)
+
+
+def test_parse_reminder_tomorrow_and_absolute_date() -> None:
+    now = datetime(2026, 6, 26, 12, 0, tzinfo=MSK)
+
+    tomorrow = parse_explicit_intent("напомни завтра в 10 купить молоко", now=now)
+    absolute = parse_explicit_intent("напомни 28.06 в 14:00 оплатить счёт", now=now)
+
+    assert isinstance(tomorrow, ReminderCreateIntent)
+    assert tomorrow.remind_at == datetime(2026, 6, 27, 10, 0, tzinfo=MSK)
+    assert tomorrow.text == "купить молоко"
+    assert isinstance(absolute, ReminderCreateIntent)
+    assert absolute.remind_at == datetime(2026, 6, 28, 14, 0, tzinfo=MSK)
+    assert absolute.text == "оплатить счёт"
+
+
+def test_parse_reminder_list_invalid_and_ambiguous() -> None:
+    assert isinstance(parse_explicit_intent("покажи напоминания"), ReminderListIntent)
+    assert parse_explicit_intent("напомни когда-нибудь купить молоко") is not None
+    assert parse_explicit_intent("обычный разговор про хлеб и молоко") is None

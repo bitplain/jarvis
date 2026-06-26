@@ -7,11 +7,12 @@ from httpx import ASGITransport, AsyncClient
 
 from app.api import routes_telegram
 from app.bot.middlewares import access
-from app.bot.routers import commands, groups, private
+from app.bot.routers import commands, groups, lists_reminders, private
 from app.core.config import Settings
 from app.core.config import get_settings as app_get_settings
 from app.db.models import MessageRole
 from app.main import create_app
+from app.services.reminder_service import InMemoryReminderRepository
 from app.services.runtime_settings_service import (
     DEFAULT_PROMPTS,
     PromptProfile,
@@ -19,6 +20,7 @@ from app.services.runtime_settings_service import (
     PromptSetting,
     PromptSource,
 )
+from app.services.shopping_service import InMemoryShoppingRepository
 from app.services.telegram_access_service import AccessEntry
 
 
@@ -257,6 +259,8 @@ def ingress_app(monkeypatch: pytest.MonkeyPatch) -> tuple[Any, FakeBot, FakeRedi
     )
     fake_bot = FakeBot()
     fake_redis = FakeRedis()
+    shopping_repository = InMemoryShoppingRepository()
+    reminder_repository = InMemoryReminderRepository()
 
     async def fake_get_session() -> AsyncIterator[object]:
         yield object()
@@ -273,6 +277,8 @@ def ingress_app(monkeypatch: pytest.MonkeyPatch) -> tuple[Any, FakeBot, FakeRedi
     monkeypatch.setattr(commands, "TelegramAccessRepository", lambda session: object())
     monkeypatch.setattr(commands, "TelegramAccessService", FakeAccessService)
     monkeypatch.setattr(commands, "RuntimeSettingsService", FakeRuntimeSettingsService)
+    monkeypatch.setattr(lists_reminders, "ShoppingRepository", lambda session: shopping_repository)
+    monkeypatch.setattr(lists_reminders, "ReminderRepository", lambda session: reminder_repository)
     FakeAccessService.allowed_users = set()
     FakeAccessService.allowed_groups = set()
     FakeAccessService.raise_error = False
@@ -371,6 +377,42 @@ async def test_private_text_admin_enqueues_after_prompt_profiles(
         ("process_llm_message", {"chat_id": 100500, "user_id": 100500, "private": True})
     ]
     assert [message["text"] for message in bot.sent_messages] == ["Думаю"]
+
+
+@pytest.mark.asyncio
+async def test_private_shopping_add_returns_html_without_llm_job(
+    ingress_app: tuple[Any, FakeBot, FakeRedis],
+) -> None:
+    app, bot, redis = ingress_app
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/telegram/webhook",
+            json=private_update(user_id=100500, text="добавь хлеб в список покупок"),
+        )
+
+    assert response.status_code == 200
+    assert redis.jobs == []
+    assert "<b>🛒 Список покупок</b>" in str(bot.sent_messages[0]["text"])
+    assert "хлеб" in str(bot.sent_messages[0]["text"])
+
+
+@pytest.mark.asyncio
+async def test_private_reminder_add_returns_html_without_llm_job(
+    ingress_app: tuple[Any, FakeBot, FakeRedis],
+) -> None:
+    app, bot, redis = ingress_app
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/telegram/webhook",
+            json=private_update(user_id=100500, text="напомни через 30 минут проверить духовку"),
+        )
+
+    assert response.status_code == 200
+    assert redis.jobs == []
+    assert "<b>⏰ Напоминание создано</b>" in str(bot.sent_messages[0]["text"])
+    assert "проверить духовку" in str(bot.sent_messages[0]["text"])
 
 
 @pytest.mark.asyncio
@@ -531,6 +573,25 @@ async def test_webhook_group_admin_mention_enqueues_once(
     ]
     assert bot.sent_messages == []
     assert bot.chat_actions
+
+
+@pytest.mark.asyncio
+async def test_group_shopping_mention_returns_html_without_llm_job(
+    ingress_app: tuple[Any, FakeBot, FakeRedis],
+) -> None:
+    app, bot, redis = ingress_app
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/telegram/webhook",
+            json=group_update(user_id=100500, text="@jarvis_bot добавь хлеб в список покупок"),
+        )
+
+    assert response.status_code == 200
+    assert redis.jobs == []
+    assert "<b>🛒 Список покупок</b>" in str(bot.sent_messages[0]["text"])
+    assert "хлеб" in str(bot.sent_messages[0]["text"])
+    assert bot.chat_actions == []
 
 
 @pytest.mark.asyncio

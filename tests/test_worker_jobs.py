@@ -2,6 +2,7 @@ import pytest
 
 from app.core.config import Settings
 from app.llm.types import LLMMessage, LLMResponse, LLMStreamChunk
+from app.services.reminder_service import StoredReminder
 from app.services.runtime_settings_service import (
     DEFAULT_PROMPTS,
     ActiveLLMProvider,
@@ -39,8 +40,9 @@ class FakeBot:
     async def send_chat_action(self, *, chat_id: int, action: object) -> None:
         self.chat_actions.append((chat_id, action))
 
-    async def send_message(self, *, chat_id: int, text: str) -> None:
+    async def send_message(self, *, chat_id: int, text: str, **kwargs: object) -> None:
         self.sent_messages.append((chat_id, text))
+        self.send_message_kwargs = kwargs
 
     async def close(self) -> None:
         self.closed = True
@@ -125,6 +127,45 @@ class FakeSessionLocal:
         return FakeSessionContext()
 
 
+class FakeReminderRepository:
+    instances: list["FakeReminderRepository"] = []
+
+    def __init__(self, session: object) -> None:
+        del session
+        self.sent_ids: list[str] = []
+        self.is_sent = False
+        self.__class__.instances.append(self)
+
+    async def due(self, now: object, *, limit: int) -> list[StoredReminder]:
+        del now, limit
+        if self.is_sent:
+            return []
+        return [
+            StoredReminder(
+                id="abc123",
+                scope_type="private",
+                chat_id=100500,
+                user_id=100500,
+                text="купить <молоко>",
+                remind_at=jobs.utcnow(),
+                status="scheduled",
+            )
+        ]
+
+    async def set_status(
+        self,
+        reminder_id: str,
+        *,
+        status: str,
+        remind_at: object | None = None,
+    ) -> StoredReminder | None:
+        del remind_at
+        if status == "sent":
+            self.sent_ids.append(reminder_id)
+            self.is_sent = True
+        return None
+
+
 class FakeRuntimeSettingsService:
     def __init__(self, repository: object) -> None:
         del repository
@@ -181,6 +222,33 @@ async def test_worker_group_job_uses_send_message_without_private_streaming(
     assert memory.added[0]["chat_id"] == -100123
     assert memory.added[0]["user_id"] is None
     assert memory.added[0]["text"] == "group answer"
+    assert bot.closed is True
+
+
+@pytest.mark.asyncio
+async def test_deliver_due_reminders_sends_html_and_marks_sent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    FakeBot.instances = []
+    FakeReminderRepository.instances = []
+    monkeypatch.setattr(jobs, "Bot", FakeBot)
+    monkeypatch.setattr(
+        jobs,
+        "get_settings",
+        lambda: Settings(telegram_bot_token="123456:secret-token"),
+    )
+    monkeypatch.setattr(jobs, "SessionLocal", FakeSessionLocal())
+    monkeypatch.setattr(jobs, "ReminderRepository", FakeReminderRepository)
+
+    await jobs.deliver_due_reminders({})
+
+    bot = FakeBot.instances[0]
+    repository = FakeReminderRepository.instances[0]
+    assert bot.sent_messages == [
+        (100500, "<b>⏰ Напоминание</b>\n\n<blockquote>купить &lt;молоко&gt;</blockquote>")
+    ]
+    assert bot.send_message_kwargs == {"parse_mode": "HTML"}
+    assert repository.sent_ids == ["abc123"]
     assert bot.closed is True
 
 
