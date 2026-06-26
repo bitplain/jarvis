@@ -12,6 +12,7 @@ from app.core.config import Settings
 from app.core.config import get_settings as app_get_settings
 from app.db.models import MessageRole
 from app.main import create_app
+from app.services.runtime_settings_service import PromptProfile, PromptProfileScope
 from app.services.telegram_access_service import AccessEntry
 
 
@@ -59,6 +60,10 @@ class FakeRedis:
 
     async def enqueue_job(self, name: str, payload: dict[str, Any]) -> None:
         self.jobs.append((name, payload))
+
+
+class BrokenRedisConnect(RuntimeError):
+    pass
 
 
 class FakeMessageRepository:
@@ -126,6 +131,25 @@ class FakeAccessService:
         return [AccessEntry("group", chat_id) for chat_id in sorted(self.allowed_groups)]
 
 
+class FakeRuntimeSettingsService:
+    def __init__(self, repository: object) -> None:
+        del repository
+
+    async def get_prompt_profile(self, scope: PromptProfileScope) -> PromptProfile:
+        del scope
+        return PromptProfile.BALANCED
+
+    async def set_prompt_profile(
+        self,
+        scope: PromptProfileScope,
+        value: str,
+        *,
+        updated_by_telegram_id: int | None,
+    ) -> PromptProfile:
+        del scope, updated_by_telegram_id
+        return PromptProfile(value)
+
+
 def private_update(*, user_id: int, text: str = "тест") -> dict[str, object]:
     return {
         "update_id": 101,
@@ -135,6 +159,25 @@ def private_update(*, user_id: int, text: str = "тест") -> dict[str, object]
             "chat": {"id": user_id, "type": "private", "first_name": "User"},
             "from": {"id": user_id, "is_bot": False, "first_name": "User"},
             "text": text,
+        },
+    }
+
+
+def callback_update(data: str, *, user_id: int = 100500) -> dict[str, object]:
+    return {
+        "update_id": 103,
+        "callback_query": {
+            "id": "callback-1",
+            "from": {"id": user_id, "is_bot": False, "first_name": "User"},
+            "message": {
+                "message_id": 20,
+                "date": 1_700_000_000,
+                "chat": {"id": user_id, "type": "private", "first_name": "User"},
+                "from": {"id": 999, "is_bot": True, "first_name": "Jarvis"},
+                "text": "Настройки Jarvis",
+            },
+            "chat_instance": "chat-instance",
+            "data": data,
         },
     }
 
@@ -197,6 +240,7 @@ def ingress_app(monkeypatch: pytest.MonkeyPatch) -> tuple[Any, FakeBot, FakeRedi
     monkeypatch.setattr(access, "TelegramAccessService", FakeAccessService)
     monkeypatch.setattr(commands, "TelegramAccessRepository", lambda session: object())
     monkeypatch.setattr(commands, "TelegramAccessService", FakeAccessService)
+    monkeypatch.setattr(commands, "RuntimeSettingsService", FakeRuntimeSettingsService)
     FakeAccessService.allowed_users = set()
     FakeAccessService.allowed_groups = set()
     FakeAccessService.raise_error = False
@@ -231,6 +275,121 @@ async def test_webhook_private_admin_update_enqueues_once(
 
 
 @pytest.mark.asyncio
+async def test_private_start_replies_after_prompt_profiles(
+    ingress_app: tuple[Any, FakeBot, FakeRedis],
+) -> None:
+    app, bot, redis = ingress_app
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/telegram/webhook",
+            json=private_update(user_id=100500, text="/start"),
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "accepted"}
+    assert redis.jobs == []
+    assert [message["text"] for message in bot.sent_messages] == [
+        "Jarvis готов. Пишите вопрос на русском языке."
+    ]
+
+
+@pytest.mark.asyncio
+async def test_private_start_replies_when_redis_pool_is_unavailable(
+    ingress_app: tuple[Any, FakeBot, FakeRedis],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, bot, _ = ingress_app
+    delattr(app.state, "redis_pool")
+
+    async def broken_create_pool(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        raise BrokenRedisConnect("redis unavailable")
+
+    monkeypatch.setattr(routes_telegram, "create_pool", broken_create_pool)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/telegram/webhook",
+            json=private_update(user_id=100500, text="/start"),
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "accepted"}
+    assert [message["text"] for message in bot.sent_messages] == [
+        "Jarvis готов. Пишите вопрос на русском языке."
+    ]
+
+
+@pytest.mark.asyncio
+async def test_private_text_admin_enqueues_after_prompt_profiles(
+    ingress_app: tuple[Any, FakeBot, FakeRedis],
+) -> None:
+    app, bot, redis = ingress_app
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/telegram/webhook",
+            json=private_update(user_id=100500, text="Привет"),
+        )
+
+    assert response.status_code == 200
+    assert redis.jobs == [
+        ("process_llm_message", {"chat_id": 100500, "user_id": 100500, "private": True})
+    ]
+    assert [message["text"] for message in bot.sent_messages] == ["Принял. Готовлю ответ."]
+
+
+@pytest.mark.asyncio
+async def test_prompt_profile_fsm_does_not_capture_normal_private_text(
+    ingress_app: tuple[Any, FakeBot, FakeRedis],
+) -> None:
+    app, bot, redis = ingress_app
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        profile_response = await client.post(
+            "/telegram/webhook",
+            json=callback_update("settings:profiles:private"),
+        )
+        text_response = await client.post(
+            "/telegram/webhook",
+            json=private_update(user_id=100500, text="Привет"),
+        )
+
+    assert profile_response.status_code == 200
+    assert text_response.status_code == 200
+    assert redis.jobs == [
+        ("process_llm_message", {"chat_id": 100500, "user_id": 100500, "private": True})
+    ]
+    assert [message["text"] for message in bot.sent_messages] == ["Принял. Готовлю ответ."]
+
+
+@pytest.mark.asyncio
+async def test_webhook_uses_persistent_dispatcher_for_prompt_profile_fsm(
+    ingress_app: tuple[Any, FakeBot, FakeRedis],
+) -> None:
+    app, _bot, redis = ingress_app
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        profile_response = await client.post(
+            "/telegram/webhook",
+            json=callback_update("settings:profiles:private"),
+        )
+        dispatcher = app.state.dispatcher
+        text_response = await client.post(
+            "/telegram/webhook",
+            json=private_update(user_id=100500, text="Привет"),
+        )
+
+    assert profile_response.status_code == 200
+    assert text_response.status_code == 200
+    assert app.state.dispatcher is dispatcher
+    assert redis.jobs == [
+        ("process_llm_message", {"chat_id": 100500, "user_id": 100500, "private": True})
+    ]
+
+
+@pytest.mark.asyncio
 async def test_webhook_private_unauthorized_gets_access_denied_without_job(
     ingress_app: tuple[Any, FakeBot, FakeRedis],
 ) -> None:
@@ -241,6 +400,23 @@ async def test_webhook_private_unauthorized_gets_access_denied_without_job(
 
     assert response.status_code == 200
     assert response.json() == {"status": "accepted"}
+    assert redis.jobs == []
+    assert [message["text"] for message in bot.sent_messages] == ["Доступ запрещён."]
+
+
+@pytest.mark.asyncio
+async def test_private_text_unknown_user_denied_after_prompt_profiles(
+    ingress_app: tuple[Any, FakeBot, FakeRedis],
+) -> None:
+    app, bot, redis = ingress_app
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/telegram/webhook",
+            json=private_update(user_id=42, text="Привет"),
+        )
+
+    assert response.status_code == 200
     assert redis.jobs == []
     assert [message["text"] for message in bot.sent_messages] == ["Доступ запрещён."]
 
@@ -257,6 +433,26 @@ async def test_webhook_private_db_allowed_user_enqueues_once(
 
     assert response.status_code == 200
     assert response.json() == {"status": "accepted"}
+    assert redis.jobs == [
+        ("process_llm_message", {"chat_id": 200600, "user_id": 200600, "private": True})
+    ]
+    assert [message["text"] for message in bot.sent_messages] == ["Принял. Готовлю ответ."]
+
+
+@pytest.mark.asyncio
+async def test_private_text_allowed_user_enqueues_after_prompt_profiles(
+    ingress_app: tuple[Any, FakeBot, FakeRedis],
+) -> None:
+    app, bot, redis = ingress_app
+    FakeAccessService.allowed_users = {200600}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/telegram/webhook",
+            json=private_update(user_id=200600, text="Привет"),
+        )
+
+    assert response.status_code == 200
     assert redis.jobs == [
         ("process_llm_message", {"chat_id": 200600, "user_id": 200600, "private": True})
     ]

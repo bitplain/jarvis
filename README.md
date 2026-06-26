@@ -175,6 +175,31 @@ uv run --python 3.12 --extra dev python scripts/smoke_provider_settings_readines
 
 Stage 4E также делает callback-кнопки идемпотентными: повторный `Refresh`, повторный выбор текущего provider и Telegram `message is not modified` не должны превращаться в HTTP 500 webhook.
 
+## Prompt Profiles
+
+Stage 4F-2 добавляет admin-only раздел `/settings -> Профили`.
+
+Профили управляют system prompt для следующих LLM-запросов:
+
+- `prompt_profile_private` — обычные личные сообщения;
+- `prompt_profile_group` — групповой ассистент по mention/reply;
+- `prompt_profile_watcher` — будущий watcher, в Stage 4F-2 только настраивается и не запускает Smart Watcher.
+
+Значения хранятся в PostgreSQL `runtime_settings` как фиксированные enum-профили: `balanced`, `short`, `deep`, `draft`, `watcher`. Отсутствующая запись означает `balanced`. Произвольные prompt-тексты пользователя в БД не сохраняются.
+
+Stage 4F-2 не включает Smart Watcher, списки покупок, напоминания, чтение всех сообщений, изменение streaming или эффект Mira.
+
+Private ingress остаётся release gate для Stage 4F-2: `/start` должен отвечать через webhook, обычный private text от admin/allowed user должен создавать `process_llm_message`, unknown private user должен получать `Доступ запрещён.`, а Prompt Profiles callbacks не должны оставлять FSM state для следующего private text. Временная недоступность Redis не должна валить `/start` до command handler.
+
+Readiness без секретов и без `getUpdates`:
+
+```bash
+uv run --python 3.12 --extra dev python scripts/smoke_private_ingress_readiness.py
+uv run --python 3.12 --extra dev python scripts/smoke_prompt_profiles_readiness.py
+```
+
+Ожидаемые verdict: `PASS_PRIVATE_INGRESS_READINESS` и `PASS_PROMPT_PROFILES_READINESS`.
+
 ## Настройки доступа
 
 Stage 4F-1 добавляет admin-only раздел `/settings -> Доступ`.

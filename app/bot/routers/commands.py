@@ -22,6 +22,8 @@ from app.llm.types import LLMMessage
 from app.services.memory_service import MemoryService
 from app.services.runtime_settings_service import (
     ActiveLLMProvider,
+    PromptProfile,
+    PromptProfileScope,
     RuntimeSettingsService,
     RuntimeSettingsUnavailable,
 )
@@ -36,6 +38,10 @@ SETTINGS_CALLBACK_REFRESH = "settings:refresh"
 SETTINGS_CALLBACK_CLOSE = "settings:close"
 SETTINGS_CALLBACK_AGENT = "settings:agent"
 SETTINGS_CALLBACK_ACCESS = "settings:access"
+SETTINGS_CALLBACK_PROFILES = "settings:profiles"
+SETTINGS_CALLBACK_PROFILES_PRIVATE = "settings:profiles:private"
+SETTINGS_CALLBACK_PROFILES_GROUP = "settings:profiles:group"
+SETTINGS_CALLBACK_PROFILES_WATCHER = "settings:profiles:watcher"
 SETTINGS_CALLBACK_ACCESS_USERS = "settings:access:users"
 SETTINGS_CALLBACK_ACCESS_GROUPS = "settings:access:groups"
 SETTINGS_CALLBACK_ACCESS_USER_ADD = "settings:access:user:add"
@@ -46,10 +52,28 @@ SETTINGS_PROVIDER_PREFIX = "settings:provider:"
 SETTINGS_PROVIDER_AUTO = "settings:provider:auto"
 SETTINGS_PROVIDER_YANDEX = "settings:provider:yandex"
 SETTINGS_PROVIDER_OPENROUTER = "settings:provider:openrouter"
+SETTINGS_PROFILE_PREFIX = "settings:profile:"
 PROVIDER_LABELS = {
     ActiveLLMProvider.AUTO: "Auto",
     ActiveLLMProvider.YANDEX: "Yandex",
     ActiveLLMProvider.OPENROUTER: "OpenRouter",
+}
+PROMPT_PROFILE_LABELS = {
+    PromptProfile.BALANCED: "Сбалансированный",
+    PromptProfile.SHORT: "Короткий",
+    PromptProfile.DEEP: "Подробный",
+    PromptProfile.DRAFT: "Черновик",
+    PromptProfile.WATCHER: "Watcher",
+}
+PROMPT_PROFILE_SCOPE_LABELS = {
+    PromptProfileScope.PRIVATE: "личные сообщения",
+    PromptProfileScope.GROUP: "группы",
+    PromptProfileScope.WATCHER: "watcher",
+}
+PROMPT_PROFILE_SCOPE_OVERVIEW_LABELS = {
+    PromptProfileScope.PRIVATE: "Личные сообщения",
+    PromptProfileScope.GROUP: "Группы",
+    PromptProfileScope.WATCHER: "Watcher",
 }
 SETTINGS_UNAVAILABLE_MESSAGE = (
     "Настройки временно недоступны: миграция БД ещё не применена."
@@ -149,6 +173,7 @@ def build_settings_keyboard() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="Агент", callback_data=SETTINGS_CALLBACK_AGENT),
                 InlineKeyboardButton(text="Доступ", callback_data=SETTINGS_CALLBACK_ACCESS),
+                InlineKeyboardButton(text="Профили", callback_data=SETTINGS_CALLBACK_PROFILES),
             ],
             [
                 InlineKeyboardButton(text="Обновить", callback_data=SETTINGS_CALLBACK_REFRESH),
@@ -246,8 +271,68 @@ def build_access_groups_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def build_prompt_profiles_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Личные",
+                    callback_data=SETTINGS_CALLBACK_PROFILES_PRIVATE,
+                ),
+                InlineKeyboardButton(
+                    text="Группы",
+                    callback_data=SETTINGS_CALLBACK_PROFILES_GROUP,
+                ),
+                InlineKeyboardButton(
+                    text="Watcher",
+                    callback_data=SETTINGS_CALLBACK_PROFILES_WATCHER,
+                ),
+            ],
+            [
+                InlineKeyboardButton(text="Назад", callback_data=SETTINGS_CALLBACK_REFRESH),
+                InlineKeyboardButton(text="Закрыть", callback_data=SETTINGS_CALLBACK_CLOSE),
+            ],
+        ]
+    )
+
+
+def build_prompt_profile_scope_keyboard(scope: PromptProfileScope) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=PROMPT_PROFILE_LABELS[PromptProfile.BALANCED],
+                    callback_data=f"{SETTINGS_PROFILE_PREFIX}{scope.value}:balanced",
+                ),
+                InlineKeyboardButton(
+                    text=PROMPT_PROFILE_LABELS[PromptProfile.SHORT],
+                    callback_data=f"{SETTINGS_PROFILE_PREFIX}{scope.value}:short",
+                ),
+                InlineKeyboardButton(
+                    text=PROMPT_PROFILE_LABELS[PromptProfile.DEEP],
+                    callback_data=f"{SETTINGS_PROFILE_PREFIX}{scope.value}:deep",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=PROMPT_PROFILE_LABELS[PromptProfile.DRAFT],
+                    callback_data=f"{SETTINGS_PROFILE_PREFIX}{scope.value}:draft",
+                ),
+                InlineKeyboardButton(
+                    text=PROMPT_PROFILE_LABELS[PromptProfile.WATCHER],
+                    callback_data=f"{SETTINGS_PROFILE_PREFIX}{scope.value}:watcher",
+                ),
+            ],
+            [
+                InlineKeyboardButton(text="Назад", callback_data=SETTINGS_CALLBACK_PROFILES),
+                InlineKeyboardButton(text="Закрыть", callback_data=SETTINGS_CALLBACK_CLOSE),
+            ],
+        ]
+    )
+
+
 def render_settings_home_text() -> str:
-    return "Настройки Jarvis\n\nРазделы:\n- Агент\n- Доступ"
+    return "Настройки Jarvis\n\nРазделы:\n- Агент\n- Доступ\n- Профили"
 
 
 def render_settings_text(provider: ActiveLLMProvider, *, saved: bool = False) -> str:
@@ -284,6 +369,36 @@ def render_access_entries_text(title: str, entries: list[AccessEntry]) -> str:
     return "\n".join(lines)
 
 
+def render_prompt_profiles_text(
+    *,
+    private_profile: PromptProfile,
+    group_profile: PromptProfile,
+    watcher_profile: PromptProfile,
+) -> str:
+    return (
+        "Prompt Profiles Jarvis\n\n"
+        f"Личные сообщения: {PROMPT_PROFILE_LABELS[private_profile]}\n"
+        f"Группы: {PROMPT_PROFILE_LABELS[group_profile]}\n"
+        f"Watcher: {PROMPT_PROFILE_LABELS[watcher_profile]}\n\n"
+        "Профили применяются к следующим LLM-запросам. Watcher в Stage 4F-2 не запускается."
+    )
+
+
+def render_prompt_profile_scope_text(
+    scope: PromptProfileScope,
+    profile: PromptProfile,
+    *,
+    saved: bool = False,
+) -> str:
+    title = "Профиль сохранён." if saved else f"Профиль: {PROMPT_PROFILE_SCOPE_LABELS[scope]}"
+    return (
+        f"{title}\n\n"
+        f"Профиль: {PROMPT_PROFILE_SCOPE_LABELS[scope]}\n"
+        f"Текущий профиль: {PROMPT_PROFILE_LABELS[profile]}\n\n"
+        "Выберите один из фиксированных безопасных профилей."
+    )
+
+
 def _message_user_id(message: Message) -> int | None:
     return message.from_user.id if message.from_user else None
 
@@ -301,6 +416,29 @@ def _telegram_access_service(session: object, admin_ids: set[int]) -> TelegramAc
         TelegramAccessRepository(session),  # type: ignore[arg-type]
         admin_ids=admin_ids,
     )
+
+
+async def _prompt_profiles_snapshot(
+    service: RuntimeSettingsService,
+) -> tuple[PromptProfile, PromptProfile, PromptProfile]:
+    return (
+        await service.get_prompt_profile(PromptProfileScope.PRIVATE),
+        await service.get_prompt_profile(PromptProfileScope.GROUP),
+        await service.get_prompt_profile(PromptProfileScope.WATCHER),
+    )
+
+
+def _parse_prompt_profile_callback(
+    callback_data: str,
+) -> tuple[PromptProfileScope, PromptProfile] | None:
+    payload = callback_data.removeprefix(SETTINGS_PROFILE_PREFIX)
+    parts = payload.split(":")
+    if len(parts) != 2:
+        return None
+    try:
+        return PromptProfileScope(parts[0]), PromptProfile(parts[1])
+    except ValueError:
+        return None
 
 
 def _is_message_not_modified(exc: TelegramBadRequest) -> bool:
@@ -538,6 +676,41 @@ async def handle_settings_callback(callback: CallbackQuery, **data: Any) -> None
         return
     callback_data = callback.data or ""
     saved = False
+    if callback_data.startswith(SETTINGS_PROFILE_PREFIX):
+        parsed_profile = _parse_prompt_profile_callback(callback_data)
+        if parsed_profile is None:
+            await callback.answer("Неизвестный профиль.", show_alert=True)
+            return
+        scope, profile = parsed_profile
+        service = _runtime_settings_service(session)
+        try:
+            current_profile = await service.get_prompt_profile(scope)
+            if current_profile == profile:
+                await callback.answer(
+                    f"Уже выбран профиль: {PROMPT_PROFILE_LABELS[profile]}",
+                    show_alert=False,
+                )
+                return
+            profile = await service.set_prompt_profile(
+                scope,
+                profile.value,
+                updated_by_telegram_id=user_id,
+            )
+        except ValueError:
+            await callback.answer("Неизвестный профиль.", show_alert=True)
+            return
+        except RuntimeSettingsUnavailable:
+            await callback.answer(SETTINGS_UNAVAILABLE_MESSAGE, show_alert=True)
+            return
+        edited = await _edit_settings_callback_message(
+            callback,
+            text=render_prompt_profile_scope_text(scope, profile, saved=True),
+            reply_markup=build_prompt_profile_scope_keyboard(scope),
+        )
+        if not edited:
+            return
+        await callback.answer("Профиль сохранён.", show_alert=False)
+        return
     if callback_data.startswith(SETTINGS_PROVIDER_PREFIX):
         service = _runtime_settings_service(session)
         provider_value = callback_data.removeprefix(SETTINGS_PROVIDER_PREFIX)
@@ -575,6 +748,48 @@ async def handle_settings_callback(callback: CallbackQuery, **data: Any) -> None
             callback,
             text=render_settings_home_text(),
             reply_markup=build_settings_keyboard(),
+        )
+        if edited:
+            await callback.answer()
+        return
+    if callback_data == SETTINGS_CALLBACK_PROFILES:
+        service = _runtime_settings_service(session)
+        try:
+            private_profile, group_profile, watcher_profile = await _prompt_profiles_snapshot(
+                service
+            )
+        except RuntimeSettingsUnavailable:
+            await callback.answer(SETTINGS_UNAVAILABLE_MESSAGE, show_alert=True)
+            return
+        edited = await _edit_settings_callback_message(
+            callback,
+            text=render_prompt_profiles_text(
+                private_profile=private_profile,
+                group_profile=group_profile,
+                watcher_profile=watcher_profile,
+            ),
+            reply_markup=build_prompt_profiles_keyboard(),
+        )
+        if edited:
+            await callback.answer()
+        return
+    profile_scope_callbacks = {
+        SETTINGS_CALLBACK_PROFILES_PRIVATE: PromptProfileScope.PRIVATE,
+        SETTINGS_CALLBACK_PROFILES_GROUP: PromptProfileScope.GROUP,
+        SETTINGS_CALLBACK_PROFILES_WATCHER: PromptProfileScope.WATCHER,
+    }
+    if callback_data in profile_scope_callbacks:
+        scope = profile_scope_callbacks[callback_data]
+        service = _runtime_settings_service(session)
+        try:
+            profile = await service.get_prompt_profile(scope)
+        except RuntimeSettingsUnavailable:
+            await callback.answer(SETTINGS_UNAVAILABLE_MESSAGE, show_alert=True)
+            return
+        edited = await _edit_settings_callback_message(
+            callback,
+            text=render_prompt_profile_scope_text(scope, profile),
+            reply_markup=build_prompt_profile_scope_keyboard(scope),
         )
         if edited:
             await callback.answer()

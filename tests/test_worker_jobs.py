@@ -2,7 +2,12 @@ import pytest
 
 from app.core.config import Settings
 from app.llm.types import LLMMessage, LLMResponse, LLMStreamChunk
-from app.services.runtime_settings_service import ActiveLLMProvider, RuntimeSettingsUnavailable
+from app.services.runtime_settings_service import (
+    ActiveLLMProvider,
+    PromptProfile,
+    PromptProfileScope,
+    RuntimeSettingsUnavailable,
+)
 from app.workers import jobs
 from app.workers.jobs import process_llm_message, try_send_chat_action
 
@@ -60,10 +65,23 @@ class FakeMemoryService:
     def __init__(self, repository: object, *, max_messages: int) -> None:
         del repository, max_messages
         self.added: list[dict[str, object]] = []
+        self.context_calls: list[dict[str, object]] = []
         self.__class__.instances.append(self)
 
-    async def build_context(self, *, chat_id: int) -> list[LLMMessage]:
-        assert chat_id == -100123
+    async def build_context(
+        self,
+        *,
+        chat_id: int,
+        prompt_profile: PromptProfile | None = None,
+        chat_kind: str | None = None,
+    ) -> list[LLMMessage]:
+        self.context_calls.append(
+            {
+                "chat_id": chat_id,
+                "prompt_profile": prompt_profile,
+                "chat_kind": chat_kind,
+            }
+        )
         return [
             LLMMessage(role="system", content="system"),
             LLMMessage(role="user", content="group question"),
@@ -108,6 +126,10 @@ class FakeRuntimeSettingsService:
 
     async def get_active_llm_provider(self) -> ActiveLLMProvider:
         return ActiveLLMProvider.AUTO
+
+    async def get_prompt_profile(self, scope: PromptProfileScope) -> PromptProfile:
+        del scope
+        return PromptProfile.BALANCED
 
 
 @pytest.mark.asyncio
@@ -155,6 +177,119 @@ async def test_worker_group_job_uses_send_message_without_private_streaming(
 
 
 @pytest.mark.asyncio
+async def test_worker_private_job_uses_private_prompt_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = FakeProvider()
+    requested_scopes: list[PromptProfileScope] = []
+    FakeBot.instances = []
+    FakeMemoryService.instances = []
+
+    class PrivateProfileRuntimeSettingsService:
+        def __init__(self, repository: object) -> None:
+            del repository
+
+        async def get_active_llm_provider(self) -> ActiveLLMProvider:
+            return ActiveLLMProvider.AUTO
+
+        async def get_prompt_profile(self, scope: PromptProfileScope) -> PromptProfile:
+            requested_scopes.append(scope)
+            return PromptProfile.SHORT
+
+    monkeypatch.setattr(jobs, "Bot", FakeBot)
+    monkeypatch.setattr(
+        jobs,
+        "get_settings",
+        lambda: Settings(
+            telegram_bot_token="123456:secret-token",
+            memory_max_messages=5,
+        ),
+    )
+    monkeypatch.setattr(jobs, "SessionLocal", FakeSessionLocal())
+    monkeypatch.setattr(jobs, "MessageRepository", lambda session: object())
+    monkeypatch.setattr(jobs, "RuntimeSettingRepository", lambda session: object())
+    monkeypatch.setattr(jobs, "RuntimeSettingsService", PrivateProfileRuntimeSettingsService)
+    monkeypatch.setattr(jobs, "MemoryService", FakeMemoryService)
+    monkeypatch.setattr(
+        jobs,
+        "build_llm_provider",
+        lambda settings, *, active_provider: provider,
+    )
+
+    await process_llm_message(
+        {},
+        {"chat_id": 100500, "user_id": 100500, "private": True},
+    )
+
+    memory = FakeMemoryService.instances[0]
+    assert requested_scopes == [PromptProfileScope.PRIVATE]
+    assert memory.context_calls == [
+        {
+            "chat_id": 100500,
+            "prompt_profile": PromptProfile.SHORT,
+            "chat_kind": "private",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_worker_group_job_uses_group_prompt_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = FakeProvider()
+    requested_scopes: list[PromptProfileScope] = []
+    FakeBot.instances = []
+    FakeMemoryService.instances = []
+
+    class GroupProfileRuntimeSettingsService:
+        def __init__(self, repository: object) -> None:
+            del repository
+
+        async def get_active_llm_provider(self) -> ActiveLLMProvider:
+            return ActiveLLMProvider.AUTO
+
+        async def get_prompt_profile(self, scope: PromptProfileScope) -> PromptProfile:
+            requested_scopes.append(scope)
+            return PromptProfile.DEEP
+
+    monkeypatch.setattr(jobs, "Bot", FakeBot)
+    monkeypatch.setattr(
+        jobs,
+        "get_settings",
+        lambda: Settings(
+            telegram_bot_token="123456:secret-token",
+            memory_max_messages=5,
+            streaming_group_fallback_enabled=False,
+        ),
+    )
+    monkeypatch.setattr(jobs, "SessionLocal", FakeSessionLocal())
+    monkeypatch.setattr(jobs, "MessageRepository", lambda session: object())
+    monkeypatch.setattr(jobs, "RuntimeSettingRepository", lambda session: object())
+    monkeypatch.setattr(jobs, "RuntimeSettingsService", GroupProfileRuntimeSettingsService)
+    monkeypatch.setattr(jobs, "MemoryService", FakeMemoryService)
+    monkeypatch.setattr(
+        jobs,
+        "build_llm_provider",
+        lambda settings, *, active_provider: provider,
+    )
+
+    await process_llm_message(
+        {},
+        {"chat_id": -100123, "user_id": 456, "private": False},
+    )
+
+    memory = FakeMemoryService.instances[0]
+    assert requested_scopes == [PromptProfileScope.GROUP]
+    assert memory.context_calls == [
+        {
+            "chat_id": -100123,
+            "prompt_profile": PromptProfile.DEEP,
+            "chat_kind": "group",
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_worker_reads_active_llm_provider_setting_for_each_job(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -169,6 +304,10 @@ async def test_worker_reads_active_llm_provider_setting_for_each_job(
 
         async def get_active_llm_provider(self) -> ActiveLLMProvider:
             return ActiveLLMProvider.OPENROUTER
+
+        async def get_prompt_profile(self, scope: PromptProfileScope) -> PromptProfile:
+            del scope
+            return PromptProfile.BALANCED
 
     monkeypatch.setattr(jobs, "Bot", FakeBot)
     monkeypatch.setattr(
@@ -217,6 +356,10 @@ async def test_worker_falls_back_to_auto_when_runtime_settings_table_is_missing(
         async def get_active_llm_provider(self) -> ActiveLLMProvider:
             raise RuntimeSettingsUnavailable("runtime_settings_unavailable")
 
+        async def get_prompt_profile(self, scope: PromptProfileScope) -> PromptProfile:
+            del scope
+            raise RuntimeSettingsUnavailable("runtime_settings_unavailable")
+
     monkeypatch.setattr(jobs, "Bot", FakeBot)
     monkeypatch.setattr(
         jobs,
@@ -247,3 +390,64 @@ async def test_worker_falls_back_to_auto_when_runtime_settings_table_is_missing(
 
     assert selected_providers == [ActiveLLMProvider.AUTO]
     assert provider.complete_called is True
+    memory = FakeMemoryService.instances[0]
+    assert memory.context_calls[0]["prompt_profile"] == PromptProfile.BALANCED
+
+
+@pytest.mark.asyncio
+async def test_prompt_profile_db_error_falls_back_to_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = FakeProvider()
+    FakeBot.instances = []
+    FakeMemoryService.instances = []
+
+    class PromptProfileUnavailableRuntimeSettingsService:
+        def __init__(self, repository: object) -> None:
+            del repository
+
+        async def get_active_llm_provider(self) -> ActiveLLMProvider:
+            return ActiveLLMProvider.AUTO
+
+        async def get_prompt_profile(self, scope: PromptProfileScope) -> PromptProfile:
+            del scope
+            raise RuntimeSettingsUnavailable("runtime_settings_unavailable")
+
+    monkeypatch.setattr(jobs, "Bot", FakeBot)
+    monkeypatch.setattr(
+        jobs,
+        "get_settings",
+        lambda: Settings(
+            telegram_bot_token="123456:secret-token",
+            memory_max_messages=5,
+            streaming_group_fallback_enabled=False,
+        ),
+    )
+    monkeypatch.setattr(jobs, "SessionLocal", FakeSessionLocal())
+    monkeypatch.setattr(jobs, "MessageRepository", lambda session: object())
+    monkeypatch.setattr(jobs, "RuntimeSettingRepository", lambda session: object())
+    monkeypatch.setattr(
+        jobs,
+        "RuntimeSettingsService",
+        PromptProfileUnavailableRuntimeSettingsService,
+    )
+    monkeypatch.setattr(jobs, "MemoryService", FakeMemoryService)
+    monkeypatch.setattr(
+        jobs,
+        "build_llm_provider",
+        lambda settings, *, active_provider: provider,
+    )
+
+    await process_llm_message(
+        {},
+        {"chat_id": 100500, "user_id": 100500, "private": True},
+    )
+
+    memory = FakeMemoryService.instances[0]
+    assert memory.context_calls == [
+        {
+            "chat_id": 100500,
+            "prompt_profile": PromptProfile.BALANCED,
+            "chat_kind": "private",
+        }
+    ]
