@@ -334,9 +334,9 @@ Jarvis вернёт черновик. Пользователь сам копир
 Stage 3A-S добавляет streaming UX для обычного assistant path.
 
 - Private chat: worker пробует Telegram `sendMessageDraft` с non-zero `draft_id`, обновляет draft через `StreamBuffer` с throttling, а после завершения отправляет финальный `sendMessage`. В БД сохраняется только финальный assistant response.
-- Mira-style private streaming: при `TELEGRAM_PRIVATE_DRAFT_STREAMING_ENABLED=true` private chat сначала пробует `sendRichMessageDraft` с rich thinking block `Думаю`, затем обновляет тот же `draft_id` через text draft updates. Это работает только в private chat; финальный ответ всё равно отправляется обычным `sendMessage`.
-- Private fallback: если draft API недоступен или вернул ошибку, текущий LLM job переключается на provisional/edit path без вывода token/key/header в logs.
-- Group chat: `sendMessageDraft` не используется. Worker отправляет `sendChatAction typing`, один provisional `Принял. Готовлю групповой ответ.`, затем throttled `editMessageText` и финальный edit. Если финальный edit не прошёл, отправляется fallback final `sendMessage` ровно один раз; повторная finalization ничего не отправляет.
+- Mira-style private streaming: при `TELEGRAM_PRIVATE_DRAFT_STREAMING_ENABLED=true` private chat сначала пробует `sendRichMessageDraft` с rich thinking block `Думаю`, затем обновляет тот же `draft_id` через text draft updates. Webhook не отправляет отдельное обычное thinking-сообщение для этого режима; финальный ответ всё равно отправляется обычным `sendMessage`.
+- Private fallback: если draft API недоступен или вернул ошибку, текущий LLM job переключается на provisional/edit path с коротким `Думаю` без вывода token/key/header в logs.
+- Group chat: `sendMessageDraft` не используется. Worker отправляет `sendChatAction typing`, один provisional `Думаю`, затем throttled `editMessageText` и финальный edit. Если финальный edit не прошёл, отправляется fallback final `sendMessage` ровно один раз; повторная finalization ничего не отправляет.
 - Unauthorized group/supergroup сообщения молча игнорируются, чтобы бот не спамил `Доступ запрещён`; в private chat явный отказ остаётся.
 - Guest Mode: остаётся final-only через `answerGuestQuery`, без streaming, draft и group edit sink.
 - Business / Secretary: auto-reply не включается; streaming слой только подготовлен к fallback path с `business_connection_id` для `sendChatAction`.

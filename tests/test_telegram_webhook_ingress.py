@@ -304,7 +304,7 @@ async def test_webhook_private_admin_update_enqueues_once(
     assert redis.jobs == [
         ("process_llm_message", {"chat_id": 100500, "user_id": 100500, "private": True})
     ]
-    assert [message["text"] for message in bot.sent_messages] == ["Принял. Готовлю ответ."]
+    assert [message["text"] for message in bot.sent_messages] == ["Думаю"]
 
 
 @pytest.mark.asyncio
@@ -370,7 +370,30 @@ async def test_private_text_admin_enqueues_after_prompt_profiles(
     assert redis.jobs == [
         ("process_llm_message", {"chat_id": 100500, "user_id": 100500, "private": True})
     ]
-    assert [message["text"] for message in bot.sent_messages] == ["Принял. Готовлю ответ."]
+    assert [message["text"] for message in bot.sent_messages] == ["Думаю"]
+
+
+@pytest.mark.asyncio
+async def test_private_mira_ingress_enqueues_without_regular_thinking_message(
+    ingress_app: tuple[Any, FakeBot, FakeRedis],
+) -> None:
+    app, bot, redis = ingress_app
+    settings = app.dependency_overrides[app_get_settings]()
+    settings.streaming_enabled = True
+    settings.streaming_private_draft_enabled = True
+    settings.telegram_private_draft_streaming_enabled = True
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/telegram/webhook",
+            json=private_update(user_id=100500, text="Привет"),
+        )
+
+    assert response.status_code == 200
+    assert redis.jobs == [
+        ("process_llm_message", {"chat_id": 100500, "user_id": 100500, "private": True})
+    ]
+    assert bot.sent_messages == []
 
 
 @pytest.mark.asyncio
@@ -394,7 +417,7 @@ async def test_prompt_profile_fsm_does_not_capture_normal_private_text(
     assert redis.jobs == [
         ("process_llm_message", {"chat_id": 100500, "user_id": 100500, "private": True})
     ]
-    assert [message["text"] for message in bot.sent_messages] == ["Принял. Готовлю ответ."]
+    assert [message["text"] for message in bot.sent_messages] == ["Думаю"]
 
 
 @pytest.mark.asyncio
@@ -469,7 +492,7 @@ async def test_webhook_private_db_allowed_user_enqueues_once(
     assert redis.jobs == [
         ("process_llm_message", {"chat_id": 200600, "user_id": 200600, "private": True})
     ]
-    assert [message["text"] for message in bot.sent_messages] == ["Принял. Готовлю ответ."]
+    assert [message["text"] for message in bot.sent_messages] == ["Думаю"]
 
 
 @pytest.mark.asyncio
@@ -489,7 +512,7 @@ async def test_private_text_allowed_user_enqueues_after_prompt_profiles(
     assert redis.jobs == [
         ("process_llm_message", {"chat_id": 200600, "user_id": 200600, "private": True})
     ]
-    assert [message["text"] for message in bot.sent_messages] == ["Принял. Готовлю ответ."]
+    assert [message["text"] for message in bot.sent_messages] == ["Думаю"]
 
 
 @pytest.mark.asyncio

@@ -3,6 +3,7 @@ from typing import Any
 from aiogram import F, Router
 from aiogram.types import Message
 
+from app.bot.thinking import THINKING_TEXT
 from app.db.models import MessageRole
 from app.db.repositories.messages import MessageRepository
 from app.services.memory_service import MemoryService
@@ -119,7 +120,12 @@ async def handle_private_text(message: Message, **data: Any) -> None:
                 "private": True,
             },
         )
-        await message.answer("Принял. Готовлю ответ.")
+        if not (
+            settings.streaming_enabled
+            and settings.streaming_private_draft_enabled
+            and settings.telegram_private_draft_streaming_enabled
+        ):
+            await message.answer(THINKING_TEXT)
         return
     await message.answer("Worker временно недоступен.")
 

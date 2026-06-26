@@ -381,7 +381,7 @@ async def test_cancel_clears_access_fsm_state(
     ]
     assert [item["text"] for item in bot.sent_messages] == [
         "Ввод отменён.",
-        "Принял. Готовлю ответ.",
+        "Думаю",
     ]
 
 

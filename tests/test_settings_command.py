@@ -511,7 +511,7 @@ async def test_custom_prompt_after_save_is_shown_and_input_does_not_go_to_llm() 
     assert state.cleared is True
     assert "Промт сохранён." in message.answers[0]["text"]
     assert "Новый сырой prompt" in message.answers[0]["text"]
-    assert "Принял. Готовлю ответ." not in message.answers[0]["text"]
+    assert "Думаю" not in message.answers[0]["text"]
 
 
 @pytest.mark.asyncio

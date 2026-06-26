@@ -93,10 +93,10 @@ def run_readiness() -> GroupStabilityReadinessResult:
     )
     result.statuses["group_provisional_worker_owned"] = (
         "OK"
-        if "Принял. Готовлю групповой ответ." in worker_source
-        and "await message.answer(\"Принял. Готовлю групповой ответ.\")"
-        not in group_handler_source
-        and "Принял. Готовлю групповой ответ." in worker_tests
+        if "TelegramGroupEditSink" in worker_source
+        and "Готовлю" not in group_handler_source
+        and '"text": "Думаю"' in worker_tests
+        and 'provisional_text: str = THINKING_TEXT' in group_sink_source
         else "MISSING"
     )
     result.statuses["stage_report"] = (

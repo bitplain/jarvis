@@ -88,7 +88,7 @@
 - Private chat path использует Telegram `sendMessageDraft` с non-zero `draft_id`, throttled `StreamBuffer`, затем финальный `sendMessage`.
 - Draft preview не считается постоянным сообщением; в БД сохраняется только финальный assistant response.
 - Если draft API недоступен или падает, текущий job должен перейти на sanitized fallback без вывода token/key/header.
-- Group/supergroup path не использует `sendMessageDraft`; fallback использует `sendChatAction typing`, один worker-owned provisional `Принял. Готовлю групповой ответ.`, throttled `editMessageText` и финальный edit/send.
+- Group/supergroup path не использует `sendMessageDraft`; fallback использует `sendChatAction typing`, один worker-owned provisional `Думаю`, throttled `editMessageText` и финальный edit/send.
 - Unauthorized group/supergroup messages, включая mention/reply от неразрешённого пользователя, должны молча игнорироваться без ответа `Доступ запрещён`; private unauthorized всё ещё получает `Доступ запрещён.`
 - Group fallback finalization должна быть idempotent: после успешного final edit, safe `message is not modified` или fallback final send повторный вызов ничего не отправляет и логирует sanitized `telegram_group_final_already_delivered`.
 - Telegram `message is not modified` в group final edit считается safe no-op/success и не должен запускать fallback duplicate send.
@@ -146,7 +146,7 @@
 - Unknown private user получает `Доступ запрещён.`, unknown group/supergroup user молча игнорируется.
 - В логах использовать sanitized события `telegram_access_user_added`, `telegram_access_user_removed`, `telegram_access_group_added`, `telegram_access_group_removed`, `telegram_access_denied_private`, `telegram_access_denied_group_silent`, `telegram_access_decision`.
 - `telegram_access_decision` допускает только sanitized поля `chat_type`, `chat_id`, `user_id`, `is_admin`, `is_user_allowed`, `has_group_allowlist`, `is_group_allowed`, `is_mention_or_reply`, `decision`, `reason`; текст сообщений, labels, токены, Authorization headers, prompts и полный Telegram update не логируются.
-- Access settings FSM input должен перехватывать следующий private text до generic private LLM handler: не должно быть `process_llm_message` и `Принял. Готовлю ответ.` во время add/remove user/group state.
+- Access settings FSM input должен перехватывать следующий private text до generic private LLM handler: не должно быть `process_llm_message` и `Думаю` во время add/remove user/group state.
 - Webhook runtime должен переиспользовать persistent aiogram Dispatcher на app instance; transient Dispatcher per update ломает FSM MemoryStorage между callback и message.
 - Access input поддерживает один ID с label, несколько IDs через пробел и несколько IDs по строкам; `/cancel` очищает state.
 - Prompt Profiles, Shopping List, Reminders, Memory и Smart Watcher в Stage 4F-1 не реализуются.
@@ -159,7 +159,7 @@
 - Admin user должен видеть текущий prompt text, редактировать/полностью переписывать prompt, сохранять custom prompt и сбрасывать custom prompt к default.
 - Custom prompt лимитируется 4000 символами; prompt text не отправляется с `parse_mode`.
 - Если prompt не помещается в экран настроек, UI показывает safe preview и кнопку `Показать полностью`; полный prompt отправляется отдельным plain-text сообщением.
-- Prompt edit FSM должен перехватывать следующий private text до generic private LLM handler: не должно быть `process_llm_message` и `Принял. Готовлю ответ.` во время редактирования prompt.
+- Prompt edit FSM должен перехватывать следующий private text до generic private LLM handler: не должно быть `process_llm_message` и `Думаю` во время редактирования prompt.
 - `/cancel` в prompt edit state отменяет ввод, не меняет prompt и возвращает понятный экран/сообщение.
 - Private worker jobs используют `prompt.private`; group/supergroup mention/reply jobs используют `prompt.group`.
 - `prompt.watch` пока нигде автоматически не используется и не запускает Smart Watcher.
@@ -185,6 +185,17 @@
 - Exact Mira letter-growth не гарантируется backend: Jarvis обновляет один draft, а Telegram client сам анимирует изменение preview.
 - Watcher, shopping list, reminders, чтение всех сообщений и Railway Variables в Stage 4F-3 не меняются.
 
+## Stage 4F-4 Thinking Text Cleanup
+
+- Единый текст ожидания ответа — `Думаю`.
+- В private chat с Mira draft (`STREAMING_ENABLED=true`, `STREAMING_PRIVATE_DRAFT_ENABLED=true`, `TELEGRAM_PRIVATE_DRAFT_STREAMING_ENABLED=true`) webhook enqueue не отправляет отдельное обычное сообщение; thinking показывается только draft/rich draft path worker.
+- В private chat без Mira draft webhook enqueue отправляет обычное короткое `Думаю`, затем worker доставляет финальный ответ один раз.
+- Private draft fallback и group fallback используют тот же `Думаю`.
+- Group/supergroup fallback показывает `Думаю` как обычное provisional message, которое worker редактирует или заменяет финальным ответом; Mira-style draft animation в group не используется.
+- `/start`, `/settings`, `/whoami`, prompt edit FSM и access FSM не должны показывать `Думаю`.
+- Старые длинные accepted/provisional тексты не используются в актуальном app/tests/docs, кроме исторических отчётов.
+- Watcher, shopping list, reminders, prompt profiles, access settings, webhook self-healing, Railway Variables и PR #5 в Stage 4F-4 не меняются.
+
 ## Проверки
 
 Перед финальным отчётом выполнять:
@@ -208,6 +219,7 @@ uv run --python 3.12 --extra dev python scripts/smoke_regular_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_group_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_streaming_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_mira_private_streaming_readiness.py
+uv run --python 3.12 --extra dev python scripts/smoke_thinking_text_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_provider_settings_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_access_settings_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_private_ingress_readiness.py

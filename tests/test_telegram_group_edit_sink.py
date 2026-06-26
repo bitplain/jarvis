@@ -57,7 +57,7 @@ async def test_group_edit_sink_sends_typing_provisional_and_throttled_edits() ->
     await sink.publish(chat_id=-100, text="раз два три", now=1.0)
 
     assert bot.chat_actions == [{"chat_id": -100, "action": "typing"}]
-    assert bot.sent_messages == [{"chat_id": -100, "text": "Думаю..."}]
+    assert bot.sent_messages == [{"chat_id": -100, "text": "Думаю"}]
     assert bot.edits == [
         {"chat_id": -100, "message_id": 55, "text": "раз"},
         {"chat_id": -100, "message_id": 55, "text": "раз два три"},
@@ -87,7 +87,7 @@ async def test_group_edit_sink_final_sends_message_when_final_edit_fails() -> No
     await sink.final(chat_id=-100, text="Финальный ответ")
 
     assert bot.sent_messages == [
-        {"chat_id": -100, "text": "Думаю..."},
+        {"chat_id": -100, "text": "Думаю"},
         {"chat_id": -100, "text": "Финальный ответ"},
     ]
 
@@ -101,7 +101,7 @@ async def test_group_final_edit_success_sends_no_duplicate() -> None:
     await sink.final(chat_id=-100, text="Финальный ответ")
     await sink.final(chat_id=-100, text="Финальный ответ")
 
-    assert bot.sent_messages == [{"chat_id": -100, "text": "Думаю..."}]
+    assert bot.sent_messages == [{"chat_id": -100, "text": "Думаю"}]
     assert bot.edits[-1] == {"chat_id": -100, "message_id": 55, "text": "Финальный ответ"}
     assert len(bot.edits) == 1
 
@@ -116,7 +116,7 @@ async def test_group_final_edit_failure_sends_one_fallback() -> None:
     await sink.final(chat_id=-100, text="Финальный ответ")
 
     assert bot.sent_messages == [
-        {"chat_id": -100, "text": "Думаю..."},
+        {"chat_id": -100, "text": "Думаю"},
         {"chat_id": -100, "text": "Финальный ответ"},
     ]
 
@@ -129,7 +129,7 @@ async def test_group_message_not_modified_is_success() -> None:
     await sink.start(chat_id=-100)
     await sink.final(chat_id=-100, text="Финальный ответ")
 
-    assert bot.sent_messages == [{"chat_id": -100, "text": "Думаю..."}]
+    assert bot.sent_messages == [{"chat_id": -100, "text": "Думаю"}]
 
 
 @pytest.mark.asyncio
