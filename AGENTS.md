@@ -153,13 +153,19 @@
 
 ## Stage 4F-2 Prompt Profiles
 
-- Prompt Profiles управляются только через admin-only `/settings -> Профили`.
-- Выбор хранится в PostgreSQL `runtime_settings` ключами `prompt_profile_private`, `prompt_profile_group`, `prompt_profile_watcher`.
-- Допустимые значения: `balanced`, `short`, `deep`, `draft`, `watcher`; отсутствие записи означает `balanced`.
-- В БД, Telegram UI, docs и logs нельзя сохранять или печатать произвольные пользовательские prompt-тексты как runtime profile.
-- Private worker jobs используют `prompt_profile_private`; group/supergroup mention/reply jobs используют `prompt_profile_group`.
-- `prompt_profile_watcher` в Stage 4F-2 только настраивается для будущего watcher и не запускает Smart Watcher.
-- Prompt Profiles callbacks не должны ставить FSM state и не должны перехватывать следующий обычный private text.
+- `/settings -> Промты` — это raw prompt editor, а не выбор preset-стиля.
+- Raw prompts хранятся в PostgreSQL `runtime_settings` ключами `prompt.private`, `prompt.group`, `prompt.watch`.
+- Если custom prompt отсутствует, UI показывает default prompt и `Источник: default`; если есть custom prompt, UI показывает custom text и `Источник: custom`.
+- Admin user должен видеть текущий prompt text, редактировать/полностью переписывать prompt, сохранять custom prompt и сбрасывать custom prompt к default.
+- Custom prompt лимитируется 4000 символами; prompt text не отправляется с `parse_mode`.
+- Если prompt не помещается в экран настроек, UI показывает safe preview и кнопку `Показать полностью`; полный prompt отправляется отдельным plain-text сообщением.
+- Prompt edit FSM должен перехватывать следующий private text до generic private LLM handler: не должно быть `process_llm_message` и `Принял. Готовлю ответ.` во время редактирования prompt.
+- `/cancel` в prompt edit state отменяет ввод, не меняет prompt и возвращает понятный экран/сообщение.
+- Private worker jobs используют `prompt.private`; group/supergroup mention/reply jobs используют `prompt.group`.
+- `prompt.watch` пока нигде автоматически не используется и не запускает Smart Watcher.
+- DB/runtime_settings error при чтении prompt fallback на default prompt без логирования полного prompt text.
+- Presets `balanced`, `short`, `deep`, `draft`, `watcher` можно держать только как отдельный раздел `Стиль ответа`; они не считаются выполнением raw Prompt Profiles.
+- Старые style presets хранятся отдельно ключами `prompt_profile_private`, `prompt_profile_group`, `prompt_profile_watcher`; отсутствие записи означает `balanced`.
 - Synthetic private ingress тесты для `/start`, обычного private text от admin/allowed user и denial unknown user обязательны перед принятием Stage 4F-2.
 - Webhook ingress не должен падать до command/private handler из-за временно недоступного Redis; Redis unavailable логируется sanitized, `/start` и другие non-worker handlers продолжают обрабатываться.
 - Все profiles сохраняют базовые правила Jarvis: ответы только на русском, честное признание неизвестности и запрет выдумывать факты.

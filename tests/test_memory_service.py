@@ -68,3 +68,19 @@ async def test_group_deep_profile_adds_group_safe_instruction() -> None:
     assert "групповом чате" in context[0].content
     assert "не делай вид, что видишь всю историю группы" in context[0].content
     assert context[1].content == "группа"
+
+
+@pytest.mark.asyncio
+async def test_custom_raw_prompt_replaces_default_system_prompt() -> None:
+    repo = InMemoryMessageRepository()
+    service = MemoryService(repo, max_messages=2)
+    await service.add_message(chat_id=10, user_id=1, role=MessageRole.USER, text="вопрос")
+
+    context = await service.build_context(
+        chat_id=10,
+        system_prompt="Ты Jarvis. Это сырой custom prompt для теста.",
+    )
+
+    assert context[0].role == "system"
+    assert context[0].content == "Ты Jarvis. Это сырой custom prompt для теста."
+    assert context[1].content == "вопрос"

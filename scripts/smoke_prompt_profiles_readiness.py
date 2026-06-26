@@ -7,11 +7,14 @@ from pathlib import Path
 
 from app.services.memory_service import MemoryService
 from app.services.runtime_settings_service import (
-    PROMPT_PROFILE_GROUP_KEY,
-    PROMPT_PROFILE_PRIVATE_KEY,
-    PROMPT_PROFILE_WATCHER_KEY,
+    DEFAULT_PROMPTS,
+    MAX_PROMPT_LENGTH,
+    PROMPT_GROUP_KEY,
+    PROMPT_PRIVATE_KEY,
+    PROMPT_WATCH_KEY,
     PromptProfile,
     PromptProfileScope,
+    PromptSource,
     RuntimeSettingsService,
 )
 
@@ -21,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 @dataclass
 class PromptProfilesReadinessResult:
     statuses: dict[str, str] = field(default_factory=dict)
-    verdict: str = "PARTIAL_PROMPT_PROFILES_READINESS_NEEDS_FIX"
+    verdict: str = "PARTIAL_PROMPT_PROFILES_RAW_EDITOR_READINESS_NEEDS_FIX"
 
     def render_sanitized(self) -> str:
         lines = ["Stage 4F-2 prompt profiles readiness sanitized result:"]
@@ -48,6 +51,9 @@ class InMemoryRuntimeSettingsRepository:
         del updated_by_telegram_id
         self.values[key] = value
 
+    async def delete_value(self, key: str) -> None:
+        self.values.pop(key, None)
+
 
 def _read(path: str) -> str:
     target = ROOT / path
@@ -61,100 +67,139 @@ async def run_readiness() -> PromptProfilesReadinessResult:
     repository = InMemoryRuntimeSettingsRepository()
     service = RuntimeSettingsService(repository)
 
-    default_profiles = [
-        await service.get_prompt_profile(PromptProfileScope.PRIVATE),
-        await service.get_prompt_profile(PromptProfileScope.GROUP),
-        await service.get_prompt_profile(PromptProfileScope.WATCHER),
+    default_prompts = [
+        await service.get_prompt(PromptProfileScope.PRIVATE),
+        await service.get_prompt(PromptProfileScope.GROUP),
+        await service.get_prompt(PromptProfileScope.WATCHER),
     ]
-    result.statuses["defaults"] = (
+    result.statuses["raw_prompt_defaults"] = (
         "OK"
-        if default_profiles
-        == [PromptProfile.BALANCED, PromptProfile.BALANCED, PromptProfile.BALANCED]
+        if [prompt.source for prompt in default_prompts]
+        == [PromptSource.DEFAULT, PromptSource.DEFAULT, PromptSource.DEFAULT]
+        and [prompt.text for prompt in default_prompts]
+        == [
+            DEFAULT_PROMPTS[PromptProfileScope.PRIVATE],
+            DEFAULT_PROMPTS[PromptProfileScope.GROUP],
+            DEFAULT_PROMPTS[PromptProfileScope.WATCHER],
+        ]
         else "BROKEN"
     )
 
-    saved_private = await service.set_prompt_profile(
+    saved_private = await service.set_prompt(
         PromptProfileScope.PRIVATE,
-        PromptProfile.SHORT.value,
+        "custom private prompt",
         updated_by_telegram_id=None,
     )
-    saved_group = await service.set_prompt_profile(
+    saved_group = await service.set_prompt(
         PromptProfileScope.GROUP,
-        PromptProfile.DEEP.value,
+        "custom group prompt",
         updated_by_telegram_id=None,
     )
-    saved_watcher = await service.set_prompt_profile(
+    saved_watcher = await service.set_prompt(
         PromptProfileScope.WATCHER,
-        PromptProfile.WATCHER.value,
+        "custom watch prompt",
         updated_by_telegram_id=None,
     )
-    result.statuses["runtime_settings_keys"] = (
+    result.statuses["raw_prompt_runtime_settings_keys"] = (
         "OK"
-        if saved_private == PromptProfile.SHORT
-        and saved_group == PromptProfile.DEEP
-        and saved_watcher == PromptProfile.WATCHER
-        and repository.values[PROMPT_PROFILE_PRIVATE_KEY] == "short"
-        and repository.values[PROMPT_PROFILE_GROUP_KEY] == "deep"
-        and repository.values[PROMPT_PROFILE_WATCHER_KEY] == "watcher"
+        if saved_private.source is PromptSource.CUSTOM
+        and saved_group.source is PromptSource.CUSTOM
+        and saved_watcher.source is PromptSource.CUSTOM
+        and repository.values[PROMPT_PRIVATE_KEY] == "custom private prompt"
+        and repository.values[PROMPT_GROUP_KEY] == "custom group prompt"
+        and repository.values[PROMPT_WATCH_KEY] == "custom watch prompt"
+        else "BROKEN"
+    )
+
+    reset_private = await service.reset_prompt(PromptProfileScope.PRIVATE)
+    result.statuses["raw_prompt_reset"] = (
+        "OK"
+        if reset_private.source is PromptSource.DEFAULT
+        and reset_private.text == DEFAULT_PROMPTS[PromptProfileScope.PRIVATE]
+        and PROMPT_PRIVATE_KEY not in repository.values
         else "BROKEN"
     )
 
     try:
-        await service.set_prompt_profile(
+        await service.set_prompt(
             PromptProfileScope.PRIVATE,
-            "mira",
+            "x" * (MAX_PROMPT_LENGTH + 1),
             updated_by_telegram_id=None,
         )
     except ValueError:
-        result.statuses["invalid_profile"] = "OK"
+        result.statuses["max_prompt_length"] = "OK"
     else:
-        result.statuses["invalid_profile"] = "BROKEN"
+        result.statuses["max_prompt_length"] = "BROKEN"
+
+    saved_profile = await service.set_prompt_profile(
+        PromptProfileScope.PRIVATE,
+        PromptProfile.SHORT.value,
+        updated_by_telegram_id=None,
+    )
+    result.statuses["style_presets_still_separate"] = (
+        "OK" if saved_profile == PromptProfile.SHORT else "BROKEN"
+    )
 
     memory_service = MemoryService(repository=object(), max_messages=5)  # type: ignore[arg-type]
-    private_prompt = memory_service.build_system_prompt(
+    raw_prompt = memory_service.build_system_prompt(system_prompt="raw prompt")
+    result.statuses["raw_prompt_rendering"] = (
+        "OK" if raw_prompt == "raw prompt" else "BROKEN"
+    )
+    private_style_prompt = memory_service.build_system_prompt(
         prompt_profile=PromptProfile.SHORT,
         chat_kind="private",
     )
-    group_prompt = memory_service.build_system_prompt(
-        prompt_profile=PromptProfile.DEEP,
-        chat_kind="group",
-    )
-    result.statuses["prompt_rendering"] = (
+    result.statuses["style_prompt_rendering"] = (
         "OK"
-        if "Отвечай коротко" in private_prompt
-        and "личном чате" in private_prompt
-        and "Дай подробный разбор" in group_prompt
-        and "не делай вид, что видишь всю историю группы" in group_prompt
+        if "Отвечай коротко" in private_style_prompt
+        and "личном чате" in private_style_prompt
         else "BROKEN"
     )
 
     commands = _read("app/bot/routers/commands.py")
     required_callbacks = [
-        "settings:profiles",
-        "settings:profiles:private",
-        "settings:profiles:group",
-        "settings:profiles:watcher",
-        "settings:profile:",
-        "Профили",
-        "Prompt Profiles Jarvis",
+        "settings:prompts",
+        "settings:prompts:private",
+        "settings:prompts:group",
+        "settings:prompts:watcher",
+        "settings:prompt:",
+        "Промты Jarvis",
+        "Показать полностью",
+        "Сбросить",
+        "PromptEditorInput",
+        "handle_prompt_input_message",
     ]
     result.statuses["settings_callbacks"] = (
         "OK" if all(item in commands for item in required_callbacks) else "MISSING"
+    )
+    result.statuses["prompt_fsm_state_scoped"] = (
+        "OK"
+        if "StateFilter(PromptEditorInput.private)" in commands
+        and "StateFilter(PromptEditorInput.group)" in commands
+        and "StateFilter(PromptEditorInput.watcher)" in commands
+        and "handle_cancel_message" in commands
+        else "MISSING"
+    )
+    result.statuses["presets_not_raw_prompt_replacement"] = (
+        "OK"
+        if "Стиль ответа Jarvis" in commands
+        and "Это пресеты стиля ответа, а не редактор raw prompt." in commands
+        and "Промты" in commands
+        else "MISSING"
     )
 
     worker = _read("app/workers/jobs.py")
     result.statuses["worker_integration"] = (
         "OK"
         if "PromptProfileScope.PRIVATE if is_private else PromptProfileScope.GROUP" in worker
-        and "get_prompt_profile(profile_scope)" in worker
-        and "prompt_profile=prompt_profile" in worker
-        and "chat_kind=profile_scope.value" in worker
+        and "get_prompt(profile_scope)" in worker
+        and "system_prompt=prompt_text" in worker
         else "MISSING"
     )
-    result.statuses["worker_prompt_profile_fallback"] = (
+    result.statuses["worker_prompt_fallback"] = (
         "OK"
-        if "runtime_settings_unavailable_using_balanced_prompt_profile" in worker
-        and "PromptProfile.BALANCED" in worker
+        if "runtime_settings_unavailable_using_default_prompt" in worker
+        and "DEFAULT_PROMPTS[profile_scope]" in worker
         and "RuntimeSettingsUnavailable" in worker
         else "MISSING"
     )
@@ -197,25 +242,25 @@ async def run_readiness() -> PromptProfilesReadinessResult:
     )
     required_docs = [
         "Stage 4F-2",
-        "Prompt Profiles",
-        "prompt_profile_private",
-        "prompt_profile_group",
-        "prompt_profile_watcher",
-        "PASS_PROMPT_PROFILES_READINESS",
+        "Промты",
+        "prompt.private",
+        "prompt.group",
+        "prompt.watch",
+        "PASS_PROMPT_PROFILES_RAW_EDITOR_READINESS",
     ]
     result.statuses["docs"] = (
         "OK" if all(item in docs for item in required_docs) else "MISSING"
     )
 
     if all(value == "OK" for value in result.statuses.values()):
-        result.verdict = "PASS_PROMPT_PROFILES_READINESS"
+        result.verdict = "PASS_PROMPT_PROFILES_RAW_EDITOR_READINESS"
     return result
 
 
 def main() -> int:
     result = asyncio.run(run_readiness())
     print(result.render_sanitized())  # noqa: T201
-    return 0 if result.verdict == "PASS_PROMPT_PROFILES_READINESS" else 2
+    return 0 if result.verdict == "PASS_PROMPT_PROFILES_RAW_EDITOR_READINESS" else 2
 
 
 if __name__ == "__main__":

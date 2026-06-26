@@ -18,8 +18,8 @@ from app.llm.base import LLMProviderError
 from app.llm.factory import build_llm_provider
 from app.services.memory_service import MemoryService
 from app.services.runtime_settings_service import (
+    DEFAULT_PROMPTS,
     ActiveLLMProvider,
-    PromptProfile,
     PromptProfileScope,
     RuntimeSettingsService,
     RuntimeSettingsUnavailable,
@@ -252,14 +252,15 @@ async def process_llm_message(ctx: dict[str, Any], payload: dict[str, Any]) -> N
             active_provider = ActiveLLMProvider.AUTO
         profile_scope = PromptProfileScope.PRIVATE if is_private else PromptProfileScope.GROUP
         try:
-            prompt_profile = await runtime_settings.get_prompt_profile(profile_scope)
+            prompt_setting = await runtime_settings.get_prompt(profile_scope)
         except RuntimeSettingsUnavailable:
-            logger.warning("runtime_settings_unavailable_using_balanced_prompt_profile")
-            prompt_profile = PromptProfile.BALANCED
+            logger.warning("runtime_settings_unavailable_using_default_prompt")
+            prompt_text = DEFAULT_PROMPTS[profile_scope]
+        else:
+            prompt_text = prompt_setting.text
         messages = await memory.build_context(
             chat_id=chat_id,
-            prompt_profile=prompt_profile,
-            chat_kind=profile_scope.value,
+            system_prompt=prompt_text,
         )
         provider = build_llm_provider(settings, active_provider=active_provider)
         final_text = ""

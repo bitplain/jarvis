@@ -3,9 +3,12 @@ import pytest
 from app.core.config import Settings
 from app.llm.types import LLMMessage, LLMResponse, LLMStreamChunk
 from app.services.runtime_settings_service import (
+    DEFAULT_PROMPTS,
     ActiveLLMProvider,
     PromptProfile,
     PromptProfileScope,
+    PromptSetting,
+    PromptSource,
     RuntimeSettingsUnavailable,
 )
 from app.workers import jobs
@@ -71,6 +74,7 @@ class FakeMemoryService:
     async def build_context(
         self,
         *,
+        system_prompt: str | None = None,
         chat_id: int,
         prompt_profile: PromptProfile | None = None,
         chat_kind: str | None = None,
@@ -78,6 +82,7 @@ class FakeMemoryService:
         self.context_calls.append(
             {
                 "chat_id": chat_id,
+                "system_prompt": system_prompt,
                 "prompt_profile": prompt_profile,
                 "chat_kind": chat_kind,
             }
@@ -130,6 +135,9 @@ class FakeRuntimeSettingsService:
     async def get_prompt_profile(self, scope: PromptProfileScope) -> PromptProfile:
         del scope
         return PromptProfile.BALANCED
+
+    async def get_prompt(self, scope: PromptProfileScope) -> PromptSetting:
+        return PromptSetting(scope=scope, text=DEFAULT_PROMPTS[scope], source=PromptSource.DEFAULT)
 
 
 @pytest.mark.asyncio
@@ -196,6 +204,14 @@ async def test_worker_private_job_uses_private_prompt_profile(
             requested_scopes.append(scope)
             return PromptProfile.SHORT
 
+        async def get_prompt(self, scope: PromptProfileScope) -> PromptSetting:
+            requested_scopes.append(scope)
+            return PromptSetting(
+                scope=scope,
+                text="CUSTOM PRIVATE RAW PROMPT",
+                source=PromptSource.CUSTOM,
+            )
+
     monkeypatch.setattr(jobs, "Bot", FakeBot)
     monkeypatch.setattr(
         jobs,
@@ -226,8 +242,9 @@ async def test_worker_private_job_uses_private_prompt_profile(
     assert memory.context_calls == [
         {
             "chat_id": 100500,
-            "prompt_profile": PromptProfile.SHORT,
-            "chat_kind": "private",
+            "system_prompt": "CUSTOM PRIVATE RAW PROMPT",
+            "prompt_profile": None,
+            "chat_kind": None,
         }
     ]
 
@@ -251,6 +268,14 @@ async def test_worker_group_job_uses_group_prompt_profile(
         async def get_prompt_profile(self, scope: PromptProfileScope) -> PromptProfile:
             requested_scopes.append(scope)
             return PromptProfile.DEEP
+
+        async def get_prompt(self, scope: PromptProfileScope) -> PromptSetting:
+            requested_scopes.append(scope)
+            return PromptSetting(
+                scope=scope,
+                text="CUSTOM GROUP RAW PROMPT",
+                source=PromptSource.CUSTOM,
+            )
 
     monkeypatch.setattr(jobs, "Bot", FakeBot)
     monkeypatch.setattr(
@@ -283,8 +308,9 @@ async def test_worker_group_job_uses_group_prompt_profile(
     assert memory.context_calls == [
         {
             "chat_id": -100123,
-            "prompt_profile": PromptProfile.DEEP,
-            "chat_kind": "group",
+            "system_prompt": "CUSTOM GROUP RAW PROMPT",
+            "prompt_profile": None,
+            "chat_kind": None,
         }
     ]
 
@@ -308,6 +334,13 @@ async def test_worker_reads_active_llm_provider_setting_for_each_job(
         async def get_prompt_profile(self, scope: PromptProfileScope) -> PromptProfile:
             del scope
             return PromptProfile.BALANCED
+
+        async def get_prompt(self, scope: PromptProfileScope) -> PromptSetting:
+            return PromptSetting(
+                scope=scope,
+                text=DEFAULT_PROMPTS[scope],
+                source=PromptSource.DEFAULT,
+            )
 
     monkeypatch.setattr(jobs, "Bot", FakeBot)
     monkeypatch.setattr(
@@ -360,6 +393,10 @@ async def test_worker_falls_back_to_auto_when_runtime_settings_table_is_missing(
             del scope
             raise RuntimeSettingsUnavailable("runtime_settings_unavailable")
 
+        async def get_prompt(self, scope: PromptProfileScope) -> PromptSetting:
+            del scope
+            raise RuntimeSettingsUnavailable("runtime_settings_unavailable")
+
     monkeypatch.setattr(jobs, "Bot", FakeBot)
     monkeypatch.setattr(
         jobs,
@@ -391,7 +428,7 @@ async def test_worker_falls_back_to_auto_when_runtime_settings_table_is_missing(
     assert selected_providers == [ActiveLLMProvider.AUTO]
     assert provider.complete_called is True
     memory = FakeMemoryService.instances[0]
-    assert memory.context_calls[0]["prompt_profile"] == PromptProfile.BALANCED
+    assert memory.context_calls[0]["system_prompt"] == DEFAULT_PROMPTS[PromptProfileScope.GROUP]
 
 
 @pytest.mark.asyncio
@@ -410,6 +447,10 @@ async def test_prompt_profile_db_error_falls_back_to_default(
             return ActiveLLMProvider.AUTO
 
         async def get_prompt_profile(self, scope: PromptProfileScope) -> PromptProfile:
+            del scope
+            raise RuntimeSettingsUnavailable("runtime_settings_unavailable")
+
+        async def get_prompt(self, scope: PromptProfileScope) -> PromptSetting:
             del scope
             raise RuntimeSettingsUnavailable("runtime_settings_unavailable")
 
@@ -447,7 +488,8 @@ async def test_prompt_profile_db_error_falls_back_to_default(
     assert memory.context_calls == [
         {
             "chat_id": 100500,
-            "prompt_profile": PromptProfile.BALANCED,
-            "chat_kind": "private",
+            "system_prompt": DEFAULT_PROMPTS[PromptProfileScope.PRIVATE],
+            "prompt_profile": None,
+            "chat_kind": None,
         }
     ]

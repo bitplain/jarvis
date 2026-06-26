@@ -128,6 +128,16 @@ Telegram UI для настройки находится в `app/bot/routers/com
 
 PostgreSQL доступ к setting изолирован в `app/db/repositories/runtime_settings.py`, бизнес-валидация значений — в `app/services/runtime_settings_service.py`.
 
+Stage 4F-2 hotfix использует ту же таблицу `runtime_settings` для raw prompt editor:
+
+- `prompt.private` — system prompt для private chat worker jobs;
+- `prompt.group` — system prompt для group/supergroup mention/reply worker jobs;
+- `prompt.watch` — заготовка для будущего watcher, в текущем runtime автоматически не используется.
+
+`/settings -> Промты` показывает default/custom source, длину и текущий prompt text. Custom prompt сохраняется только admin user, лимит — 4000 символов. Prompt edit FSM перехватывает следующий private text до generic private LLM handler, поэтому сообщение с новым prompt не уходит в `process_llm_message` и не получает `Принял. Готовлю ответ.`. Длинный prompt в UI рендерится как safe preview; полный текст отправляется отдельным plain-text сообщением без `parse_mode`.
+
+Старые enum-пресеты `prompt_profile_private`, `prompt_profile_group`, `prompt_profile_watcher` остаются отдельным разделом `Стиль ответа`. Они не являются raw prompt editor и не заменяют ключи `prompt.private`, `prompt.group`, `prompt.watch`.
+
 ## Streaming
 
 `StreamBuffer` не даёт отправлять обновление на каждый токен. Flush происходит по одному из условий:
