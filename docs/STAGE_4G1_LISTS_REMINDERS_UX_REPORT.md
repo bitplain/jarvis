@@ -64,7 +64,7 @@ Private help triggers:
 Private examples:
 
 - `добавь хлеб в список покупок`
-- `добавь молоко, яйца, сыр в список`
+- `добавь молоко, яйца и сыр в список`
 - `покажи список покупок`
 - `удали молоко из списка`
 - `напомни через 30 минут проверить духовку`
@@ -84,7 +84,8 @@ Help messages use Telegram HTML and do not enqueue LLM jobs.
 
 Shopping list:
 
-- `➕ Добавить` starts FSM input and accepts one or more items separated by comma;
+- `➕ Добавить` starts FSM input and accepts one or more items separated by comma, semicolon, newline or simple connector `и`;
+- shopping add input strips the current bot mention before saving item text;
 - `✅ Очистить купленное` removes done items;
 - `🧹 Очистить всё` asks confirmation before deleting active and done items;
 - item buttons still support done, restore and delete.
@@ -107,6 +108,7 @@ uv run --python 3.12 --extra dev mypy app
 uv run --python 3.12 --extra dev pytest -q
 uv run --python 3.12 --extra dev python scripts/smoke_lists_reminders_ux_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_lists_reminders_readiness.py
+uv run --python 3.12 --extra dev python scripts/smoke_shopping_parser_sanitize_readiness.py
 ```
 
 Expected verdict:

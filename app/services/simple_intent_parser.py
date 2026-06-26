@@ -60,17 +60,18 @@ def parse_explicit_intent(
     *,
     now: datetime | None = None,
     timezone: ZoneInfo = DEFAULT_TIMEZONE,
+    bot_username: str | None = None,
 ) -> ExplicitIntent | None:
     normalized = _normalize_text(text)
     if not normalized:
         return None
-    shopping = _parse_shopping(normalized)
+    shopping = _parse_shopping(normalized, bot_username=bot_username)
     if shopping is not None:
         return shopping
     return _parse_reminder(normalized, now=now, timezone=timezone)
 
 
-def _parse_shopping(text: str) -> ExplicitIntent | None:
+def _parse_shopping(text: str, *, bot_username: str | None = None) -> ExplicitIntent | None:
     if text in {"покажи список покупок", "список покупок", "список", "что купить?"}:
         return ShoppingListIntent()
     if text in {"помощь список", "как пользоваться списком"}:
@@ -83,11 +84,15 @@ def _parse_shopping(text: str) -> ExplicitIntent | None:
         return ShoppingDeleteIntent(query) if query else ParserHelpIntent("shopping")
     add_match = re.match(r"^добавь\s+(.+?)\s+в\s+список(?:\s+покупок)?$", text)
     if add_match:
-        items = _split_items(add_match.group(1))
+        items = split_shopping_items(
+            sanitize_shopping_items_input(add_match.group(1), bot_username)
+        )
         return ShoppingAddIntent(items) if items else ParserHelpIntent("shopping")
     buy_match = re.match(r"^купи\s+(.+)$", text)
     if buy_match:
-        items = _split_items(buy_match.group(1))
+        items = split_shopping_items(
+            sanitize_shopping_items_input(buy_match.group(1), bot_username)
+        )
         return ShoppingAddIntent(items) if items else ParserHelpIntent("shopping")
     return None
 
@@ -162,14 +167,22 @@ def _parse_reminder(
     return ParserHelpIntent("reminder")
 
 
-def _split_items(text: str) -> list[str]:
-    if "," in text or "\n" in text:
-        raw_items = re.split(r"[,\n]+", text)
-    elif re.search(r"\s+и\s+", text) and len(text.split()) <= 7:
-        raw_items = re.split(r"\s+и\s+", text)
-    else:
-        raw_items = [text]
+def sanitize_shopping_items_input(text: str, bot_username: str | None = None) -> str:
+    sanitized = text
+    username = str(bot_username or "").strip().lstrip("@")
+    if username:
+        pattern = rf"(?<![A-Za-z0-9_])@{re.escape(username)}(?![A-Za-z0-9_])"
+        sanitized = re.sub(pattern, " ", sanitized, flags=re.IGNORECASE)
+    return _normalize_text(sanitized)
+
+
+def split_shopping_items(text: str) -> list[str]:
+    raw_items = re.split(r"[,;\n]+|\s+и\s+", text)
     return [_clean_item(item) for item in raw_items if _clean_item(item)][:20]
+
+
+def _split_items(text: str) -> list[str]:
+    return split_shopping_items(text)
 
 
 def _clean_item(text: str) -> str:

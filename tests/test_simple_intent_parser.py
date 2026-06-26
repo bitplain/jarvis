@@ -8,6 +8,8 @@ from app.services.simple_intent_parser import (
     ShoppingDeleteIntent,
     ShoppingListIntent,
     parse_explicit_intent,
+    sanitize_shopping_items_input,
+    split_shopping_items,
 )
 
 MSK = ZoneInfo("Europe/Moscow")
@@ -25,6 +27,36 @@ def test_parse_shopping_add_multiple_items_by_comma() -> None:
 
     assert isinstance(intent, ShoppingAddIntent)
     assert intent.items == ["молоко", "яйца", "сыр"]
+
+
+def test_split_shopping_items_by_simple_russian_connector() -> None:
+    assert split_shopping_items("мазик и молоко") == ["мазик", "молоко"]
+    assert split_shopping_items("хлеб, молоко и яйца") == ["хлеб", "молоко", "яйца"]
+
+
+def test_sanitize_shopping_items_input_strips_current_bot_mention() -> None:
+    assert (
+        sanitize_shopping_items_input("@Home_ai_my_bot творожок", "Home_ai_my_bot")
+        == "творожок"
+    )
+    assert (
+        sanitize_shopping_items_input("@home_ai_my_bot творожок", "Home_ai_my_bot")
+        == "творожок"
+    )
+    assert (
+        sanitize_shopping_items_input("@other_bot творожок", "Home_ai_my_bot")
+        == "@other_bot творожок"
+    )
+
+
+def test_parse_shopping_add_strips_current_bot_mention() -> None:
+    intent = parse_explicit_intent(
+        "добавь @Home_ai_my_bot творожок в список",
+        bot_username="Home_ai_my_bot",
+    )
+
+    assert isinstance(intent, ShoppingAddIntent)
+    assert intent.items == ["творожок"]
 
 
 def test_parse_shopping_show_and_delete() -> None:
