@@ -316,7 +316,11 @@ async def test_whoami_returns_user_and_chat_ids_in_private() -> None:
 
     assert message.answers == [
         {
-            "text": "Ваш Telegram ID: 59144850\nChat ID: 59144850\nТип чата: private"
+            "text": (
+                "Ваш Telegram user ID: 59144850\n"
+                "Тип чата: private\n"
+                "Telegram chat ID: 59144850"
+            )
         }
     ]
 
