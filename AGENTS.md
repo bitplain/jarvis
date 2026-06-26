@@ -201,6 +201,8 @@
 - Списки покупок и напоминания реализуются собственной логикой Jarvis, а не Telegram Business checklists.
 - Stage 4G принимает только явные команды/обращения пользователя; watcher, авто-чтение всех сообщений и “бот сам заметил надо купить” не включаются.
 - Parser deterministic и ограниченный: shopping add/show/delete/clear_done и reminders `через N минут/часов`, `сегодня/завтра в HH[:MM]`, `DD.MM в HH[:MM]`.
+- Shopping item parser делит позиции по запятой, точке с запятой, newline и простому connector `и` между словами; `мазик и молоко` должно сохраняться как два item.
+- Shopping item sanitizer вырезает только текущий bot mention из add payload, case-insensitive; `@Home_ai_my_bot творожок` должно сохраняться как `творожок`, а пустой payload после mention не сохраняется и не уходит в LLM.
 - Ambiguous normal chat должен идти в обычный LLM path; command-like, но непонятное напоминание получает help text и не вызывает LLM.
 - Private commands доступны admin или DB allowed user; group commands доступны только mention/reply от allowed user в allowed group по текущей access policy.
 - Telegram UI использует messages + inline buttons; пользовательский текст в HTML обязательно escaping через `html.escape`.
@@ -218,7 +220,7 @@
 - Timezone валидируется только через `zoneinfo.ZoneInfo`; invalid value отклоняется русским сообщением, `/cancel` не меняет сохранённое значение.
 - `lists.timezone` влияет на parsing reminders, отображение reminder list/create и due reminder delivery; `remind_at` в БД остаётся UTC.
 - Help-фразы `помощь список`, `помощь напоминания`, `как пользоваться списком`, `как пользоваться напоминаниями` отвечают Telegram HTML help и не создают LLM job.
-- Shopping list UI показывает `➕ Добавить`; add FSM перехватывает следующий private/group text, поддерживает несколько позиций через запятую и не отправляет текст в LLM.
+- Shopping list UI показывает `➕ Добавить`; add FSM перехватывает следующий private/group text, использует общий shopping parser/sanitizer, поддерживает несколько позиций через запятую/точку с запятой/newline/`и` и не отправляет текст в LLM.
 - Shopping `🧹 Очистить всё` всегда требует confirmation `[Да, очистить] [Отмена]`; repeated clicks safe.
 - Reminder list UI показывает active reminders с кнопками `✅ Выполнено`, `⏰ +10 мин`, `⏰ +1 час`, `🗑 Удалить` и `➕ Добавить напоминание`.
 - Reminder add FSM перехватывает следующий text, использует тот же deterministic parser и не отправляет текст в LLM.

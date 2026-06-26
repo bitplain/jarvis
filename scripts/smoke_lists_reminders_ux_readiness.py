@@ -114,6 +114,13 @@ async def run_readiness() -> ListsRemindersUxReadinessResult:
     result.statuses["add_list_fsm_exists"] = (
         "OK" if "ShoppingListInput" in router and "shop:add" in router else "MISSING"
     )
+    result.statuses["shopping_parser_sanitizer_exists"] = (
+        "OK"
+        if "sanitize_shopping_items_input" in parser
+        and "split_shopping_items" in parser
+        and "bot_username=" in router
+        else "MISSING"
+    )
     result.statuses["add_reminder_fsm_exists"] = (
         "OK" if "ReminderInput" in router and "rem:add" in router else "MISSING"
     )
@@ -146,6 +153,7 @@ async def run_readiness() -> ListsRemindersUxReadinessResult:
             for token in [
                 "test_settings_lists_reminders_screen_and_timezone_fsm",
                 "test_shopping_add_button_fsm_adds_items_without_llm_job",
+                "test_group_shopping_add_button_fsm_strips_bot_mention",
                 "test_reminder_add_button_fsm_creates_reminder_without_llm_job",
                 "test_lists_help_private_and_group_do_not_enqueue_llm",
             ]

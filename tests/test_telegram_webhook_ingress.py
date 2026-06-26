@@ -561,7 +561,9 @@ async def test_lists_help_private_and_group_do_not_enqueue_llm(
     assert group_response.status_code == 200
     assert redis.jobs == []
     assert "Что я умею со списками и напоминаниями" in str(bot.sent_messages[0]["text"])
-    assert "@Home_ai_my_bot добавь хлеб в список покупок" in str(bot.sent_messages[1]["text"])
+    assert "@Home_ai_my_bot добавь хлеб, молоко и яйца в список покупок" in str(
+        bot.sent_messages[1]["text"]
+    )
     assert bot.sent_messages[0]["parse_mode"] == "HTML"
     assert bot.sent_messages[1]["parse_mode"] == "HTML"
 
@@ -597,6 +599,83 @@ async def test_shopping_add_button_fsm_adds_items_without_llm_job(
     assert "молоко" in str(bot.sent_messages[-1]["text"])
     assert "яйца" in str(bot.sent_messages[-1]["text"])
     assert "➕ Добавить" in markup_button_texts(bot.sent_messages[-1])
+
+
+@pytest.mark.asyncio
+async def test_group_shopping_add_button_fsm_strips_bot_mention(
+    ingress_app: tuple[Any, FakeBot, FakeRedis],
+) -> None:
+    app, bot, redis = ingress_app
+    FakeBotUser.username = "Home_ai_my_bot"
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        await client.post(
+            "/telegram/webhook",
+            json=group_update(user_id=100500, text="@Home_ai_my_bot список"),
+        )
+        callbacks = markup_callback_data(bot.sent_messages[-1])
+        add_callback = next(value for value in callbacks if value == "shop:add")
+        callback_response = await client.post(
+            "/telegram/webhook",
+            json=callback_update(
+                add_callback,
+                user_id=100500,
+                chat_id=-100123,
+                chat_type="supergroup",
+            ),
+        )
+        text_response = await client.post(
+            "/telegram/webhook",
+            json=group_update(
+                user_id=100500,
+                text="@Home_ai_my_bot творожок",
+            ),
+        )
+
+    assert callback_response.status_code == 200
+    assert text_response.status_code == 200
+    assert redis.jobs == []
+    final_text = str(bot.sent_messages[-1]["text"])
+    assert "творожок" in final_text
+    assert "@home_ai_my_bot творожок" not in final_text.lower()
+
+
+@pytest.mark.asyncio
+async def test_group_shopping_add_button_fsm_rejects_empty_after_mention(
+    ingress_app: tuple[Any, FakeBot, FakeRedis],
+) -> None:
+    app, bot, redis = ingress_app
+    FakeBotUser.username = "Home_ai_my_bot"
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        await client.post(
+            "/telegram/webhook",
+            json=group_update(user_id=100500, text="@Home_ai_my_bot список"),
+        )
+        callbacks = markup_callback_data(bot.sent_messages[-1])
+        add_callback = next(value for value in callbacks if value == "shop:add")
+        await client.post(
+            "/telegram/webhook",
+            json=callback_update(
+                add_callback,
+                user_id=100500,
+                chat_id=-100123,
+                chat_type="supergroup",
+            ),
+        )
+        text_response = await client.post(
+            "/telegram/webhook",
+            json=group_update(
+                user_id=100500,
+                text="@Home_ai_my_bot",
+            ),
+        )
+
+    assert text_response.status_code == 200
+    assert redis.jobs == []
+    final_text = str(bot.sent_messages[-1]["text"])
+    assert "Не понял, что добавить." in final_text
+    assert "1." not in final_text
 
 
 @pytest.mark.asyncio

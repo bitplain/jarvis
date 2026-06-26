@@ -57,9 +57,9 @@ def test_format_private_and_group_lists_reminders_help_html() -> None:
     group_help = format_lists_reminders_group_help_html("Home_ai_my_bot")
 
     assert "Что я умею со списками и напоминаниями" in private_help
-    assert "добавь молоко, яйца, сыр в список" in private_help
+    assert "добавь молоко, яйца и сыр в список" in private_help
     assert "напомни завтра в 10 купить молоко" in private_help
-    assert "@Home_ai_my_bot добавь хлеб в список покупок" in group_help
+    assert "@Home_ai_my_bot добавь хлеб, молоко и яйца в список покупок" in group_help
     assert "@Home_ai_my_bot напомни завтра в 9 купить памперсы" in group_help
     assert "<script>" not in format_lists_reminders_group_help_html("<script>")
 

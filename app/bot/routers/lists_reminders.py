@@ -43,7 +43,7 @@ from app.services.telegram_formatting import (
 logger = logging.getLogger(__name__)
 SHOPPING_HELP = (
     "Я понял команду про список, но не понял позицию.\n"
-    "Пример: добавь молоко, яйца, сыр в список"
+    "Пример: добавь молоко, яйца и сыр в список"
 )
 REMINDER_HELP = (
     "Я понял команду про напоминание, но не понял время.\n"
@@ -67,7 +67,13 @@ class PrivateListsRemindersFilter(Filter):
         if message.chat.type != "private" or not message.text:
             return False
         timezone = await _resolve_lists_timezone(data)
-        intent = parse_explicit_intent(message.text, timezone=timezone)
+        settings = data.get("settings")
+        bot_username = getattr(settings, "telegram_bot_username", "")
+        intent = parse_explicit_intent(
+            message.text,
+            timezone=timezone,
+            bot_username=str(bot_username),
+        )
         if intent is None:
             return False
         chat_id = message.from_user.id if message.from_user else message.chat.id
@@ -104,7 +110,7 @@ class GroupListsRemindersFilter(Filter):
             return False
         text = _strip_group_trigger(message.text, str(bot_username), decision.matched_bot_username)
         timezone = await _resolve_lists_timezone(data)
-        intent = parse_explicit_intent(text, timezone=timezone)
+        intent = parse_explicit_intent(text, timezone=timezone, bot_username=str(bot_username))
         if intent is None:
             return False
         return {
@@ -243,7 +249,7 @@ async def _handle_shopping_callback(
             callback,
             text=(
                 "Что добавить в список покупок?\n"
-                "Можно несколько позиций через запятую.\n"
+                'Можно несколько позиций через запятую или "и".\n'
                 "Для отмены отправьте /cancel."
             ),
             reply_markup=None,
@@ -543,12 +549,16 @@ async def handle_shopping_input_message(
     state_data = await state.get_data()
     scope = str(state_data.get("shopping_scope") or _message_scope(message))
     chat_id = int(state_data.get("shopping_chat_id") or message.chat.id)
-    intent = parse_explicit_intent(f"добавь {text} в список")
+    bot_username = await _resolve_bot_username(data)
+    intent = parse_explicit_intent(
+        f"добавь {text} в список",
+        bot_username=bot_username,
+    )
     if not isinstance(intent, ShoppingAddIntent):
         await message.answer(
             "Не понял, что добавить.\n\n"
             "Что добавить в список покупок?\n"
-            "Можно несколько позиций через запятую.\n"
+            'Можно несколько позиций через запятую или "и".\n'
             "Для отмены отправьте /cancel."
         )
         return
