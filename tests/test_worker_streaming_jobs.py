@@ -7,9 +7,12 @@ from app.core.config import Settings
 from app.llm.base import LLMProviderError
 from app.llm.types import LLMMessage, LLMResponse, LLMStreamChunk
 from app.services.runtime_settings_service import (
+    DEFAULT_PROMPTS,
     ActiveLLMProvider,
     PromptProfile,
     PromptProfileScope,
+    PromptSetting,
+    PromptSource,
 )
 from app.workers import jobs
 from app.workers.jobs import process_llm_message
@@ -87,10 +90,11 @@ class FakeMemoryService:
         self,
         *,
         chat_id: int,
+        system_prompt: str | None = None,
         prompt_profile: PromptProfile | None = None,
         chat_kind: str | None = None,
     ) -> list[LLMMessage]:
-        del prompt_profile, chat_kind
+        del system_prompt, prompt_profile, chat_kind
         return [LLMMessage(role="user", content=f"question {chat_id}")]
 
     async def add_message(
@@ -136,6 +140,9 @@ class FakeRuntimeSettingsService:
     async def get_prompt_profile(self, scope: PromptProfileScope) -> PromptProfile:
         del scope
         return PromptProfile.BALANCED
+
+    async def get_prompt(self, scope: PromptProfileScope) -> PromptSetting:
+        return PromptSetting(scope=scope, text=DEFAULT_PROMPTS[scope], source=PromptSource.DEFAULT)
 
 
 def patch_worker(

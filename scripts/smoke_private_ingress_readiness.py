@@ -107,18 +107,18 @@ def run_readiness() -> PrivateIngressReadinessResult:
         and '"process_llm_message"' in fsm_tests
         else "MISSING"
     )
-    result.statuses["worker_prompt_profile_fallback"] = (
+    result.statuses["worker_prompt_fallback"] = (
         "OK"
-        if "get_prompt_profile(profile_scope)" in worker
+        if "get_prompt(profile_scope)" in worker
         and "RuntimeSettingsUnavailable" in worker
-        and "PromptProfile.BALANCED" in worker
-        and "runtime_settings_unavailable_using_balanced_prompt_profile" in worker
+        and "DEFAULT_PROMPTS[profile_scope]" in worker
+        and "runtime_settings_unavailable_using_default_prompt" in worker
         else "MISSING"
     )
     result.statuses["prompt_profiles_smoke_covers_private_ingress"] = (
         "OK"
         if "private_ingress_regression_tests" in prompt_smoke
-        and "worker_prompt_profile_fallback" in prompt_smoke
+        and "worker_prompt_fallback" in prompt_smoke
         else "MISSING"
     )
 

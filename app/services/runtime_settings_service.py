@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
 
@@ -5,6 +6,10 @@ ACTIVE_LLM_PROVIDER_KEY = "active_llm_provider"
 PROMPT_PROFILE_PRIVATE_KEY = "prompt_profile_private"
 PROMPT_PROFILE_GROUP_KEY = "prompt_profile_group"
 PROMPT_PROFILE_WATCHER_KEY = "prompt_profile_watcher"
+PROMPT_PRIVATE_KEY = "prompt.private"
+PROMPT_GROUP_KEY = "prompt.group"
+PROMPT_WATCH_KEY = "prompt.watch"
+MAX_PROMPT_LENGTH = 4000
 
 
 class RuntimeSettingsUnavailable(Exception):
@@ -31,10 +36,47 @@ class PromptProfileScope(StrEnum):
     WATCHER = "watcher"
 
 
+class PromptSource(StrEnum):
+    DEFAULT = "default"
+    CUSTOM = "custom"
+
+
+@dataclass(frozen=True)
+class PromptSetting:
+    scope: PromptProfileScope
+    text: str
+    source: PromptSource
+
+
 PROMPT_PROFILE_KEYS = {
     PromptProfileScope.PRIVATE: PROMPT_PROFILE_PRIVATE_KEY,
     PromptProfileScope.GROUP: PROMPT_PROFILE_GROUP_KEY,
     PromptProfileScope.WATCHER: PROMPT_PROFILE_WATCHER_KEY,
+}
+PROMPT_KEYS = {
+    PromptProfileScope.PRIVATE: PROMPT_PRIVATE_KEY,
+    PromptProfileScope.GROUP: PROMPT_GROUP_KEY,
+    PromptProfileScope.WATCHER: PROMPT_WATCH_KEY,
+}
+DEFAULT_PROMPTS = {
+    PromptProfileScope.PRIVATE: (
+        "Ты Jarvis. Отвечай только на русском языке. "
+        "Отвечай кратко, полезно и структурированно. "
+        "Если не знаешь ответ, честно скажи, что не знаешь. Не выдумывай факты. "
+        "Контекст пришёл в личном чате с пользователем."
+    ),
+    PromptProfileScope.GROUP: (
+        "Ты Jarvis. Отвечай только на русском языке. "
+        "Отвечай кратко, полезно и структурированно. "
+        "Если не знаешь ответ, честно скажи, что не знаешь. Не выдумывай факты. "
+        "Контекст пришёл в групповом чате; отвечай только на переданный запрос "
+        "и не делай вид, что видишь всю историю группы."
+    ),
+    PromptProfileScope.WATCHER: (
+        "Ты Jarvis. Отвечай только на русском языке. "
+        "Если не знаешь ответ, честно скажи, что не знаешь. Не выдумывай факты. "
+        "Это заготовка для будущего watcher; автономные действия запрещены."
+    ),
 }
 
 
@@ -49,6 +91,9 @@ class RuntimeSettingsRepositoryProtocol(Protocol):
         *,
         updated_by_telegram_id: int | None,
     ) -> None:
+        raise NotImplementedError
+
+    async def delete_value(self, key: str) -> None:
         raise NotImplementedError
 
 
@@ -83,11 +128,16 @@ class RuntimeSettingsService:
         return provider
 
     def _prompt_profile_key(self, scope: str | PromptProfileScope) -> str:
+        return PROMPT_PROFILE_KEYS[self._prompt_scope(scope)]
+
+    def _prompt_scope(self, scope: str | PromptProfileScope) -> PromptProfileScope:
         try:
-            prompt_scope = PromptProfileScope(scope)
+            return PromptProfileScope(scope)
         except ValueError as exc:
             raise ValueError("unsupported_prompt_profile_scope") from exc
-        return PROMPT_PROFILE_KEYS[prompt_scope]
+
+    def _prompt_key(self, scope: str | PromptProfileScope) -> str:
+        return PROMPT_KEYS[self._prompt_scope(scope)]
 
     async def get_prompt_profile(
         self,
@@ -118,3 +168,40 @@ class RuntimeSettingsService:
             updated_by_telegram_id=updated_by_telegram_id,
         )
         return profile
+
+    async def get_prompt(self, scope: str | PromptProfileScope) -> PromptSetting:
+        prompt_scope = self._prompt_scope(scope)
+        raw_value = await self.repository.get_value(PROMPT_KEYS[prompt_scope])
+        if raw_value is None:
+            return PromptSetting(
+                scope=prompt_scope,
+                text=DEFAULT_PROMPTS[prompt_scope],
+                source=PromptSource.DEFAULT,
+            )
+        return PromptSetting(scope=prompt_scope, text=raw_value, source=PromptSource.CUSTOM)
+
+    async def set_prompt(
+        self,
+        scope: str | PromptProfileScope,
+        value: str,
+        *,
+        updated_by_telegram_id: int | None,
+    ) -> PromptSetting:
+        prompt_scope = self._prompt_scope(scope)
+        if len(value) > MAX_PROMPT_LENGTH:
+            raise ValueError("prompt_too_long")
+        await self.repository.set_value(
+            PROMPT_KEYS[prompt_scope],
+            value,
+            updated_by_telegram_id=updated_by_telegram_id,
+        )
+        return PromptSetting(scope=prompt_scope, text=value, source=PromptSource.CUSTOM)
+
+    async def reset_prompt(self, scope: str | PromptProfileScope) -> PromptSetting:
+        prompt_scope = self._prompt_scope(scope)
+        await self.repository.delete_value(PROMPT_KEYS[prompt_scope])
+        return PromptSetting(
+            scope=prompt_scope,
+            text=DEFAULT_PROMPTS[prompt_scope],
+            source=PromptSource.DEFAULT,
+        )

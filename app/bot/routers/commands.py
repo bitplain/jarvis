@@ -21,9 +21,12 @@ from app.llm.factory import build_llm_provider
 from app.llm.types import LLMMessage
 from app.services.memory_service import MemoryService
 from app.services.runtime_settings_service import (
+    MAX_PROMPT_LENGTH,
     ActiveLLMProvider,
     PromptProfile,
     PromptProfileScope,
+    PromptSetting,
+    PromptSource,
     RuntimeSettingsService,
     RuntimeSettingsUnavailable,
 )
@@ -38,6 +41,10 @@ SETTINGS_CALLBACK_REFRESH = "settings:refresh"
 SETTINGS_CALLBACK_CLOSE = "settings:close"
 SETTINGS_CALLBACK_AGENT = "settings:agent"
 SETTINGS_CALLBACK_ACCESS = "settings:access"
+SETTINGS_CALLBACK_PROMPTS = "settings:prompts"
+SETTINGS_CALLBACK_PROMPTS_PRIVATE = "settings:prompts:private"
+SETTINGS_CALLBACK_PROMPTS_GROUP = "settings:prompts:group"
+SETTINGS_CALLBACK_PROMPTS_WATCHER = "settings:prompts:watcher"
 SETTINGS_CALLBACK_PROFILES = "settings:profiles"
 SETTINGS_CALLBACK_PROFILES_PRIVATE = "settings:profiles:private"
 SETTINGS_CALLBACK_PROFILES_GROUP = "settings:profiles:group"
@@ -53,6 +60,8 @@ SETTINGS_PROVIDER_AUTO = "settings:provider:auto"
 SETTINGS_PROVIDER_YANDEX = "settings:provider:yandex"
 SETTINGS_PROVIDER_OPENROUTER = "settings:provider:openrouter"
 SETTINGS_PROFILE_PREFIX = "settings:profile:"
+SETTINGS_PROMPT_PREFIX = "settings:prompt:"
+PROMPT_PREVIEW_LIMIT = 3200
 PROVIDER_LABELS = {
     ActiveLLMProvider.AUTO: "Auto",
     ActiveLLMProvider.YANDEX: "Yandex",
@@ -69,6 +78,11 @@ PROMPT_PROFILE_SCOPE_LABELS = {
     PromptProfileScope.PRIVATE: "личные сообщения",
     PromptProfileScope.GROUP: "группы",
     PromptProfileScope.WATCHER: "watcher",
+}
+PROMPT_SCOPE_TITLES = {
+    PromptProfileScope.PRIVATE: "Личка",
+    PromptProfileScope.GROUP: "Группа",
+    PromptProfileScope.WATCHER: "Наблюдение",
 }
 PROMPT_PROFILE_SCOPE_OVERVIEW_LABELS = {
     PromptProfileScope.PRIVATE: "Личные сообщения",
@@ -89,6 +103,12 @@ class TelegramAccessInput(StatesGroup):
     remove_user = State()
     add_group = State()
     remove_group = State()
+
+
+class PromptEditorInput(StatesGroup):
+    private = State()
+    group = State()
+    watcher = State()
 
 
 @dataclass(frozen=True)
@@ -173,7 +193,13 @@ def build_settings_keyboard() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="Агент", callback_data=SETTINGS_CALLBACK_AGENT),
                 InlineKeyboardButton(text="Доступ", callback_data=SETTINGS_CALLBACK_ACCESS),
-                InlineKeyboardButton(text="Профили", callback_data=SETTINGS_CALLBACK_PROFILES),
+            ],
+            [
+                InlineKeyboardButton(text="Промты", callback_data=SETTINGS_CALLBACK_PROMPTS),
+                InlineKeyboardButton(
+                    text="Стиль ответа",
+                    callback_data=SETTINGS_CALLBACK_PROFILES,
+                ),
             ],
             [
                 InlineKeyboardButton(text="Обновить", callback_data=SETTINGS_CALLBACK_REFRESH),
@@ -271,6 +297,66 @@ def build_access_groups_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def build_prompts_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Личка",
+                    callback_data=SETTINGS_CALLBACK_PROMPTS_PRIVATE,
+                ),
+                InlineKeyboardButton(
+                    text="Группа",
+                    callback_data=SETTINGS_CALLBACK_PROMPTS_GROUP,
+                ),
+                InlineKeyboardButton(
+                    text="Наблюдение",
+                    callback_data=SETTINGS_CALLBACK_PROMPTS_WATCHER,
+                ),
+            ],
+            [
+                InlineKeyboardButton(text="Назад", callback_data=SETTINGS_CALLBACK_REFRESH),
+                InlineKeyboardButton(text="Закрыть", callback_data=SETTINGS_CALLBACK_CLOSE),
+            ],
+        ]
+    )
+
+
+def build_prompt_editor_keyboard(
+    scope: PromptProfileScope,
+    *,
+    show_full: bool,
+) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text="Изменить",
+                callback_data=f"{SETTINGS_PROMPT_PREFIX}{scope.value}:edit",
+            ),
+            InlineKeyboardButton(
+                text="Сбросить",
+                callback_data=f"{SETTINGS_PROMPT_PREFIX}{scope.value}:reset",
+            ),
+        ],
+    ]
+    if show_full:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="Показать полностью",
+                    callback_data=f"{SETTINGS_PROMPT_PREFIX}{scope.value}:full",
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(text="Назад", callback_data=SETTINGS_CALLBACK_PROMPTS),
+            InlineKeyboardButton(text="Закрыть", callback_data=SETTINGS_CALLBACK_CLOSE),
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def build_prompt_profiles_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -332,7 +418,7 @@ def build_prompt_profile_scope_keyboard(scope: PromptProfileScope) -> InlineKeyb
 
 
 def render_settings_home_text() -> str:
-    return "Настройки Jarvis\n\nРазделы:\n- Агент\n- Доступ\n- Профили"
+    return "Настройки Jarvis\n\nРазделы:\n- Агент\n- Доступ\n- Промты\n- Стиль ответа"
 
 
 def render_settings_text(provider: ActiveLLMProvider, *, saved: bool = False) -> str:
@@ -376,11 +462,11 @@ def render_prompt_profiles_text(
     watcher_profile: PromptProfile,
 ) -> str:
     return (
-        "Prompt Profiles Jarvis\n\n"
+        "Стиль ответа Jarvis\n\n"
         f"Личные сообщения: {PROMPT_PROFILE_LABELS[private_profile]}\n"
         f"Группы: {PROMPT_PROFILE_LABELS[group_profile]}\n"
         f"Watcher: {PROMPT_PROFILE_LABELS[watcher_profile]}\n\n"
-        "Профили применяются к следующим LLM-запросам. Watcher в Stage 4F-2 не запускается."
+        "Это пресеты стиля ответа, а не редактор raw prompt."
     )
 
 
@@ -397,6 +483,42 @@ def render_prompt_profile_scope_text(
         f"Текущий профиль: {PROMPT_PROFILE_LABELS[profile]}\n\n"
         "Выберите один из фиксированных безопасных профилей."
     )
+
+
+def render_prompts_text() -> str:
+    return (
+        "Промты Jarvis\n\n"
+        "Выберите режим:\n"
+        "Личка — prompt для private chat\n"
+        "Группа — prompt для group mention/reply\n"
+        "Наблюдение — заготовка для будущего watcher\n\n"
+        "Наблюдение пока ничего не включает автоматически."
+    )
+
+
+def render_prompt_editor_text(prompt: PromptSetting, *, saved: bool = False) -> tuple[str, bool]:
+    title = f"Промт: {PROMPT_SCOPE_TITLES[prompt.scope]}"
+    prefix = "Промт сохранён.\n\n" if saved else ""
+    source = "custom" if prompt.source is PromptSource.CUSTOM else "default"
+    if len(prompt.text) > PROMPT_PREVIEW_LIMIT:
+        shown = prompt.text[:PROMPT_PREVIEW_LIMIT]
+        prompt_text = (
+            f"{shown}\n\n"
+            "Показан preview: prompt не помещается в экран настроек. "
+            "Нажмите «Показать полностью»."
+        )
+        show_full = True
+    else:
+        prompt_text = prompt.text
+        show_full = False
+    text = (
+        f"{prefix}{title}\n"
+        f"Источник: {source}\n"
+        f"Длина: {len(prompt.text)} символов\n\n"
+        f"Текущий prompt:\n{prompt_text}\n\n"
+        "Действия:"
+    )
+    return text, show_full
 
 
 def _message_user_id(message: Message) -> int | None:
@@ -439,6 +561,38 @@ def _parse_prompt_profile_callback(
         return PromptProfileScope(parts[0]), PromptProfile(parts[1])
     except ValueError:
         return None
+
+
+def _parse_prompt_action_callback(
+    callback_data: str,
+) -> tuple[PromptProfileScope, str] | None:
+    payload = callback_data.removeprefix(SETTINGS_PROMPT_PREFIX)
+    parts = payload.split(":")
+    if len(parts) != 2:
+        return None
+    scope_value, action = parts
+    if action not in {"edit", "reset", "full"}:
+        return None
+    try:
+        return PromptProfileScope(scope_value), action
+    except ValueError:
+        return None
+
+
+def _prompt_editor_state(scope: PromptProfileScope) -> State:
+    return {
+        PromptProfileScope.PRIVATE: PromptEditorInput.private,
+        PromptProfileScope.GROUP: PromptEditorInput.group,
+        PromptProfileScope.WATCHER: PromptEditorInput.watcher,
+    }[scope]
+
+
+def _prompt_scope_from_state(state: str | None) -> PromptProfileScope | None:
+    return {
+        PromptEditorInput.private.state: PromptProfileScope.PRIVATE,
+        PromptEditorInput.group.state: PromptProfileScope.GROUP,
+        PromptEditorInput.watcher.state: PromptProfileScope.WATCHER,
+    }.get(state)
 
 
 def _is_message_not_modified(exc: TelegramBadRequest) -> bool:
@@ -676,6 +830,55 @@ async def handle_settings_callback(callback: CallbackQuery, **data: Any) -> None
         return
     callback_data = callback.data or ""
     saved = False
+    if callback_data.startswith(SETTINGS_PROMPT_PREFIX):
+        parsed_prompt_action = _parse_prompt_action_callback(callback_data)
+        if parsed_prompt_action is None:
+            await callback.answer("Неизвестный prompt.", show_alert=True)
+            return
+        scope, action = parsed_prompt_action
+        service = _runtime_settings_service(session)
+        if action == "edit":
+            state = cast(Any, data.get("state"))
+            if state is None or not all(
+                hasattr(state, attr) for attr in ("set_state", "clear")
+            ):
+                await callback.answer("FSM временно недоступен.", show_alert=True)
+                return
+            await state.set_state(_prompt_editor_state(scope))
+            edited = await _edit_settings_callback_message(
+                callback,
+                text=(
+                    f"Отправьте новый prompt для режима "
+                    f"\"{PROMPT_SCOPE_TITLES[scope]}\".\n"
+                    f"Лимит: {MAX_PROMPT_LENGTH} символов.\n"
+                    "Чтобы отменить, отправьте /cancel."
+                ),
+                reply_markup=None,
+            )
+            if edited:
+                await callback.answer()
+            return
+        try:
+            if action == "reset":
+                prompt = await service.reset_prompt(scope)
+                text, show_full = render_prompt_editor_text(prompt)
+                edited = await _edit_settings_callback_message(
+                    callback,
+                    text=text,
+                    reply_markup=build_prompt_editor_keyboard(scope, show_full=show_full),
+                )
+                if edited:
+                    await callback.answer("Промт сброшен.", show_alert=False)
+                return
+            prompt = await service.get_prompt(scope)
+        except RuntimeSettingsUnavailable:
+            await callback.answer(SETTINGS_UNAVAILABLE_MESSAGE, show_alert=True)
+            return
+        if action == "full":
+            if callback.message is not None:
+                await callback.message.answer(prompt.text)
+            await callback.answer()
+            return
     if callback_data.startswith(SETTINGS_PROFILE_PREFIX):
         parsed_profile = _parse_prompt_profile_callback(callback_data)
         if parsed_profile is None:
@@ -748,6 +951,37 @@ async def handle_settings_callback(callback: CallbackQuery, **data: Any) -> None
             callback,
             text=render_settings_home_text(),
             reply_markup=build_settings_keyboard(),
+        )
+        if edited:
+            await callback.answer()
+        return
+    if callback_data == SETTINGS_CALLBACK_PROMPTS:
+        edited = await _edit_settings_callback_message(
+            callback,
+            text=render_prompts_text(),
+            reply_markup=build_prompts_keyboard(),
+        )
+        if edited:
+            await callback.answer()
+        return
+    prompt_scope_callbacks = {
+        SETTINGS_CALLBACK_PROMPTS_PRIVATE: PromptProfileScope.PRIVATE,
+        SETTINGS_CALLBACK_PROMPTS_GROUP: PromptProfileScope.GROUP,
+        SETTINGS_CALLBACK_PROMPTS_WATCHER: PromptProfileScope.WATCHER,
+    }
+    if callback_data in prompt_scope_callbacks:
+        scope = prompt_scope_callbacks[callback_data]
+        service = _runtime_settings_service(session)
+        try:
+            prompt = await service.get_prompt(scope)
+        except RuntimeSettingsUnavailable:
+            await callback.answer(SETTINGS_UNAVAILABLE_MESSAGE, show_alert=True)
+            return
+        text, show_full = render_prompt_editor_text(prompt)
+        edited = await _edit_settings_callback_message(
+            callback,
+            text=text,
+            reply_markup=build_prompt_editor_keyboard(scope, show_full=show_full),
         )
         if edited:
             await callback.answer()
@@ -890,11 +1124,11 @@ async def handle_settings_callback(callback: CallbackQuery, **data: Any) -> None
                 "Для отмены отправьте /cancel.",
             ),
         }
-        next_state, prompt = prompts[callback_data]
+        next_state, access_prompt = prompts[callback_data]
         await state.set_state(next_state)
         edited = await _edit_settings_callback_message(
             callback,
-            text=prompt,
+            text=access_prompt,
             reply_markup=None,
         )
         if edited:
@@ -1187,6 +1421,87 @@ async def handle_access_input_message(
     await message.answer("Ввод отменён.")
 
 
+async def handle_prompt_input_message(
+    message: Message,
+    state: FSMContext,
+    **data: Any,
+) -> None:
+    settings = data["settings"]
+    user_id = _message_user_id(message)
+    if not is_admin_user(user_id, settings.admin_ids):
+        await message.answer("Доступ запрещён.")
+        return
+    current_state = await state.get_state()
+    scope = _prompt_scope_from_state(current_state)
+    if scope is None:
+        await state.clear()
+        await message.answer("Ввод отменён.")
+        return
+    text = message.text or message.caption or ""
+    if text.strip().lower() == "/cancel":
+        await state.clear()
+        session = data.get("db_session")
+        if session is None:
+            await message.answer("Редактирование prompt отменено.")
+            return
+        try:
+            prompt = await _runtime_settings_service(session).get_prompt(scope)
+        except RuntimeSettingsUnavailable:
+            await message.answer("Редактирование prompt отменено.")
+            return
+        rendered, show_full = render_prompt_editor_text(prompt)
+        await message.answer(
+            f"Редактирование prompt отменено.\n\n{rendered}",
+            reply_markup=build_prompt_editor_keyboard(scope, show_full=show_full),
+        )
+        return
+    if not text.strip():
+        await message.answer(
+            "Prompt не может быть пустым.\n"
+            f"Лимит: {MAX_PROMPT_LENGTH} символов.\n"
+            "Чтобы отменить, отправьте /cancel."
+        )
+        return
+    session = data.get("db_session")
+    if session is None:
+        await message.answer("Настройки доступны только в runtime с БД.")
+        return
+    service = _runtime_settings_service(session)
+    try:
+        prompt = await service.set_prompt(
+            scope,
+            text,
+            updated_by_telegram_id=user_id,
+        )
+    except ValueError:
+        await message.answer(
+            f"Prompt слишком длинный. Лимит: {MAX_PROMPT_LENGTH} символов.\n"
+            "Чтобы отменить, отправьте /cancel."
+        )
+        return
+    except RuntimeSettingsUnavailable:
+        await message.answer(SETTINGS_UNAVAILABLE_MESSAGE)
+        return
+    await state.clear()
+    rendered, show_full = render_prompt_editor_text(prompt, saved=True)
+    await message.answer(
+        rendered,
+        reply_markup=build_prompt_editor_keyboard(scope, show_full=show_full),
+    )
+
+
+async def handle_cancel_message(
+    message: Message,
+    state: FSMContext,
+    **data: Any,
+) -> None:
+    current_state = await state.get_state()
+    if _prompt_scope_from_state(current_state) is not None:
+        await handle_prompt_input_message(message, state, **data)
+        return
+    await handle_access_input_message(message, state, **data)
+
+
 async def resolve_business_counts(data: dict[str, Any]) -> tuple[int, int]:
     injected = data.get("business_status_counts")
     if isinstance(injected, tuple) and len(injected) == 2:
@@ -1240,7 +1555,10 @@ def build_router() -> Router:
     router.message(Command("draft_reply"))(cmd_draft_reply)
     router.message(Command("translate"))(cmd_translate)
     router.message(Command("factcheck"))(cmd_factcheck)
-    router.message(Command("cancel"))(handle_access_input_message)
+    router.message(Command("cancel"))(handle_cancel_message)
+    router.message(StateFilter(PromptEditorInput.private))(handle_prompt_input_message)
+    router.message(StateFilter(PromptEditorInput.group))(handle_prompt_input_message)
+    router.message(StateFilter(PromptEditorInput.watcher))(handle_prompt_input_message)
     router.message(StateFilter(TelegramAccessInput.add_user))(handle_access_input_message)
     router.message(StateFilter(TelegramAccessInput.remove_user))(handle_access_input_message)
     router.message(StateFilter(TelegramAccessInput.add_group))(handle_access_input_message)

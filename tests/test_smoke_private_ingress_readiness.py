@@ -32,4 +32,4 @@ def test_private_ingress_readiness_checks_start_text_fsm_and_worker_fallback() -
     assert "private_text_handler_exists: OK" in rendered
     assert "webhook_redis_soft_failure: OK" in rendered
     assert "private_ingress_regression_tests: OK" in rendered
-    assert "worker_prompt_profile_fallback: OK" in rendered
+    assert "worker_prompt_fallback: OK" in rendered

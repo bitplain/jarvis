@@ -175,21 +175,23 @@ uv run --python 3.12 --extra dev python scripts/smoke_provider_settings_readines
 
 Stage 4E также делает callback-кнопки идемпотентными: повторный `Refresh`, повторный выбор текущего provider и Telegram `message is not modified` не должны превращаться в HTTP 500 webhook.
 
-## Prompt Profiles
+## Промты и стиль ответа
 
-Stage 4F-2 добавляет admin-only раздел `/settings -> Профили`.
+Stage 4F-2 hotfix добавляет admin-only раздел `/settings -> Промты`.
 
-Профили управляют system prompt для следующих LLM-запросов:
+Raw prompt editor показывает текущий system prompt, позволяет переписать его вручную, сохранить custom prompt и сбросить к default:
 
-- `prompt_profile_private` — обычные личные сообщения;
-- `prompt_profile_group` — групповой ассистент по mention/reply;
-- `prompt_profile_watcher` — будущий watcher, в Stage 4F-2 только настраивается и не запускает Smart Watcher.
+- `prompt.private` — prompt для обычных private chat сообщений;
+- `prompt.group` — prompt для group/supergroup mention/reply;
+- `prompt.watch` — заготовка для будущего watcher, ничего автоматически не запускает.
 
-Значения хранятся в PostgreSQL `runtime_settings` как фиксированные enum-профили: `balanced`, `short`, `deep`, `draft`, `watcher`. Отсутствующая запись означает `balanced`. Произвольные prompt-тексты пользователя в БД не сохраняются.
+Значения хранятся в существующей PostgreSQL таблице `runtime_settings`. Если custom prompt отсутствует, UI показывает default prompt и источник `default`; если custom prompt сохранён, UI показывает источник `custom`. Максимальная длина custom prompt: 4000 символов. Длинный prompt показывается preview в экране настроек, а кнопка `Показать полностью` отправляет полный текст отдельным plain-text сообщением без `parse_mode`.
+
+Старые пресеты `balanced`, `short`, `deep`, `draft`, `watcher` остаются отдельным разделом `/settings -> Стиль ответа` и не считаются заменой raw prompt editor.
 
 Stage 4F-2 не включает Smart Watcher, списки покупок, напоминания, чтение всех сообщений, изменение streaming или эффект Mira.
 
-Private ingress остаётся release gate для Stage 4F-2: `/start` должен отвечать через webhook, обычный private text от admin/allowed user должен создавать `process_llm_message`, unknown private user должен получать `Доступ запрещён.`, а Prompt Profiles callbacks не должны оставлять FSM state для следующего private text. Временная недоступность Redis не должна валить `/start` до command handler.
+Private ingress остаётся release gate для Stage 4F-2: `/start` должен отвечать через webhook, обычный private text от admin/allowed user должен создавать `process_llm_message`, unknown private user должен получать `Доступ запрещён.`, а prompt edit FSM должен перехватывать следующий private text и не отправлять его в LLM. Временная недоступность Redis не должна валить `/start` до command handler.
 
 Readiness без секретов и без `getUpdates`:
 
@@ -198,7 +200,7 @@ uv run --python 3.12 --extra dev python scripts/smoke_private_ingress_readiness.
 uv run --python 3.12 --extra dev python scripts/smoke_prompt_profiles_readiness.py
 ```
 
-Ожидаемые verdict: `PASS_PRIVATE_INGRESS_READINESS` и `PASS_PROMPT_PROFILES_READINESS`.
+Ожидаемые verdict: `PASS_PRIVATE_INGRESS_READINESS` и `PASS_PROMPT_PROFILES_RAW_EDITOR_READINESS`.
 
 ## Настройки доступа
 

@@ -12,7 +12,13 @@ from app.core.config import Settings
 from app.core.config import get_settings as app_get_settings
 from app.db.models import MessageRole
 from app.main import create_app
-from app.services.runtime_settings_service import PromptProfile, PromptProfileScope
+from app.services.runtime_settings_service import (
+    DEFAULT_PROMPTS,
+    PromptProfile,
+    PromptProfileScope,
+    PromptSetting,
+    PromptSource,
+)
 from app.services.telegram_access_service import AccessEntry
 
 
@@ -132,6 +138,8 @@ class FakeAccessService:
 
 
 class FakeRuntimeSettingsService:
+    prompts: dict[PromptProfileScope, str] = {}
+
     def __init__(self, repository: object) -> None:
         del repository
 
@@ -148,6 +156,30 @@ class FakeRuntimeSettingsService:
     ) -> PromptProfile:
         del scope, updated_by_telegram_id
         return PromptProfile(value)
+
+    async def get_prompt(self, scope: PromptProfileScope) -> PromptSetting:
+        if scope in self.__class__.prompts:
+            return PromptSetting(
+                scope=scope,
+                text=self.__class__.prompts[scope],
+                source=PromptSource.CUSTOM,
+            )
+        return PromptSetting(scope=scope, text=DEFAULT_PROMPTS[scope], source=PromptSource.DEFAULT)
+
+    async def set_prompt(
+        self,
+        scope: PromptProfileScope,
+        value: str,
+        *,
+        updated_by_telegram_id: int | None,
+    ) -> PromptSetting:
+        del updated_by_telegram_id
+        self.__class__.prompts[scope] = value
+        return PromptSetting(scope=scope, text=value, source=PromptSource.CUSTOM)
+
+    async def reset_prompt(self, scope: PromptProfileScope) -> PromptSetting:
+        self.__class__.prompts.pop(scope, None)
+        return PromptSetting(scope=scope, text=DEFAULT_PROMPTS[scope], source=PromptSource.DEFAULT)
 
 
 def private_update(*, user_id: int, text: str = "тест") -> dict[str, object]:
@@ -244,6 +276,7 @@ def ingress_app(monkeypatch: pytest.MonkeyPatch) -> tuple[Any, FakeBot, FakeRedi
     FakeAccessService.allowed_users = set()
     FakeAccessService.allowed_groups = set()
     FakeAccessService.raise_error = False
+    FakeRuntimeSettingsService.prompts = {}
     FakeBotUser.username = "jarvis_bot"
     return app, fake_bot, fake_redis
 
@@ -349,7 +382,7 @@ async def test_prompt_profile_fsm_does_not_capture_normal_private_text(
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         profile_response = await client.post(
             "/telegram/webhook",
-            json=callback_update("settings:profiles:private"),
+            json=callback_update("settings:prompts:private"),
         )
         text_response = await client.post(
             "/telegram/webhook",
@@ -368,25 +401,25 @@ async def test_prompt_profile_fsm_does_not_capture_normal_private_text(
 async def test_webhook_uses_persistent_dispatcher_for_prompt_profile_fsm(
     ingress_app: tuple[Any, FakeBot, FakeRedis],
 ) -> None:
-    app, _bot, redis = ingress_app
+    app, bot, redis = ingress_app
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         profile_response = await client.post(
             "/telegram/webhook",
-            json=callback_update("settings:profiles:private"),
+            json=callback_update("settings:prompt:private:edit"),
         )
         dispatcher = app.state.dispatcher
         text_response = await client.post(
             "/telegram/webhook",
-            json=private_update(user_id=100500, text="Привет"),
+            json=private_update(user_id=100500, text="Новый webhook prompt"),
         )
 
     assert profile_response.status_code == 200
     assert text_response.status_code == 200
     assert app.state.dispatcher is dispatcher
-    assert redis.jobs == [
-        ("process_llm_message", {"chat_id": 100500, "user_id": 100500, "private": True})
-    ]
+    assert redis.jobs == []
+    assert FakeRuntimeSettingsService.prompts[PromptProfileScope.PRIVATE] == "Новый webhook prompt"
+    assert any("Промт сохранён." in str(message["text"]) for message in bot.sent_messages)
 
 
 @pytest.mark.asyncio

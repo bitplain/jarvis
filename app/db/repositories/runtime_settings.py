@@ -1,7 +1,7 @@
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.sql import select
+from sqlalchemy.sql import delete, select
 
 from app.db.models import RuntimeSetting, utcnow
 from app.services.runtime_settings_service import RuntimeSettingsUnavailable
@@ -57,6 +57,16 @@ class RuntimeSettingRepository:
         )
         try:
             await self.session.execute(statement)
+            await self.session.commit()
+        except ProgrammingError as exc:
+            await self.session.rollback()
+            if _is_missing_runtime_settings_table(exc):
+                raise RuntimeSettingsUnavailable("runtime_settings_unavailable") from exc
+            raise
+
+    async def delete_value(self, key: str) -> None:
+        try:
+            await self.session.execute(delete(RuntimeSetting).where(RuntimeSetting.key == key))
             await self.session.commit()
         except ProgrammingError as exc:
             await self.session.rollback()

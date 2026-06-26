@@ -120,9 +120,12 @@ class MemoryService:
     def build_system_prompt(
         self,
         *,
+        system_prompt: str | None = None,
         prompt_profile: PromptProfile | None = None,
         chat_kind: str | None = None,
     ) -> str:
+        if system_prompt is not None:
+            return system_prompt
         if prompt_profile is None and chat_kind is None:
             return self.system_prompt
         prompt_profile = prompt_profile or PromptProfile.BALANCED
@@ -138,6 +141,7 @@ class MemoryService:
         self,
         *,
         chat_id: int,
+        system_prompt: str | None = None,
         prompt_profile: PromptProfile | None = None,
         chat_kind: str | None = None,
     ) -> list[LLMMessage]:
@@ -146,6 +150,7 @@ class MemoryService:
             LLMMessage(
                 role="system",
                 content=self.build_system_prompt(
+                    system_prompt=system_prompt,
                     prompt_profile=prompt_profile,
                     chat_kind=chat_kind,
                 ),

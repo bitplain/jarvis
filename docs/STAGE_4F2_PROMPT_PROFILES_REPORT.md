@@ -4,6 +4,8 @@
 
 Stage 4F-2 добавляет управляемые Prompt Profiles для личных сообщений, группового ассистента и будущего watcher.
 
+Hotfix `docs/HOTFIX_PROMPT_PROFILES_RAW_EDITOR_REPORT.md` уточняет UX: fixed preset-стили не являются raw prompt editor. Актуальный admin-only raw editor находится в `/settings -> Промты` и хранит тексты в `runtime_settings` ключами `prompt.private`, `prompt.group`, `prompt.watch`.
+
 ## Реализовано
 
 - Admin-only раздел `/settings -> Профили`.
@@ -32,7 +34,7 @@ Stage 4F-2 добавляет управляемые Prompt Profiles для ли
 - чтение всех сообщений;
 - изменение streaming;
 - эффект Mira;
-- произвольные пользовательские prompt-тексты в runtime settings.
+- watcher/shopping/reminders/Mira и автономные действия watcher.
 
 ## Проверка
 
@@ -42,7 +44,7 @@ Stage 4F-2 добавляет управляемые Prompt Profiles для ли
 uv run --python 3.12 --extra dev python scripts/smoke_prompt_profiles_readiness.py
 ```
 
-`PASS_PROMPT_PROFILES_READINESS`
+`PASS_PROMPT_PROFILES_RAW_EDITOR_READINESS`
 
 ```bash
 uv run --python 3.12 --extra dev python scripts/smoke_private_ingress_readiness.py

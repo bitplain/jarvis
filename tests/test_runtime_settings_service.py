@@ -2,9 +2,14 @@ import pytest
 
 from app.services.runtime_settings_service import (
     ACTIVE_LLM_PROVIDER_KEY,
+    DEFAULT_PROMPTS,
+    PROMPT_GROUP_KEY,
+    PROMPT_PRIVATE_KEY,
+    PROMPT_WATCH_KEY,
     ActiveLLMProvider,
     PromptProfile,
     PromptProfileScope,
+    PromptSource,
     RuntimeSettingsService,
 )
 
@@ -26,6 +31,9 @@ class FakeRuntimeSettingsRepository:
     ) -> None:
         self.values[key] = value
         self.updated_by[key] = updated_by_telegram_id
+
+    async def delete_value(self, key: str) -> None:
+        self.values.pop(key, None)
 
 
 @pytest.mark.asyncio
@@ -136,3 +144,61 @@ async def test_prompt_profile_treats_invalid_database_value_as_balanced() -> Non
     service = RuntimeSettingsService(repository)
 
     assert await service.get_prompt_profile(PromptProfileScope.GROUP) == PromptProfile.BALANCED
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("scope", "key"),
+    [
+        (PromptProfileScope.PRIVATE, PROMPT_PRIVATE_KEY),
+        (PromptProfileScope.GROUP, PROMPT_GROUP_KEY),
+        (PromptProfileScope.WATCHER, PROMPT_WATCH_KEY),
+    ],
+)
+async def test_prompt_text_defaults_are_visible_per_scope(
+    scope: PromptProfileScope,
+    key: str,
+) -> None:
+    repository = FakeRuntimeSettingsRepository()
+    service = RuntimeSettingsService(repository)
+
+    prompt = await service.get_prompt(scope)
+
+    assert key not in repository.values
+    assert prompt.source is PromptSource.DEFAULT
+    assert prompt.text == DEFAULT_PROMPTS[scope]
+
+
+@pytest.mark.asyncio
+async def test_custom_prompt_can_be_saved_and_reset() -> None:
+    repository = FakeRuntimeSettingsRepository()
+    service = RuntimeSettingsService(repository)
+
+    saved = await service.set_prompt(
+        PromptProfileScope.PRIVATE,
+        "Ты Jarvis. Отвечай как тестовый private prompt.",
+        updated_by_telegram_id=100500,
+    )
+
+    assert saved.source is PromptSource.CUSTOM
+    assert saved.text == "Ты Jarvis. Отвечай как тестовый private prompt."
+    assert repository.values[PROMPT_PRIVATE_KEY] == saved.text
+    assert repository.updated_by[PROMPT_PRIVATE_KEY] == 100500
+
+    reset = await service.reset_prompt(PromptProfileScope.PRIVATE)
+
+    assert reset.source is PromptSource.DEFAULT
+    assert reset.text == DEFAULT_PROMPTS[PromptProfileScope.PRIVATE]
+    assert PROMPT_PRIVATE_KEY not in repository.values
+
+
+@pytest.mark.asyncio
+async def test_prompt_text_rejects_more_than_4000_characters() -> None:
+    service = RuntimeSettingsService(FakeRuntimeSettingsRepository())
+
+    with pytest.raises(ValueError, match="prompt_too_long"):
+        await service.set_prompt(
+            PromptProfileScope.PRIVATE,
+            "я" * 4001,
+            updated_by_telegram_id=100500,
+        )

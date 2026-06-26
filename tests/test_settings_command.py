@@ -7,9 +7,12 @@ from aiogram.methods import DeleteMessage, EditMessageText
 from app.bot.routers import commands
 from app.core.config import Settings
 from app.services.runtime_settings_service import (
+    DEFAULT_PROMPTS,
     ActiveLLMProvider,
     PromptProfile,
     PromptProfileScope,
+    PromptSetting,
+    PromptSource,
     RuntimeSettingsUnavailable,
 )
 from app.services.telegram_access_service import AccessMutationResult
@@ -94,11 +97,14 @@ class FakeRuntimeSettingsService:
         PromptProfileScope.GROUP: PromptProfile.BALANCED,
         PromptProfileScope.WATCHER: PromptProfile.BALANCED,
     }
+    prompts: dict[PromptProfileScope, str] = {}
 
     def __init__(self, repository: object) -> None:
         del repository
         self.saved: list[tuple[str, int | None]] = []
         self.saved_profiles: list[tuple[PromptProfileScope, str, int | None]] = []
+        self.saved_prompts: list[tuple[PromptProfileScope, str, int | None]] = []
+        self.reset_prompts: list[PromptProfileScope] = []
         self.__class__.instances.append(self)
 
     async def get_active_llm_provider(self) -> ActiveLLMProvider:
@@ -127,6 +133,31 @@ class FakeRuntimeSettingsService:
         self.saved_profiles.append((scope, value, updated_by_telegram_id))
         self.__class__.profiles[scope] = PromptProfile(value)
         return self.__class__.profiles[scope]
+
+    async def get_prompt(self, scope: PromptProfileScope) -> PromptSetting:
+        if scope in self.__class__.prompts:
+            return PromptSetting(
+                scope=scope,
+                text=self.__class__.prompts[scope],
+                source=PromptSource.CUSTOM,
+            )
+        return PromptSetting(scope=scope, text=DEFAULT_PROMPTS[scope], source=PromptSource.DEFAULT)
+
+    async def set_prompt(
+        self,
+        scope: PromptProfileScope,
+        value: str,
+        *,
+        updated_by_telegram_id: int | None,
+    ) -> PromptSetting:
+        self.saved_prompts.append((scope, value, updated_by_telegram_id))
+        self.__class__.prompts[scope] = value
+        return PromptSetting(scope=scope, text=value, source=PromptSource.CUSTOM)
+
+    async def reset_prompt(self, scope: PromptProfileScope) -> PromptSetting:
+        self.reset_prompts.append(scope)
+        self.__class__.prompts.pop(scope, None)
+        return PromptSetting(scope=scope, text=DEFAULT_PROMPTS[scope], source=PromptSource.DEFAULT)
 
 
 class FakeTelegramAccessService:
@@ -249,6 +280,7 @@ def patch_settings_service(monkeypatch: pytest.MonkeyPatch) -> None:
         PromptProfileScope.GROUP: PromptProfile.BALANCED,
         PromptProfileScope.WATCHER: PromptProfile.BALANCED,
     }
+    FakeRuntimeSettingsService.prompts = {}
     FakeTelegramAccessService.instances = []
     FakeTelegramAccessService.users = []
     FakeTelegramAccessService.groups = []
@@ -289,10 +321,14 @@ async def test_settings_command_admin_can_open_menu() -> None:
     keyboard = answer["reply_markup"].inline_keyboard
     assert "Настройки Jarvis" in answer["text"]
     assert "Разделы:" in answer["text"]
-    assert [button.text for button in keyboard[0]] == ["Агент", "Доступ", "Профили"]
+    assert [button.text for button in keyboard[0]] == ["Агент", "Доступ"]
     assert [button.callback_data for button in keyboard[0]] == [
         "settings:agent",
         "settings:access",
+    ]
+    assert [button.text for button in keyboard[1]] == ["Промты", "Стиль ответа"]
+    assert [button.callback_data for button in keyboard[1]] == [
+        "settings:prompts",
         "settings:profiles",
     ]
 
@@ -376,12 +412,7 @@ async def test_access_section_visible_to_admin() -> None:
 
 @pytest.mark.asyncio
 async def test_prompt_profiles_section_visible_to_admin() -> None:
-    FakeRuntimeSettingsService.profiles = {
-        PromptProfileScope.PRIVATE: PromptProfile.SHORT,
-        PromptProfileScope.GROUP: PromptProfile.DEEP,
-        PromptProfileScope.WATCHER: PromptProfile.WATCHER,
-    }
-    callback = FakeCallbackQuery("settings:profiles", user_id=100500)
+    callback = FakeCallbackQuery("settings:prompts", user_id=100500)
 
     await commands.handle_settings_callback(
         callback,  # type: ignore[arg-type]
@@ -391,16 +422,17 @@ async def test_prompt_profiles_section_visible_to_admin() -> None:
 
     edit = callback.message.edits[0]
     keyboard = edit["reply_markup"].inline_keyboard
-    assert "Prompt Profiles Jarvis" in edit["text"]
-    assert "Личные сообщения: Короткий" in edit["text"]
-    assert "Группы: Подробный" in edit["text"]
-    assert "Watcher: Watcher" in edit["text"]
-    assert [button.text for button in keyboard[0]] == ["Личные", "Группы", "Watcher"]
+    assert "Промты Jarvis" in edit["text"]
+    assert "Выберите режим:" in edit["text"]
+    assert "Личка — prompt для private chat" in edit["text"]
+    assert "Группа — prompt для group mention/reply" in edit["text"]
+    assert "Наблюдение — заготовка для будущего watcher" in edit["text"]
+    assert [button.text for button in keyboard[0]] == ["Личка", "Группа", "Наблюдение"]
 
 
 @pytest.mark.asyncio
-async def test_private_prompt_profile_page_lists_profiles() -> None:
-    callback = FakeCallbackQuery("settings:profiles:private", user_id=100500)
+async def test_private_prompt_page_shows_default_raw_prompt_text() -> None:
+    callback = FakeCallbackQuery("settings:prompts:private", user_id=100500)
 
     await commands.handle_settings_callback(
         callback,  # type: ignore[arg-type]
@@ -410,18 +442,82 @@ async def test_private_prompt_profile_page_lists_profiles() -> None:
 
     edit = callback.message.edits[0]
     keyboard = edit["reply_markup"].inline_keyboard
-    assert "Профиль: личные сообщения" in edit["text"]
-    assert "Текущий профиль: Сбалансированный" in edit["text"]
+    assert "Промт: Личка" in edit["text"]
+    assert "Источник: default" in edit["text"]
+    assert "Текущий prompt:" in edit["text"]
+    assert DEFAULT_PROMPTS[PromptProfileScope.PRIVATE] in edit["text"]
+    assert [button.text for button in keyboard[0]] == ["Изменить", "Сбросить"]
     assert [button.callback_data for button in keyboard[0]] == [
-        "settings:profile:private:balanced",
-        "settings:profile:private:short",
-        "settings:profile:private:deep",
+        "settings:prompt:private:edit",
+        "settings:prompt:private:reset",
     ]
 
 
 @pytest.mark.asyncio
-async def test_prompt_profile_callback_saves_setting_and_refreshes_page() -> None:
-    callback = FakeCallbackQuery("settings:profile:group:deep", user_id=100500)
+async def test_group_prompt_page_shows_default_raw_prompt_text() -> None:
+    callback = FakeCallbackQuery("settings:prompts:group", user_id=100500)
+
+    await commands.handle_settings_callback(
+        callback,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    assert "Промт: Группа" in callback.message.edits[0]["text"]
+    assert DEFAULT_PROMPTS[PromptProfileScope.GROUP] in callback.message.edits[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_watch_prompt_page_shows_default_raw_prompt_text() -> None:
+    callback = FakeCallbackQuery("settings:prompts:watcher", user_id=100500)
+
+    await commands.handle_settings_callback(
+        callback,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    assert "Промт: Наблюдение" in callback.message.edits[0]["text"]
+    assert DEFAULT_PROMPTS[PromptProfileScope.WATCHER] in callback.message.edits[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_custom_prompt_after_save_is_shown_and_input_does_not_go_to_llm() -> None:
+    callback = FakeCallbackQuery("settings:prompt:private:edit", user_id=100500)
+    state = FakeState()
+
+    await commands.handle_settings_callback(
+        callback,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+        state=state,
+    )
+
+    assert state.current_state == commands.PromptEditorInput.private.state
+    assert 'Отправьте новый prompt для режима "Личка".' in callback.message.edits[0]["text"]
+
+    message = FakeMessage("Новый сырой prompt", user_id=100500)
+    await commands.handle_prompt_input_message(
+        message,  # type: ignore[arg-type]
+        state=state,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    service = FakeRuntimeSettingsService.instances[-1]
+    assert service.saved_prompts == [
+        (PromptProfileScope.PRIVATE, "Новый сырой prompt", 100500)
+    ]
+    assert state.cleared is True
+    assert "Промт сохранён." in message.answers[0]["text"]
+    assert "Новый сырой prompt" in message.answers[0]["text"]
+    assert "Принял. Готовлю ответ." not in message.answers[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_reset_prompt_returns_default_prompt_to_ui() -> None:
+    FakeRuntimeSettingsService.prompts[PromptProfileScope.GROUP] = "Кастомный group prompt"
+    callback = FakeCallbackQuery("settings:prompt:group:reset", user_id=100500)
 
     await commands.handle_settings_callback(
         callback,  # type: ignore[arg-type]
@@ -430,18 +526,16 @@ async def test_prompt_profile_callback_saves_setting_and_refreshes_page() -> Non
     )
 
     service = FakeRuntimeSettingsService.instances[0]
-    assert service.saved_profiles == [
-        (PromptProfileScope.GROUP, PromptProfile.DEEP.value, 100500)
-    ]
-    assert callback.answers == [{"text": "Профиль сохранён.", "show_alert": False}]
-    assert "Профиль: группы" in callback.message.edits[0]["text"]
-    assert "Текущий профиль: Подробный" in callback.message.edits[0]["text"]
+    assert service.reset_prompts == [PromptProfileScope.GROUP]
+    assert callback.answers == [{"text": "Промт сброшен.", "show_alert": False}]
+    assert "Источник: default" in callback.message.edits[0]["text"]
+    assert DEFAULT_PROMPTS[PromptProfileScope.GROUP] in callback.message.edits[0]["text"]
 
 
 @pytest.mark.asyncio
-async def test_prompt_profile_callback_for_same_profile_does_not_edit_same_message() -> None:
-    FakeRuntimeSettingsService.profiles[PromptProfileScope.PRIVATE] = PromptProfile.SHORT
-    callback = FakeCallbackQuery("settings:profile:private:short", user_id=100500)
+async def test_long_prompt_uses_preview_and_full_message_callback() -> None:
+    FakeRuntimeSettingsService.prompts[PromptProfileScope.PRIVATE] = "я" * 3900
+    callback = FakeCallbackQuery("settings:prompts:private", user_id=100500)
 
     await commands.handle_settings_callback(
         callback,  # type: ignore[arg-type]
@@ -449,8 +543,55 @@ async def test_prompt_profile_callback_for_same_profile_does_not_edit_same_messa
         db_session=object(),
     )
 
-    assert callback.answers == [{"text": "Уже выбран профиль: Короткий", "show_alert": False}]
-    assert callback.message.edits == []
+    edit = callback.message.edits[0]
+    keyboard = edit["reply_markup"].inline_keyboard
+    assert "Показан preview" in edit["text"]
+    assert any(button.text == "Показать полностью" for row in keyboard for button in row)
+
+    full_callback = FakeCallbackQuery(
+        "settings:prompt:private:full",
+        user_id=100500,
+        message=callback.message,
+    )
+    await commands.handle_settings_callback(
+        full_callback,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    assert full_callback.message.answers[-1] == {"text": "я" * 3900}
+
+
+@pytest.mark.asyncio
+async def test_cancel_clears_prompt_edit_state_and_returns_profile_screen() -> None:
+    state = FakeState(commands.PromptEditorInput.group.state)
+    message = FakeMessage("/cancel", user_id=100500)
+
+    await commands.handle_prompt_input_message(
+        message,  # type: ignore[arg-type]
+        state=state,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    assert state.cleared is True
+    assert "Редактирование prompt отменено." in message.answers[0]["text"]
+    assert "Промт: Группа" in message.answers[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_response_style_section_keeps_presets_separate_from_raw_prompts() -> None:
+    FakeRuntimeSettingsService.profiles[PromptProfileScope.PRIVATE] = PromptProfile.SHORT
+    callback = FakeCallbackQuery("settings:profiles", user_id=100500)
+
+    await commands.handle_settings_callback(
+        callback,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    assert "Стиль ответа Jarvis" in callback.message.edits[0]["text"]
+    assert "Личные сообщения: Короткий" in callback.message.edits[0]["text"]
 
 
 @pytest.mark.asyncio
