@@ -43,10 +43,44 @@ def format_reminder_created_html(
     )
 
 
-def format_reminder_due_html(reminder: ReminderView) -> str:
+def format_lists_reminders_private_help_html() -> str:
+    return (
+        "<b>Что я умею со списками и напоминаниями:</b>\n\n"
+        "<b>Список покупок:</b>\n"
+        "• добавь хлеб в список покупок\n"
+        "• добавь молоко, яйца, сыр в список\n"
+        "• покажи список покупок\n"
+        "• удали молоко из списка\n\n"
+        "<b>Напоминания:</b>\n"
+        "• напомни через 30 минут проверить духовку\n"
+        "• напомни завтра в 10 купить молоко\n"
+        "• напомни 28.06 в 14:00 оплатить счёт\n"
+        "• покажи напоминания"
+    )
+
+
+def format_lists_reminders_group_help_html(bot_username: str) -> str:
+    username = escape(bot_username.strip().lstrip("@") or "bot_username")
+    mention = f"@{username}"
+    return (
+        "<b>В группе обращайтесь ко мне явно:</b>\n"
+        f"{mention} добавь хлеб в список покупок\n"
+        f"{mention} покажи список покупок\n"
+        f"{mention} напомни завтра в 9 купить памперсы"
+    )
+
+
+def format_reminder_due_html(
+    reminder: ReminderView,
+    *,
+    now: datetime | None = None,
+    timezone: ZoneInfo = DEFAULT_TIMEZONE,
+) -> str:
+    when = escape(format_reminder_time(reminder.remind_at, now=now, timezone=timezone))
     return _truncate(
         "<b>⏰ Напоминание</b>\n\n"
-        f"<blockquote>{escape(reminder.text)}</blockquote>"
+        f"<blockquote>{escape(reminder.text)}</blockquote>\n"
+        f"Когда: <b>{when}</b>"
     )
 
 

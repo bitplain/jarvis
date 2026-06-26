@@ -38,6 +38,8 @@ class FakeBot:
 
     def __init__(self) -> None:
         self.sent_messages: list[dict[str, object]] = []
+        self.edited_messages: list[dict[str, object]] = []
+        self.callback_answers: list[dict[str, object]] = []
         self.chat_actions: list[dict[str, object]] = []
 
     async def __call__(self, method: object, **kwargs: object) -> FakeTelegramMessage:
@@ -48,6 +50,25 @@ class FakeBot:
                 {
                     "chat_id": method.chat_id,  # type: ignore[attr-defined]
                     "text": method.text,  # type: ignore[attr-defined]
+                    "parse_mode": getattr(method, "parse_mode", None),
+                    "reply_markup": getattr(method, "reply_markup", None),
+                }
+            )
+        if method_name == "EditMessageText":
+            self.edited_messages.append(
+                {
+                    "chat_id": method.chat_id,  # type: ignore[attr-defined]
+                    "message_id": method.message_id,  # type: ignore[attr-defined]
+                    "text": method.text,  # type: ignore[attr-defined]
+                    "parse_mode": getattr(method, "parse_mode", None),
+                    "reply_markup": getattr(method, "reply_markup", None),
+                }
+            )
+        if method_name == "AnswerCallbackQuery":
+            self.callback_answers.append(
+                {
+                    "text": getattr(method, "text", None),
+                    "show_alert": getattr(method, "show_alert", None),
                 }
             )
         return FakeTelegramMessage()
@@ -141,6 +162,7 @@ class FakeAccessService:
 
 class FakeRuntimeSettingsService:
     prompts: dict[PromptProfileScope, str] = {}
+    lists_timezone: str | None = None
 
     def __init__(self, repository: object) -> None:
         del repository
@@ -183,6 +205,24 @@ class FakeRuntimeSettingsService:
         self.__class__.prompts.pop(scope, None)
         return PromptSetting(scope=scope, text=DEFAULT_PROMPTS[scope], source=PromptSource.DEFAULT)
 
+    async def get_lists_timezone(self) -> object:
+        from zoneinfo import ZoneInfo
+
+        return ZoneInfo(self.__class__.lists_timezone or "Europe/Moscow")
+
+    async def set_lists_timezone(
+        self,
+        value: str,
+        *,
+        updated_by_telegram_id: int | None,
+    ) -> object:
+        from zoneinfo import ZoneInfo
+
+        del updated_by_telegram_id
+        timezone = ZoneInfo(value)
+        self.__class__.lists_timezone = value
+        return timezone
+
 
 def private_update(*, user_id: int, text: str = "тест") -> dict[str, object]:
     return {
@@ -197,7 +237,14 @@ def private_update(*, user_id: int, text: str = "тест") -> dict[str, object]
     }
 
 
-def callback_update(data: str, *, user_id: int = 100500) -> dict[str, object]:
+def callback_update(
+    data: str,
+    *,
+    user_id: int = 100500,
+    chat_id: int | None = None,
+    chat_type: str = "private",
+) -> dict[str, object]:
+    chat_id = chat_id or user_id
     return {
         "update_id": 103,
         "callback_query": {
@@ -206,7 +253,7 @@ def callback_update(data: str, *, user_id: int = 100500) -> dict[str, object]:
             "message": {
                 "message_id": 20,
                 "date": 1_700_000_000,
-                "chat": {"id": user_id, "type": "private", "first_name": "User"},
+                "chat": {"id": chat_id, "type": chat_type, "first_name": "User"},
                 "from": {"id": 999, "is_bot": True, "first_name": "Jarvis"},
                 "text": "Настройки Jarvis",
             },
@@ -249,6 +296,20 @@ def group_update(
     }
 
 
+def markup_button_texts(message: dict[str, object]) -> list[str]:
+    markup = message.get("reply_markup")
+    if markup is None:
+        return []
+    return [button.text for row in markup.inline_keyboard for button in row]  # type: ignore[attr-defined]
+
+
+def markup_callback_data(message: dict[str, object]) -> list[str]:
+    markup = message.get("reply_markup")
+    if markup is None:
+        return []
+    return [button.callback_data for row in markup.inline_keyboard for button in row]  # type: ignore[attr-defined]
+
+
 @pytest.fixture
 def ingress_app(monkeypatch: pytest.MonkeyPatch) -> tuple[Any, FakeBot, FakeRedis]:
     settings = Settings(
@@ -283,6 +344,7 @@ def ingress_app(monkeypatch: pytest.MonkeyPatch) -> tuple[Any, FakeBot, FakeRedi
     FakeAccessService.allowed_groups = set()
     FakeAccessService.raise_error = False
     FakeRuntimeSettingsService.prompts = {}
+    FakeRuntimeSettingsService.lists_timezone = None
     FakeBotUser.username = "jarvis_bot"
     return app, fake_bot, fake_redis
 
@@ -395,6 +457,8 @@ async def test_private_shopping_add_returns_html_without_llm_job(
     assert redis.jobs == []
     assert "<b>🛒 Список покупок</b>" in str(bot.sent_messages[0]["text"])
     assert "хлеб" in str(bot.sent_messages[0]["text"])
+    assert bot.sent_messages[0]["parse_mode"] == "HTML"
+    assert "➕ Добавить" in markup_button_texts(bot.sent_messages[0])
 
 
 @pytest.mark.asyncio
@@ -413,6 +477,230 @@ async def test_private_reminder_add_returns_html_without_llm_job(
     assert redis.jobs == []
     assert "<b>⏰ Напоминание создано</b>" in str(bot.sent_messages[0]["text"])
     assert "проверить духовку" in str(bot.sent_messages[0]["text"])
+
+
+@pytest.mark.asyncio
+async def test_settings_lists_reminders_screen_and_timezone_fsm(
+    ingress_app: tuple[Any, FakeBot, FakeRedis],
+) -> None:
+    app, bot, redis = ingress_app
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        settings_response = await client.post(
+            "/telegram/webhook",
+            json=callback_update("settings:lists"),
+        )
+        timezone_response = await client.post(
+            "/telegram/webhook",
+            json=callback_update("settings:lists:timezone"),
+        )
+        save_response = await client.post(
+            "/telegram/webhook",
+            json=private_update(user_id=100500, text="Europe/Amsterdam"),
+        )
+
+    assert settings_response.status_code == 200
+    assert timezone_response.status_code == 200
+    assert save_response.status_code == 200
+    assert redis.jobs == []
+    edited_texts = [str(message["text"]) for message in bot.edited_messages]
+    sent_texts = [str(message["text"]) for message in bot.sent_messages]
+    assert any("Списки и напоминания" in text for text in edited_texts)
+    assert any("Часовой пояс: Europe/Moscow" in text for text in edited_texts)
+    assert any("Отправьте часовой пояс" in text for text in edited_texts)
+    assert FakeRuntimeSettingsService.lists_timezone == "Europe/Amsterdam"
+    assert any("Часовой пояс сохранён: Europe/Amsterdam" in text for text in sent_texts)
+
+
+@pytest.mark.asyncio
+async def test_settings_lists_timezone_invalid_and_cancel_do_not_change_value(
+    ingress_app: tuple[Any, FakeBot, FakeRedis],
+) -> None:
+    app, bot, redis = ingress_app
+    FakeRuntimeSettingsService.lists_timezone = "Asia/Dubai"
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        await client.post("/telegram/webhook", json=callback_update("settings:lists:timezone"))
+        invalid_response = await client.post(
+            "/telegram/webhook",
+            json=private_update(user_id=100500, text="Europe/NoSuchCity"),
+        )
+        await client.post("/telegram/webhook", json=callback_update("settings:lists:timezone"))
+        cancel_response = await client.post(
+            "/telegram/webhook",
+            json=private_update(user_id=100500, text="/cancel"),
+        )
+
+    assert invalid_response.status_code == 200
+    assert cancel_response.status_code == 200
+    assert redis.jobs == []
+    assert FakeRuntimeSettingsService.lists_timezone == "Asia/Dubai"
+    sent_texts = [str(message["text"]) for message in bot.sent_messages]
+    assert any("Не знаю такой часовой пояс." in text for text in sent_texts)
+    assert any("Изменение часового пояса отменено." in text for text in sent_texts)
+
+
+@pytest.mark.asyncio
+async def test_lists_help_private_and_group_do_not_enqueue_llm(
+    ingress_app: tuple[Any, FakeBot, FakeRedis],
+) -> None:
+    app, bot, redis = ingress_app
+    FakeBotUser.username = "Home_ai_my_bot"
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        private_response = await client.post(
+            "/telegram/webhook",
+            json=private_update(user_id=100500, text="помощь список"),
+        )
+        group_response = await client.post(
+            "/telegram/webhook",
+            json=group_update(user_id=100500, text="@Home_ai_my_bot помощь напоминания"),
+        )
+
+    assert private_response.status_code == 200
+    assert group_response.status_code == 200
+    assert redis.jobs == []
+    assert "Что я умею со списками и напоминаниями" in str(bot.sent_messages[0]["text"])
+    assert "@Home_ai_my_bot добавь хлеб в список покупок" in str(bot.sent_messages[1]["text"])
+    assert bot.sent_messages[0]["parse_mode"] == "HTML"
+    assert bot.sent_messages[1]["parse_mode"] == "HTML"
+
+
+@pytest.mark.asyncio
+async def test_shopping_add_button_fsm_adds_items_without_llm_job(
+    ingress_app: tuple[Any, FakeBot, FakeRedis],
+) -> None:
+    app, bot, redis = ingress_app
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        list_response = await client.post(
+            "/telegram/webhook",
+            json=private_update(user_id=100500, text="список"),
+        )
+        callbacks = markup_callback_data(bot.sent_messages[-1])
+        add_callback = next(value for value in callbacks if value == "shop:add")
+        callback_response = await client.post(
+            "/telegram/webhook",
+            json=callback_update(add_callback),
+        )
+        text_response = await client.post(
+            "/telegram/webhook",
+            json=private_update(user_id=100500, text="молоко, яйца"),
+        )
+
+    assert list_response.status_code == 200
+    assert callback_response.status_code == 200
+    assert text_response.status_code == 200
+    assert redis.jobs == []
+    edited_texts = [str(message["text"]) for message in bot.edited_messages]
+    assert any("Что добавить в список покупок?" in text for text in edited_texts)
+    assert "молоко" in str(bot.sent_messages[-1]["text"])
+    assert "яйца" in str(bot.sent_messages[-1]["text"])
+    assert "➕ Добавить" in markup_button_texts(bot.sent_messages[-1])
+
+
+@pytest.mark.asyncio
+async def test_shopping_clear_all_requires_confirmation_and_is_repeat_safe(
+    ingress_app: tuple[Any, FakeBot, FakeRedis],
+) -> None:
+    app, bot, redis = ingress_app
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        await client.post(
+            "/telegram/webhook",
+            json=private_update(user_id=100500, text="добавь молоко, яйца в список"),
+        )
+        clear_response = await client.post(
+            "/telegram/webhook",
+            json=callback_update("shop:clear_all"),
+        )
+        confirm_response = await client.post(
+            "/telegram/webhook",
+            json=callback_update("shop:clear_all_confirm"),
+        )
+        repeated_response = await client.post(
+            "/telegram/webhook",
+            json=callback_update("shop:clear_all_confirm"),
+        )
+
+    assert clear_response.status_code == 200
+    assert confirm_response.status_code == 200
+    assert repeated_response.status_code == 200
+    assert redis.jobs == []
+    edited_texts = [str(message["text"]) for message in bot.edited_messages]
+    assert any("Точно очистить весь список покупок?" in text for text in edited_texts)
+    assert "Список пуст." in str(bot.edited_messages[-1]["text"])
+
+
+@pytest.mark.asyncio
+async def test_reminder_add_button_fsm_creates_reminder_without_llm_job(
+    ingress_app: tuple[Any, FakeBot, FakeRedis],
+) -> None:
+    app, bot, redis = ingress_app
+    FakeRuntimeSettingsService.lists_timezone = "Europe/Amsterdam"
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        list_response = await client.post(
+            "/telegram/webhook",
+            json=private_update(user_id=100500, text="напоминания"),
+        )
+        callbacks = markup_callback_data(bot.sent_messages[-1])
+        add_callback = next(value for value in callbacks if value == "rem:add")
+        callback_response = await client.post(
+            "/telegram/webhook",
+            json=callback_update(add_callback),
+        )
+        text_response = await client.post(
+            "/telegram/webhook",
+            json=private_update(user_id=100500, text="напомни завтра в 10 купить молоко"),
+        )
+
+    assert list_response.status_code == 200
+    assert callback_response.status_code == 200
+    assert text_response.status_code == 200
+    assert redis.jobs == []
+    assert any("Что напомнить и когда?" in str(message["text"]) for message in bot.edited_messages)
+    assert "купить молоко" in str(bot.sent_messages[-1]["text"])
+    assert "завтра, 10:00" in str(bot.sent_messages[-1]["text"])
+
+
+@pytest.mark.asyncio
+async def test_reminder_list_has_action_buttons_and_repeated_delete_is_safe(
+    ingress_app: tuple[Any, FakeBot, FakeRedis],
+) -> None:
+    app, bot, redis = ingress_app
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        await client.post(
+            "/telegram/webhook",
+            json=private_update(user_id=100500, text="напомни через 30 минут проверить доставку"),
+        )
+        list_response = await client.post(
+            "/telegram/webhook",
+            json=private_update(user_id=100500, text="покажи напоминания"),
+        )
+        callbacks = markup_callback_data(bot.sent_messages[-1])
+        delete_callback = next(value for value in callbacks if value.startswith("rem:del:"))
+        delete_response = await client.post(
+            "/telegram/webhook",
+            json=callback_update(delete_callback),
+        )
+        repeated_response = await client.post(
+            "/telegram/webhook",
+            json=callback_update(delete_callback),
+        )
+
+    assert list_response.status_code == 200
+    assert delete_response.status_code == 200
+    assert repeated_response.status_code == 200
+    assert redis.jobs == []
+    button_texts = markup_button_texts(bot.sent_messages[-1])
+    assert "✅ Выполнено" in button_texts
+    assert "⏰ +10 мин" in button_texts
+    assert "⏰ +1 час" in button_texts
+    assert "🗑 Удалить" in button_texts
+    assert "➕ Добавить напоминание" in button_texts
+    assert "Активных напоминаний нет." in str(bot.edited_messages[-1]["text"])
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,7 @@
 import logging
 from dataclasses import dataclass
 from typing import Any, cast
+from zoneinfo import ZoneInfoNotFoundError
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
@@ -36,11 +37,17 @@ from app.services.telegram_access_service import (
     TelegramAccessService,
     TelegramAccessUnavailable,
 )
+from app.services.telegram_formatting import format_lists_reminders_private_help_html
 
 SETTINGS_CALLBACK_REFRESH = "settings:refresh"
 SETTINGS_CALLBACK_CLOSE = "settings:close"
 SETTINGS_CALLBACK_AGENT = "settings:agent"
 SETTINGS_CALLBACK_ACCESS = "settings:access"
+SETTINGS_CALLBACK_LISTS = "settings:lists"
+SETTINGS_CALLBACK_LISTS_TIMEZONE = "settings:lists:timezone"
+SETTINGS_CALLBACK_LISTS_HELP = "settings:lists:help"
+SETTINGS_CALLBACK_LISTS_REMINDERS = "settings:lists:reminders"
+SETTINGS_CALLBACK_LISTS_SHOPPING = "settings:lists:shopping"
 SETTINGS_CALLBACK_PROMPTS = "settings:prompts"
 SETTINGS_CALLBACK_PROMPTS_PRIVATE = "settings:prompts:private"
 SETTINGS_CALLBACK_PROMPTS_GROUP = "settings:prompts:group"
@@ -109,6 +116,10 @@ class PromptEditorInput(StatesGroup):
     private = State()
     group = State()
     watcher = State()
+
+
+class ListsRemindersSettingsInput(StatesGroup):
+    timezone = State()
 
 
 @dataclass(frozen=True)
@@ -202,7 +213,48 @@ def build_settings_keyboard() -> InlineKeyboardMarkup:
                 ),
             ],
             [
+                InlineKeyboardButton(
+                    text="Списки и напоминания",
+                    callback_data=SETTINGS_CALLBACK_LISTS,
+                )
+            ],
+            [
                 InlineKeyboardButton(text="Обновить", callback_data=SETTINGS_CALLBACK_REFRESH),
+                InlineKeyboardButton(text="Закрыть", callback_data=SETTINGS_CALLBACK_CLOSE),
+            ],
+        ]
+    )
+
+
+def build_lists_reminders_settings_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Часовой пояс",
+                    callback_data=SETTINGS_CALLBACK_LISTS_TIMEZONE,
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Помощь по командам",
+                    callback_data=SETTINGS_CALLBACK_LISTS_HELP,
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Мои напоминания",
+                    callback_data=SETTINGS_CALLBACK_LISTS_REMINDERS,
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Мой список покупок",
+                    callback_data=SETTINGS_CALLBACK_LISTS_SHOPPING,
+                )
+            ],
+            [
+                InlineKeyboardButton(text="Назад", callback_data=SETTINGS_CALLBACK_REFRESH),
                 InlineKeyboardButton(text="Закрыть", callback_data=SETTINGS_CALLBACK_CLOSE),
             ],
         ]
@@ -418,7 +470,36 @@ def build_prompt_profile_scope_keyboard(scope: PromptProfileScope) -> InlineKeyb
 
 
 def render_settings_home_text() -> str:
-    return "Настройки Jarvis\n\nРазделы:\n- Агент\n- Доступ\n- Промты\n- Стиль ответа"
+    return (
+        "Настройки Jarvis\n\n"
+        "Разделы:\n"
+        "- Агент\n"
+        "- Доступ\n"
+        "- Промты\n"
+        "- Стиль ответа\n"
+        "- Списки и напоминания"
+    )
+
+
+def render_lists_reminders_settings_text(timezone_name: str) -> str:
+    return (
+        "Списки и напоминания\n\n"
+        f"Часовой пояс: {timezone_name}\n\n"
+        "Что можно делать:\n"
+        "- список покупок в личке и группе\n"
+        "- напоминания в личке и группе\n\n"
+        "Действия:"
+    )
+
+
+def render_lists_timezone_prompt_text() -> str:
+    return (
+        "Отправьте часовой пояс, например:\n"
+        "Europe/Moscow\n"
+        "Europe/Amsterdam\n"
+        "Asia/Dubai\n\n"
+        "Для отмены отправьте /cancel."
+    )
 
 
 def render_settings_text(provider: ActiveLLMProvider, *, saved: bool = False) -> str:
@@ -821,6 +902,9 @@ async def cmd_settings(message: Message, **data: Any) -> None:
 async def handle_settings_callback(callback: CallbackQuery, **data: Any) -> None:
     settings = data["settings"]
     user_id = _callback_user_id(callback)
+    if user_id is None:
+        await callback.answer("Не удалось определить Telegram user ID.", show_alert=True)
+        return
     if not is_admin_user(user_id, settings.admin_ids):
         await callback.answer("Доступ запрещён.", show_alert=True)
         return
@@ -954,6 +1038,85 @@ async def handle_settings_callback(callback: CallbackQuery, **data: Any) -> None
         )
         if edited:
             await callback.answer()
+        return
+    if callback_data == SETTINGS_CALLBACK_LISTS:
+        service = _runtime_settings_service(session)
+        try:
+            timezone = await service.get_lists_timezone()
+        except RuntimeSettingsUnavailable:
+            await callback.answer(SETTINGS_UNAVAILABLE_MESSAGE, show_alert=True)
+            return
+        edited = await _edit_settings_callback_message(
+            callback,
+            text=render_lists_reminders_settings_text(getattr(timezone, "key", str(timezone))),
+            reply_markup=build_lists_reminders_settings_keyboard(),
+        )
+        if edited:
+            await callback.answer()
+        return
+    if callback_data == SETTINGS_CALLBACK_LISTS_TIMEZONE:
+        state = cast(Any, data.get("state"))
+        if state is None or not all(hasattr(state, attr) for attr in ("set_state", "clear")):
+            await callback.answer("FSM временно недоступен.", show_alert=True)
+            return
+        await state.set_state(ListsRemindersSettingsInput.timezone)
+        edited = await _edit_settings_callback_message(
+            callback,
+            text=render_lists_timezone_prompt_text(),
+            reply_markup=None,
+        )
+        if edited:
+            await callback.answer()
+        return
+    if callback_data == SETTINGS_CALLBACK_LISTS_HELP:
+        if callback.message is not None:
+            await callback.message.answer(
+                format_lists_reminders_private_help_html(),
+                parse_mode="HTML",
+            )
+        await callback.answer()
+        return
+    if callback_data in {SETTINGS_CALLBACK_LISTS_REMINDERS, SETTINGS_CALLBACK_LISTS_SHOPPING}:
+        if callback.message is None:
+            await callback.answer()
+            return
+        try:
+            if callback_data == SETTINGS_CALLBACK_LISTS_SHOPPING:
+                from app.bot.routers.lists_reminders import build_shopping_keyboard
+                from app.db.repositories.shopping import ShoppingRepository
+                from app.services.shopping_service import ShoppingService
+                from app.services.telegram_formatting import format_shopping_list_html
+
+                view = await ShoppingService(ShoppingRepository(session)).list_items(
+                    "private",
+                    user_id,
+                )
+                await callback.message.answer(
+                    format_shopping_list_html(view),
+                    parse_mode="HTML",
+                    reply_markup=build_shopping_keyboard(view),
+                )
+            else:
+                from app.bot.routers.lists_reminders import build_reminders_list_keyboard
+                from app.db.repositories.reminders import ReminderRepository
+                from app.services.reminder_service import ReminderService
+                from app.services.telegram_formatting import format_reminders_html
+
+                timezone = await _runtime_settings_service(session).get_lists_timezone()
+                reminders = await ReminderService(ReminderRepository(session)).list_reminders(
+                    "private",
+                    user_id,
+                    user_id,
+                )
+                await callback.message.answer(
+                    format_reminders_html(reminders, timezone=timezone),
+                    parse_mode="HTML",
+                    reply_markup=build_reminders_list_keyboard(reminders),
+                )
+        except RuntimeSettingsUnavailable:
+            await callback.answer(SETTINGS_UNAVAILABLE_MESSAGE, show_alert=True)
+            return
+        await callback.answer()
         return
     if callback_data == SETTINGS_CALLBACK_PROMPTS:
         edited = await _edit_settings_callback_message(
@@ -1494,6 +1657,51 @@ async def handle_prompt_input_message(
     )
 
 
+async def handle_lists_timezone_input_message(
+    message: Message,
+    state: FSMContext,
+    **data: Any,
+) -> None:
+    settings = data["settings"]
+    user_id = _message_user_id(message)
+    if not is_admin_user(user_id, settings.admin_ids):
+        await message.answer("Доступ запрещён.")
+        return
+    text = (message.text or message.caption or "").strip()
+    if text.lower() == "/cancel":
+        await state.clear()
+        await message.answer("Изменение часового пояса отменено.")
+        return
+    if not text:
+        await message.answer(render_lists_timezone_prompt_text())
+        return
+    session = data.get("db_session")
+    if session is None:
+        await message.answer("Настройки доступны только в runtime с БД.")
+        return
+    try:
+        timezone = await _runtime_settings_service(session).set_lists_timezone(
+            text,
+            updated_by_telegram_id=user_id,
+        )
+    except (ValueError, ZoneInfoNotFoundError):
+        await message.answer(
+            "Не знаю такой часовой пояс.\n\n"
+            f"{render_lists_timezone_prompt_text()}"
+        )
+        return
+    except RuntimeSettingsUnavailable:
+        await message.answer(SETTINGS_UNAVAILABLE_MESSAGE)
+        return
+    await state.clear()
+    timezone_name = getattr(timezone, "key", str(timezone))
+    await message.answer(
+        f"Часовой пояс сохранён: {timezone_name}\n\n"
+        f"{render_lists_reminders_settings_text(timezone_name)}",
+        reply_markup=build_lists_reminders_settings_keyboard(),
+    )
+
+
 async def handle_cancel_message(
     message: Message,
     state: FSMContext,
@@ -1502,6 +1710,16 @@ async def handle_cancel_message(
     current_state = await state.get_state()
     if _prompt_scope_from_state(current_state) is not None:
         await handle_prompt_input_message(message, state, **data)
+        return
+    if current_state == ListsRemindersSettingsInput.timezone.state:
+        await handle_lists_timezone_input_message(message, state, **data)
+        return
+    if current_state and (
+        current_state.startswith("ShoppingListInput:")
+        or current_state.startswith("ReminderInput:")
+    ):
+        await state.clear()
+        await message.answer("Ввод отменён.")
         return
     await handle_access_input_message(message, state, **data)
 
@@ -1563,6 +1781,9 @@ def build_router() -> Router:
     router.message(StateFilter(PromptEditorInput.private))(handle_prompt_input_message)
     router.message(StateFilter(PromptEditorInput.group))(handle_prompt_input_message)
     router.message(StateFilter(PromptEditorInput.watcher))(handle_prompt_input_message)
+    router.message(StateFilter(ListsRemindersSettingsInput.timezone))(
+        handle_lists_timezone_input_message
+    )
     router.message(StateFilter(TelegramAccessInput.add_user))(handle_access_input_message)
     router.message(StateFilter(TelegramAccessInput.remove_user))(handle_access_input_message)
     router.message(StateFilter(TelegramAccessInput.add_group))(handle_access_input_message)

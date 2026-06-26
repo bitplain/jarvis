@@ -5,6 +5,8 @@ from app.services.reminder_service import ReminderView
 from app.services.shopping_service import ShoppingItemView, ShoppingListView
 from app.services.telegram_formatting import (
     TELEGRAM_HTML_LIMIT,
+    format_lists_reminders_group_help_html,
+    format_lists_reminders_private_help_html,
     format_reminder_created_html,
     format_reminder_due_html,
     format_reminders_html,
@@ -50,6 +52,18 @@ def test_format_empty_shopping_list() -> None:
     assert html == "<b>🛒 Список покупок</b>\n\nСписок пуст."
 
 
+def test_format_private_and_group_lists_reminders_help_html() -> None:
+    private_help = format_lists_reminders_private_help_html()
+    group_help = format_lists_reminders_group_help_html("Home_ai_my_bot")
+
+    assert "Что я умею со списками и напоминаниями" in private_help
+    assert "добавь молоко, яйца, сыр в список" in private_help
+    assert "напомни завтра в 10 купить молоко" in private_help
+    assert "@Home_ai_my_bot добавь хлеб в список покупок" in group_help
+    assert "@Home_ai_my_bot напомни завтра в 9 купить памперсы" in group_help
+    assert "<script>" not in format_lists_reminders_group_help_html("<script>")
+
+
 def test_format_reminders_escape_text_and_stay_within_limit() -> None:
     reminder = ReminderView(
         id="r1",
@@ -70,4 +84,5 @@ def test_format_reminders_escape_text_and_stay_within_limit() -> None:
     assert "&lt;script&gt; milk &amp; bread" in listing
     assert "<script>" not in created + due + listing
     assert "Когда: <b>завтра, 10:00</b>" in created
+    assert "Когда: <b>завтра, 10:00</b>" in due
     assert len(created) <= TELEGRAM_HTML_LIMIT

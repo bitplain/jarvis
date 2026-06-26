@@ -124,6 +124,18 @@ class ShoppingRepository:
         await self.session.commit()
         return shopping_list
 
+    async def clear_all(self, *, scope_type: str, scope_chat_id: int) -> StoredShoppingList:
+        shopping_list = await self.get_or_create_list(
+            scope_type=scope_type,
+            scope_chat_id=scope_chat_id,
+            owner_user_id=scope_chat_id if scope_type == "private" else None,
+        )
+        await self.session.execute(
+            delete(ShoppingListItem).where(ShoppingListItem.list_id == _uuid(shopping_list.id))
+        )
+        await self.session.commit()
+        return shopping_list
+
     async def find_active_by_text(
         self,
         *,

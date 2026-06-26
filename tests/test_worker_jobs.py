@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 import pytest
 
 from app.core.config import Settings
@@ -147,7 +149,7 @@ class FakeReminderRepository:
                 chat_id=100500,
                 user_id=100500,
                 text="купить <молоко>",
-                remind_at=jobs.utcnow(),
+                remind_at=datetime(2026, 6, 26, 9, 0, tzinfo=UTC),
                 status="scheduled",
             )
         ]
@@ -179,6 +181,11 @@ class FakeRuntimeSettingsService:
 
     async def get_prompt(self, scope: PromptProfileScope) -> PromptSetting:
         return PromptSetting(scope=scope, text=DEFAULT_PROMPTS[scope], source=PromptSource.DEFAULT)
+
+    async def get_lists_timezone(self) -> object:
+        from zoneinfo import ZoneInfo
+
+        return ZoneInfo("Europe/Moscow")
 
 
 @pytest.mark.asyncio
@@ -239,13 +246,20 @@ async def test_deliver_due_reminders_sends_html_and_marks_sent(
     )
     monkeypatch.setattr(jobs, "SessionLocal", FakeSessionLocal())
     monkeypatch.setattr(jobs, "ReminderRepository", FakeReminderRepository)
+    monkeypatch.setattr(jobs, "RuntimeSettingRepository", lambda session: object())
+    monkeypatch.setattr(jobs, "RuntimeSettingsService", FakeRuntimeSettingsService)
 
     await jobs.deliver_due_reminders({})
 
     bot = FakeBot.instances[0]
     repository = FakeReminderRepository.instances[0]
     assert bot.sent_messages == [
-        (100500, "<b>⏰ Напоминание</b>\n\n<blockquote>купить &lt;молоко&gt;</blockquote>")
+        (
+            100500,
+            "<b>⏰ Напоминание</b>\n\n"
+            "<blockquote>купить &lt;молоко&gt;</blockquote>\n"
+            "Когда: <b>сегодня, 12:00</b>",
+        )
     ]
     assert bot.send_message_kwargs == {"parse_mode": "HTML"}
     assert repository.sent_ids == ["abc123"]
