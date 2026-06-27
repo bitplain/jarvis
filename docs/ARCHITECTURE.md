@@ -167,6 +167,73 @@ Private/group routers best-effort используют Redis key `web_search:rat
 
 Stage 4K не включает auto-search, watcher, browser automation, voice/media, Telegram Business и scraping private/auth страниц.
 
+## HelpDesk IMAP Inbox
+
+Stage 4L HelpDesk IMAP Inbox добавляет узкий polling path для одного GLPI/helpdesk mailbox.
+Это отдельный worker-layer и он не меняет обычный Telegram ingress.
+
+Кодовые границы:
+
+- `app/services/helpdesk_imap/config.py` — env-backed config, masking username/email, required-fields validation.
+- `app/services/helpdesk_imap/client.py` — stdlib `imaplib`, SSL/non-SSL, readonly select по умолчанию, `BODY.PEEK[]`, optional `mark_seen`.
+- `app/services/helpdesk_imap/parser.py` — deterministic GLPI parser без LLM.
+- `app/services/helpdesk_imap/formatter.py` — Telegram HTML card и safe URL button.
+- `app/services/helpdesk_imap/service.py` — filtering, dedup, notify flow, Redis throttle/lock/status.
+- `app/db/repositories/helpdesk_email_events.py` и `helpdesk_email_events` — event dedup/status storage.
+
+Worker job `check_helpdesk_imap_mailbox` зарегистрирован в arq cron раз в минуту.
+Фактическая частота polling управляется `HELPDESK_IMAP_POLL_INTERVAL_SECONDS` через Redis throttle.
+Если `HELPDESK_IMAP_ENABLED=false`, job no-op.
+Если включено, но host/username/password/chat id не заполнены, worker логирует sanitized warning и не падает.
+
+IMAP mailbox выбирается Railway Variables:
+
+- `HELPDESK_IMAP_HOST`
+- `HELPDESK_IMAP_PORT`
+- `HELPDESK_IMAP_SSL`
+- `HELPDESK_IMAP_USERNAME`
+- `HELPDESK_IMAP_PASSWORD`
+- `HELPDESK_IMAP_FOLDER`
+- `HELPDESK_IMAP_FROM_FILTER`
+- `HELPDESK_IMAP_SUBJECT_PREFIX`
+- `HELPDESK_TELEGRAM_CHAT_ID`
+- `HELPDESK_MARK_SEEN`
+
+Секреты не вводятся через Telegram.
+Пароль не попадает в repr/config summary/logs.
+Email sender в событиях хранится masked.
+Тело письма целиком не логируется.
+
+GLPI parser best-effort извлекает:
+
+- `ticket_id`;
+- `event_type`;
+- `ticket_url`;
+- `title`;
+- `description`;
+- `employee_full_name`;
+- `position`;
+- `manager`;
+- `start_date`;
+- `access_items`;
+- `comment_count`;
+- `task_count`;
+- masked sender.
+
+Telegram notification отправляется только после сохранения event.
+Если отправка Telegram падает, `notify_status=failed`, письмо не помечается прочитанным.
+Если `HELPDESK_MARK_SEEN=true`, IMAP `Seen` ставится только после успешного Telegram send.
+
+Дедупликация:
+
+- unique `message_id`, если `Message-ID` есть;
+- unique `(folder, imap_uid)`, если UID есть.
+
+Повторный worker run не создаёт повторные Telegram карточки.
+`/status` читает HelpDesk IMAP diagnostics только из Redis/PostgreSQL: live IMAP connect из `/status` запрещён.
+
+Stage 4L не включает multi-mailbox UI, email replies, удаление писем, RAG/OCR, Smart Watcher, Telegram Business и изменение Railway Variables через код.
+
 ## Status diagnostics и household context
 
 Stage 4I делает `/status` admin-only диагностикой runtime вместо списка feature flags.
@@ -180,6 +247,7 @@ Router остаётся в `app/bot/routers/commands.py`, а сбор прове
 - arq worker freshness через Redis key `jarvis:worker:heartbeat`;
 - webhook configured/unknown по безопасной config/self-healing модели, без destructive Telegram calls;
 - due reminders count без текста напоминаний;
+- HelpDesk IMAP enabled/configured, masked username, last check/success/error и event counters без IMAP live connect;
 - active LLM provider из `runtime_settings`;
 - draft streaming env flags;
 - prompt profiles и access DB availability.

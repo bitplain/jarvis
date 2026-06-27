@@ -74,6 +74,19 @@ class Settings(BaseSettings):
     tavily_api_key: str = ""
     brave_search_api_key: str = ""
 
+    helpdesk_imap_enabled: bool = False
+    helpdesk_imap_host: str = ""
+    helpdesk_imap_port: int = Field(default=993, ge=1, le=65535)
+    helpdesk_imap_ssl: bool = True
+    helpdesk_imap_username: str = ""
+    helpdesk_imap_password: str = ""
+    helpdesk_imap_folder: str = "INBOX"
+    helpdesk_imap_poll_interval_seconds: int = Field(default=120, ge=1, le=86_400)
+    helpdesk_imap_from_filter: str = "sd@asdf.help"
+    helpdesk_imap_subject_prefix: str = "[GLPI #"
+    helpdesk_telegram_chat_id: str = ""
+    helpdesk_mark_seen: bool = False
+
     log_level: str = "INFO"
 
     @property

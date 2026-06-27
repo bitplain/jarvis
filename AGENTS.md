@@ -293,6 +293,23 @@
 - Логи не должны содержать full query text, API keys, Authorization headers, provider response body, prompts или private message text; допустимы provider, query length, result count, status и sanitized ids.
 - Stage 4K не включает watcher, voice/media, Telegram Business, Railway Variables changes, auto-reading group messages и live destructive Telegram calls.
 
+## Stage 4L HelpDesk IMAP Inbox
+
+- Stage 4L добавляет только один HelpDesk/GLPI IMAP mailbox, настроенный через Railway Variables или локальный `.env`.
+- HelpDesk IMAP по умолчанию выключен: `HELPDESK_IMAP_ENABLED=false`.
+- Обязательные runtime переменные при включении: `HELPDESK_IMAP_HOST`, `HELPDESK_IMAP_USERNAME`, `HELPDESK_IMAP_PASSWORD`, `HELPDESK_TELEGRAM_CHAT_ID`; порт/SSL/folder/filter/prefix/interval/mark-seen имеют defaults.
+- IMAP password никогда не вводится через Telegram и не показывается в `/settings`, `/status`, docs, logs или PR.
+- Worker job `check_helpdesk_imap_mailbox` делает polling, а не IMAP IDLE; если config disabled/incomplete, job no-op/sanitized warning и не падает.
+- `/status` показывает только stored diagnostics из Redis/PostgreSQL: enabled/configured, host configured/missing, masked username, folder, last check/success/error, processed last 24h и pending notifications. `/status` не подключается к IMAP live.
+- IMAP чтение использует `BODY.PEEK[]`; письма не помечаются прочитанными в MVP при `HELPDESK_MARK_SEEN=false`.
+- Если `HELPDESK_MARK_SEEN=true`, `Seen` ставится только после успешной Telegram notification.
+- GLPI parser deterministic и без LLM: поддерживает `Новая заявка`, `Новый комментарий`, `Заголовок`, `Описание`, `ФИО`, `Должность`, `Руководитель`, `Предварительная дата выхода`, `Настроить доступы`, URL и счётчики.
+- Telegram карточка заявки использует safe HTML; весь текст из email проходит escaping, URL button добавляется только для `http/https`.
+- Дедупликация хранится в PostgreSQL `helpdesk_email_events` по `Message-ID` и `(folder, imap_uid)`, чтобы повторный polling не создавал duplicate Telegram cards.
+- В логах нельзя печатать тело письма целиком, raw email, полный sender email, IMAP password, Telegram token, API keys, Authorization headers или provider response body.
+- Stage 4L не включает Telegram-ввод пароля, несколько mailbox-ов, email replies, удаление писем, mark-seen по умолчанию, RAG/OCR, Smart Watcher, multi-mailbox UI и live destructive Telegram calls.
+- Railway Variables не меняются в PR; после merge пользователь добавляет их вручную в Railway UI.
+
 ## Logging Hygiene
 
 - Normal operational app logs уровня `DEBUG`/`INFO` должны писаться в stdout; реальные warning/error/exception остаются на stderr.
@@ -336,6 +353,7 @@ uv run --python 3.12 --extra dev python scripts/smoke_private_ingress_readiness.
 uv run --python 3.12 --extra dev python scripts/smoke_telegram_update_idempotency_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_prompt_profiles_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_status_household_context_readiness.py
+uv run --python 3.12 --extra dev python scripts/smoke_helpdesk_imap_readiness.py
 git status --short
 ```
 
