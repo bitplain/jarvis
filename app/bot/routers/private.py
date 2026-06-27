@@ -1,9 +1,11 @@
+import logging
 from typing import Any
 
 from aiogram import F, Router
 from aiogram.types import Message
 
 from app.bot.thinking import THINKING_TEXT
+from app.core.logging import safe_extra
 from app.db.models import MessageRole
 from app.db.repositories.messages import MessageRepository
 from app.services.memory_service import MemoryService
@@ -12,6 +14,8 @@ from app.services.regular_assistant_service import (
     RegularAssistantService,
     is_draft_reply_request,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def is_forwarded_message(message: Message) -> bool:
@@ -112,6 +116,7 @@ async def handle_private_text(message: Message, **data: Any) -> None:
         telegram_message_id=message.message_id,
     )
     if redis is not None:
+        job_id = f"llm:{message.chat.id}:{message.message_id}"
         await redis.enqueue_job(
             "process_llm_message",
             {
@@ -119,7 +124,17 @@ async def handle_private_text(message: Message, **data: Any) -> None:
                 "user_id": message.from_user.id,
                 "private": True,
             },
+            _job_id=job_id,
         )
+        log_kwargs: dict[str, Any] = safe_extra(
+            chat_type=message.chat.type,
+            chat_id_masked="***" + str(message.chat.id)[-4:],
+            user_id_masked="***" + str(message.from_user.id)[-4:],
+            message_id=message.message_id,
+            private=True,
+            job_id=job_id,
+        )
+        logger.info("telegram_llm_job_enqueued", **log_kwargs)
         if not (
             settings.streaming_enabled
             and settings.streaming_private_draft_enabled

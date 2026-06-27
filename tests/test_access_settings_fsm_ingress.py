@@ -62,9 +62,18 @@ class FakeBot:
 class FakeRedis:
     def __init__(self) -> None:
         self.jobs: list[tuple[str, dict[str, Any]]] = []
+        self.keys: dict[str, str] = {}
 
-    async def enqueue_job(self, name: str, payload: dict[str, Any]) -> None:
+    async def enqueue_job(self, name: str, payload: dict[str, Any], **kwargs: Any) -> None:
+        del kwargs
         self.jobs.append((name, payload))
+
+    async def set(self, key: str, value: str, *, ex: int, nx: bool) -> bool | None:
+        del ex
+        if nx and key in self.keys:
+            return None
+        self.keys[key] = value
+        return True
 
 
 class FakeMessageRepository:
