@@ -5,6 +5,7 @@ from app.bot.middlewares.group_diagnostics import GroupDiagnosticsMiddleware
 from app.bot.routers import (
     business,
     commands,
+    daily_brief,
     groups,
     guest,
     household_memory,
@@ -21,6 +22,7 @@ def build_dispatcher(settings: Settings) -> Dispatcher:
     dispatcher.include_router(commands.build_router())
     dispatcher.include_router(guest.build_router())
     dispatcher.include_router(business.build_router())
+    dispatcher.include_router(daily_brief.build_router())
     dispatcher.include_router(lists_reminders.build_router())
     dispatcher.include_router(household_memory.build_router())
     dispatcher.include_router(private.build_router())

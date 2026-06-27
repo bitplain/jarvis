@@ -308,15 +308,28 @@ Stage 4G-1 улучшает UX без watcher и без Telegram Business:
 
 Stage 4G-1 не включает watcher, voice/transcription, Telegram Business integration, изменение Railway Variables и PR #5.
 
+Stage 4J добавляет Daily Brief и Shopping v2 без watcher/voice/business:
+
+- Команды `сводка`, `сводка дня`, `что сегодня?` показывают сводку текущего scope.
+- В private chat сводка включает сегодняшние и просроченные напоминания, активные покупки и до 5 записей household memory.
+- В group/supergroup сводка работает только по явному mention/reply; auto-brief в группы не отправляется.
+- `/settings -> Сводка дня` управляет private auto-brief: включить/выключить, время `HH:MM`, timezone IANA и `Показать сейчас`.
+- Auto-brief доставляет arq job `deliver_daily_briefs`; cron идёт раз в минуту, `last_sent_date` не даёт отправить сводку второй раз за тот же локальный день.
+- Shopping v2 расширяет `shopping_list_items` nullable-полями `quantity`, `unit`, `note`, `category`. Старые items без этих полей остаются валидными.
+- Deterministic parser понимает `молоко 2 шт`, `яблоки 1 кг`, `памперсы размер 4`, `молоко 2.5% 2 бутылки`; категории задаются простыми правилами, иначе `Другое`.
+- Список покупок группируется по категориям (`Молочка`, `Хлеб`, `Ребёнок`, `Мясо`, `Овощи`, `Фрукты`, `Другое`) и продолжает HTML-escape пользовательский текст.
+- Stage 4J не включает watcher, auto-reading group messages, voice/transcription/media, Telegram Business и изменение Railway Variables.
+
 Readiness без live Telegram/LLM calls:
 
 ```bash
 uv run --python 3.12 --extra dev python scripts/smoke_lists_reminders_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_lists_reminders_ux_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_shopping_parser_sanitize_readiness.py
+uv run --python 3.12 --extra dev python scripts/smoke_daily_brief_shopping_v2_readiness.py
 ```
 
-Ожидаемые verdict: `PASS_LISTS_REMINDERS_READINESS`, `PASS_LISTS_REMINDERS_UX_READINESS` и `PASS_SHOPPING_PARSER_SANITIZE_READINESS`.
+Ожидаемые verdict: `PASS_LISTS_REMINDERS_READINESS`, `PASS_LISTS_REMINDERS_UX_READINESS`, `PASS_SHOPPING_PARSER_SANITIZE_READINESS` и `PASS_DAILY_BRIEF_SHOPPING_V2_READINESS`.
 
 ## Настройки доступа
 

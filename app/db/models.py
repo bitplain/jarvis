@@ -1,4 +1,5 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 from uuid import UUID, uuid4
@@ -7,11 +8,13 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     Enum,
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -288,6 +291,10 @@ class ShoppingListItem(Base):
         nullable=False,
     )
     text: Mapped[str] = mapped_column(Text, nullable=False)
+    quantity: Mapped[Decimal | None] = mapped_column(Numeric(10, 3))
+    unit: Mapped[str | None] = mapped_column(Text)
+    note: Mapped[str | None] = mapped_column(Text)
+    category: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
     created_by_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -327,6 +334,31 @@ class Reminder(Base):
         onupdate=utcnow,
     )
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class DailyBriefSettings(Base):
+    __tablename__ = "daily_brief_settings"
+    __table_args__ = (
+        CheckConstraint(
+            "scope_type IN ('private', 'group')",
+            name="ck_daily_brief_settings_scope_type",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    scope_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    user_id: Mapped[int | None] = mapped_column(BigInteger)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    send_time: Mapped[str] = mapped_column(String(5), nullable=False, default="09:00")
+    timezone: Mapped[str] = mapped_column(Text, nullable=False, default="Europe/Moscow")
+    last_sent_date: Mapped[date | None] = mapped_column(Date)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        onupdate=utcnow,
+    )
 
 
 class BusinessConnectionStub(Base):
@@ -454,4 +486,19 @@ Index(
     "ix_household_memory_created_by_status",
     HouseholdMemoryEntry.created_by_user_id,
     HouseholdMemoryEntry.status,
+)
+Index(
+    "uq_daily_brief_settings_private_scope",
+    DailyBriefSettings.scope_type,
+    DailyBriefSettings.chat_id,
+    DailyBriefSettings.user_id,
+    unique=True,
+    postgresql_where=DailyBriefSettings.user_id.is_not(None),
+)
+Index(
+    "uq_daily_brief_settings_group_scope",
+    DailyBriefSettings.scope_type,
+    DailyBriefSettings.chat_id,
+    unique=True,
+    postgresql_where=DailyBriefSettings.user_id.is_(None),
 )

@@ -257,6 +257,22 @@
 - Household memory не используется для access decisions и не смешивается между private/group/другими chat ids.
 - Stage 4I не включает watcher, auto-memory, чтение всех сообщений, voice/transcription/media, Telegram Business integration, Railway Variables changes и live destructive Telegram calls.
 
+## Stage 4J Daily Brief + Shopping v2
+
+- Stage 4J добавляет Daily Brief / `Сводка дня` и Shopping v2 без watcher, voice/transcription/media, Telegram Business и auto-reading group messages.
+- Daily Brief запускается только явными командами `сводка`, `сводка дня`, `что сегодня?` или scheduled private auto-brief.
+- Private brief показывает текущий private scope: сегодняшние напоминания, просроченные напоминания, активные покупки и capped household memory.
+- Group/supergroup brief работает только по mention/reply и только по текущему group scope; group auto-brief в Stage 4J не отправляется.
+- `/settings -> Сводка дня` доступен только admin/private settings policy и управляет private auto-brief: enabled, `send_time` в формате `HH:MM`, timezone IANA и `Показать сейчас`.
+- Daily brief settings хранятся в PostgreSQL таблице `daily_brief_settings`; `last_sent_date` хранит локальную дату последней успешной отправки.
+- Worker job `deliver_daily_briefs` запускается arq cron раз в минуту, отправляет brief только если local `HH:MM` совпал и `last_sent_date` не равен сегодняшней local date.
+- Если daily brief Telegram send падает, job логирует sanitized `daily_brief_send_failed` без текста brief/secrets и не обновляет `last_sent_date`.
+- Shopping v2 расширяет `shopping_list_items` nullable-полями `quantity`, `unit`, `note`, `category`; старые rows без этих полей должны отображаться и работать как раньше.
+- Shopping parser остаётся deterministic и без LLM: `2 шт`, `1 кг`, `500 г`, `2 бутылки` идут в quantity/unit; `размер 4`, проценты и скобки идут в note.
+- Простые категории: `Молочка`, `Хлеб`, `Ребёнок`, `Мясо`, `Овощи`, `Фрукты`; если правило не сработало, используется `Другое`.
+- Shopping list display группирует active items по категориям, но старые items без v2 fields отображаются нормально; весь пользовательский текст в HTML обязательно escaping через `html.escape`.
+- Stage 4J не меняет Railway Variables, Prompt Profiles, access routing, Mira/private streaming, Guest Mode, Business Mode, `/status`, reminder delivery semantics и logging redaction.
+
 ## Logging Hygiene
 
 - Normal operational app logs уровня `DEBUG`/`INFO` должны писаться в stdout; реальные warning/error/exception остаются на stderr.
@@ -293,6 +309,7 @@ uv run --python 3.12 --extra dev python scripts/smoke_mira_private_streaming_rea
 uv run --python 3.12 --extra dev python scripts/smoke_thinking_text_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_lists_reminders_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_lists_reminders_ux_readiness.py
+uv run --python 3.12 --extra dev python scripts/smoke_daily_brief_shopping_v2_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_provider_settings_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_access_settings_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_private_ingress_readiness.py

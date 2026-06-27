@@ -15,6 +15,7 @@ from app.services.runtime_settings_service import (
     RuntimeSettingsUnavailable,
 )
 from app.workers import jobs
+from app.workers.arq_settings import WorkerSettings
 from app.workers.jobs import process_llm_message, try_send_chat_action
 
 
@@ -26,6 +27,15 @@ class FailingBot:
 @pytest.mark.asyncio
 async def test_try_send_chat_action_does_not_raise() -> None:
     await try_send_chat_action(FailingBot(), chat_id=1)
+
+
+def test_daily_brief_worker_is_registered() -> None:
+    assert jobs.deliver_daily_briefs in WorkerSettings.functions
+    assert any(
+        getattr(cron_job, "coroutine", None) is jobs.deliver_daily_briefs
+        or getattr(cron_job, "name", "") == "cron:deliver_daily_briefs"
+        for cron_job in WorkerSettings.cron_jobs
+    )
 
 
 class FakeBot:
