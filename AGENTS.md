@@ -262,6 +262,7 @@
 - Normal operational app logs уровня `DEBUG`/`INFO` должны писаться в stdout; реальные warning/error/exception остаются на stderr.
 - Central logging config находится в `app/core/logging.py`; API startup и arq worker должны использовать один и тот же redaction filter.
 - Redaction обязана маскировать Telegram Bot API URLs вида `https://api.telegram.org/bot<TOKEN>/...`, Telegram token, Authorization/Bearer headers, API keys, passwords, webhook secrets и nested `extra` values.
+- Redaction применяется не только к `record.msg`, `record.args` и structured `extra`, но и к финальной formatted log string и `formatException`; `logger.exception(...)` и `logger.error(..., exc_info=True)` должны сохранять stack trace, но без token/header/secret-bearing traceback text.
 - `httpx`, `httpcore` и `aiohttp` request info logs не должны печатать полный Telegram Bot API URL; по умолчанию они понижены до `WARNING`.
 - Webhook self-healing logs остаются только sanitized событиями `telegram_webhook_setup_started`, `telegram_webhook_setup_completed`, `telegram_webhook_setup_failed`, `webhook_host`, `webhook_path` и sanitized error fields.
 - Если arq или Railway помечают сторонний runtime stderr как `[err]`, это не считается ошибкой без traceback, failed exit code или failed job marker; app-controlled logs должны быть stdout/stderr-clean.

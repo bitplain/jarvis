@@ -251,6 +251,7 @@ async def test_deliver_due_reminders_sends_html_and_marks_sent(
     monkeypatch.setattr(jobs, "ReminderRepository", FakeReminderRepository)
     monkeypatch.setattr(jobs, "RuntimeSettingRepository", lambda session: object())
     monkeypatch.setattr(jobs, "RuntimeSettingsService", FakeRuntimeSettingsService)
+    monkeypatch.setattr(jobs, "utcnow", lambda: datetime(2026, 6, 26, 9, 0, tzinfo=UTC))
 
     await jobs.deliver_due_reminders({})
 

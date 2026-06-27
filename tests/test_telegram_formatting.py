@@ -75,9 +75,10 @@ def test_format_reminders_escape_text_and_stay_within_limit() -> None:
         status="scheduled",
     )
 
-    created = format_reminder_created_html(reminder, now=datetime(2026, 6, 26, 12, 0, tzinfo=MSK))
-    due = format_reminder_due_html(reminder)
-    listing = format_reminders_html([reminder], now=datetime(2026, 6, 26, 12, 0, tzinfo=MSK))
+    now = datetime(2026, 6, 26, 12, 0, tzinfo=MSK)
+    created = format_reminder_created_html(reminder, now=now)
+    due = format_reminder_due_html(reminder, now=now)
+    listing = format_reminders_html([reminder], now=now)
 
     assert "&lt;script&gt; milk &amp; bread" in created
     assert "&lt;script&gt; milk &amp; bread" in due

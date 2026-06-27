@@ -27,6 +27,7 @@ def test_logging_hygiene_readiness_checks_redaction_logging_and_docs() -> None:
 
     assert result.verdict == "PASS_LOGGING_HYGIENE_READINESS"
     assert "central_redactor: OK" in rendered
+    assert "redacting_formatter: OK" in rendered
     assert "stdout_stderr_split: OK" in rendered
     assert "http_client_info_quiet: OK" in rendered
     assert "worker_logging_hook: OK" in rendered

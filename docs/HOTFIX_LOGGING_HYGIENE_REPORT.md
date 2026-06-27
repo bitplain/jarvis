@@ -8,6 +8,7 @@
 
 - `app/core/logging.py` теперь разделяет app logs: `DEBUG`/`INFO` идут в stdout, `WARNING`/`ERROR`/`exception` остаются в stderr.
 - Central redaction filter маскирует Telegram Bot API URLs вида `https://api.telegram.org/bot<TOKEN>/...`, Authorization/Bearer headers, token/key/password/secret fields, nested `extra` values и URL-like objects.
+- Follow-up hotfix добавил formatter-level redaction для финальной formatted log string и `formatException`, чтобы `logger.exception(...)` / `logger.error(..., exc_info=True)` сохраняли stack trace без token/header fragments.
 - `httpx`, `httpcore` и `aiohttp` request info logs понижены до `WARNING`, чтобы routine request logs не печатали полный Telegram URL.
 - `app/services/telegram_webhook_setup.py` использует общий redactor при sanitizing webhook errors.
 - `app/workers/arq_settings.py` подключает logging config через arq `on_startup`, чтобы worker jobs использовали тот же stdout/stderr split и redaction.
