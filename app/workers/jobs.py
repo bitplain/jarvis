@@ -1,6 +1,8 @@
 import logging
+import re
 import time
 from datetime import date, datetime
+from html import unescape
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -41,6 +43,7 @@ from app.services.web_search.context_builder import (
     build_search_context,
     build_search_system_prompt,
     build_sources_text,
+    format_web_search_answer_html,
 )
 from app.services.web_search.factory import build_web_search_service
 from app.services.web_search.service import WEB_SEARCH_NO_RESULTS_MESSAGE
@@ -71,10 +74,29 @@ async def try_send_chat_action(bot: Bot, *, chat_id: int) -> None:
         )
 
 
-async def send_final_messages(bot: Bot, *, chat_id: int, text: str, path: str) -> None:
+async def send_final_messages(
+    bot: Bot,
+    *,
+    chat_id: int,
+    text: str,
+    path: str,
+    parse_mode: str | None = None,
+) -> None:
     chunks = split_telegram_text(text)
     for index, chunk in enumerate(chunks, start=1):
-        await bot.send_message(chat_id=chat_id, text=chunk)
+        try:
+            if parse_mode is None:
+                await bot.send_message(chat_id=chat_id, text=chunk)
+            else:
+                await bot.send_message(chat_id=chat_id, text=chunk, parse_mode=parse_mode)
+        except Exception as exc:
+            if parse_mode != "HTML":
+                raise
+            logger.warning(
+                "telegram_html_send_failed_using_plain_fallback",
+                extra={"path": path, "error_type": type(exc).__name__},
+            )
+            await bot.send_message(chat_id=chat_id, text=_telegram_html_to_plain_text(chunk))
         logger.warning(
             "telegram_final_send_message_called",
             extra={
@@ -369,12 +391,16 @@ async def process_llm_message(ctx: dict[str, Any], payload: dict[str, Any]) -> N
                 final_text = response.content
             elif web_search_sources_text is not None:
                 response = await provider.complete(messages)
-                final_text = _with_web_search_sources(response.content, web_search_sources_text)
+                final_text = format_web_search_answer_html(
+                    response.content,
+                    search_response.results,
+                )
                 await send_final_messages(
                     bot,
                     chat_id=chat_id,
                     text=final_text,
                     path="web_search",
+                    parse_mode="HTML",
                 )
                 sent_final = True
             elif (
@@ -445,6 +471,17 @@ def _with_web_search_sources(answer: str, sources_text: str) -> str:
     if clean_answer:
         return f"Нашёл актуальные источники.\n\n{clean_answer}\n\n{sources_text}"
     return f"Нашёл актуальные источники.\n\n{sources_text}"
+
+
+def _telegram_html_to_plain_text(text: str) -> str:
+    with_urls = re.sub(
+        r'<a\s+href="([^"]+)">([^<]+)</a>',
+        lambda match: f"{match.group(2)} — {match.group(1)}",
+        text,
+    )
+    without_tags = re.sub(r"</?(?:b|i|u|s|blockquote|code|pre)>", "", with_urls)
+    without_other_tags = re.sub(r"<[^>]+>", "", without_tags)
+    return unescape(without_other_tags)
 
 
 async def deliver_due_reminders(ctx: dict[str, Any]) -> None:

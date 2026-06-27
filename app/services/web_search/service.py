@@ -20,7 +20,9 @@ from app.services.web_search.url_safety import is_safe_public_http_url
 WEB_SEARCH_DISABLED_MESSAGE = (
     "Интернет-поиск выключен. Включите его в /settings -> Интернет-поиск."
 )
-WEB_SEARCH_KEY_MISSING_MESSAGE = "Интернет-поиск включён, но ключ provider не настроен."
+WEB_SEARCH_KEY_MISSING_MESSAGE = (
+    "Интернет-поиск не настроен: выберите provider и добавьте API key."
+)
 WEB_SEARCH_NO_RESULTS_MESSAGE = "Ничего надёжного не нашёл по запросу."
 WEB_SEARCH_INVALID_QUERY_MESSAGE = "Запрос для интернет-поиска слишком длинный."
 WEB_SEARCH_SECRET_QUERY_MESSAGE = "Похоже на секрет. Я не буду искать это в интернете."
@@ -75,11 +77,17 @@ class WebSearchService:
         query = " ".join(request.query.split())
         max_results = max(1, min(int(request.max_results), MAX_RESULTS_LIMIT))
         provider_name = request.provider_name.strip().lower() or "disabled"
-        if not request.enabled or provider_name == "disabled":
+        if not request.enabled:
             return WebSearchResponse(
                 WebSearchStatus.DISABLED,
                 [],
                 WEB_SEARCH_DISABLED_MESSAGE,
+            )
+        if provider_name == "disabled":
+            return WebSearchResponse(
+                WebSearchStatus.CONFIG_ERROR,
+                [],
+                WEB_SEARCH_KEY_MISSING_MESSAGE,
             )
         if len(query) > MAX_QUERY_LENGTH:
             return WebSearchResponse(

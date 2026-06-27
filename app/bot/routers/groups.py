@@ -11,6 +11,13 @@ from app.core.logging import safe_extra
 from app.db.models import MessageRole
 from app.db.repositories.messages import MessageRepository
 from app.services.memory_service import MemoryService
+from app.services.web_search.clarification import (
+    build_followup_intent,
+    clarification_prompt,
+    clear_web_search_clarification,
+    pop_web_search_clarification,
+    save_web_search_clarification,
+)
 from app.services.web_search.intent import parse_web_search_intent
 
 logger = logging.getLogger(__name__)
@@ -176,6 +183,45 @@ async def handle_group_message(message: Message, **data: Any) -> None:
         message.text,
         bot_username=str(bot_username),
     )
+    used_clarification = False
+    if web_search_intent is None and message.text and not message.text.strip().startswith("/"):
+        clarification = await pop_web_search_clarification(
+            redis,
+            private=False,
+            chat_id=message.chat.id,
+            user_id=message.from_user.id,
+        )
+        if clarification is not None:
+            web_search_intent = build_followup_intent(
+                message.text,
+                clarification,
+                bot_username=str(bot_username),
+            )
+            if web_search_intent is not None:
+                used_clarification = True
+                await clear_web_search_clarification(
+                    redis,
+                    private=False,
+                    chat_id=message.chat.id,
+                    user_id=message.from_user.id,
+                )
+    if web_search_intent is not None and web_search_intent.needs_clarification:
+        await save_web_search_clarification(
+            redis,
+            private=False,
+            chat_id=message.chat.id,
+            user_id=message.from_user.id,
+            intent=web_search_intent,
+        )
+        await message.answer(clarification_prompt(web_search_intent))
+        return
+    if web_search_intent is not None and not used_clarification:
+        await clear_web_search_clarification(
+            redis,
+            private=False,
+            chat_id=message.chat.id,
+            user_id=message.from_user.id,
+        )
     if web_search_intent is not None and not await _web_search_rate_limit_allowed(
         redis,
         user_id=message.from_user.id,

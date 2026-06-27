@@ -129,16 +129,31 @@ def test_render_web_search_settings_text_shows_degraded_without_key() -> None:
     keyboard = commands.build_web_search_settings_keyboard(enabled=True)
 
     assert "Интернет-поиск" in text
-    assert "Статус: включён" in text
+    assert "Статус: не настроен" in text
     assert "Provider: tavily" in text
     assert "Режим: только явные команды" in text
     assert "Максимум источников: 5" in text
-    assert "provider key не настроен" in text
+    assert "выберите provider и добавьте API key" in text
     assert any(
         button.callback_data == commands.SETTINGS_CALLBACK_WEB_SEARCH_MAX_RESULTS
         for row in keyboard.inline_keyboard
         for button in row
     )
+
+
+def test_render_web_search_settings_text_shows_not_configured_for_disabled_provider() -> None:
+    text = commands.render_web_search_settings_text(
+        WebSearchSettings(
+            enabled=True,
+            provider=WebSearchProviderName.DISABLED,
+            max_results=5,
+        ),
+        provider_key_available=True,
+    )
+
+    assert "Статус: не настроен" in text
+    assert "Provider: disabled" in text
+    assert "Статус: включён" not in text
 
 
 def test_render_daily_brief_settings_text() -> None:
