@@ -1,6 +1,6 @@
 import pytest
 
-from app.services.shopping_service import ShoppingService
+from app.services.shopping_service import ShoppingItemInput, ShoppingService, parse_shopping_item
 
 
 @pytest.mark.asyncio
@@ -16,6 +16,33 @@ async def test_shopping_private_and_group_lists_are_scoped() -> None:
     assert group_view.scope_type == "group"
     assert group_view.scope_chat_id == -100123
     assert [item.text for item in group_view.active] == ["молоко"]
+
+
+def test_parse_shopping_v2_quantity_note_and_category() -> None:
+    assert parse_shopping_item("молоко 2 шт") == ShoppingItemInput(
+        text="молоко",
+        quantity=2,
+        unit="шт",
+        category="Молочка",
+    )
+    assert parse_shopping_item("яблоки 1 кг") == ShoppingItemInput(
+        text="яблоки",
+        quantity=1,
+        unit="кг",
+        category="Фрукты",
+    )
+    assert parse_shopping_item("памперсы размер 4") == ShoppingItemInput(
+        text="памперсы",
+        note="размер 4",
+        category="Ребёнок",
+    )
+    assert parse_shopping_item("молоко 2.5% 2 бутылки") == ShoppingItemInput(
+        text="молоко",
+        quantity=2,
+        unit="бутылки",
+        note="2.5%",
+        category="Молочка",
+    )
 
 
 @pytest.mark.asyncio
@@ -35,6 +62,21 @@ async def test_shopping_item_lifecycle_and_repeated_callbacks_are_safe() -> None
     assert [item.text for item in restored.active] == ["молоко", "яйца"]
     assert [item.text for item in deleted.active] == ["яйца"]
     assert [item.text for item in repeated_delete.active] == ["яйца"]
+
+
+@pytest.mark.asyncio
+async def test_shopping_service_preserves_structured_item_fields() -> None:
+    service = ShoppingService.in_memory()
+
+    view = await service.add_items("private", 100500, 100500, ["молоко 2 шт", "хлеб"])
+
+    assert view.active[0].text == "молоко"
+    assert view.active[0].quantity == 2
+    assert view.active[0].unit == "шт"
+    assert view.active[0].category == "Молочка"
+    assert view.active[1].text == "хлеб"
+    assert view.active[1].quantity is None
+    assert view.active[1].category == "Хлеб"
 
 
 @pytest.mark.asyncio

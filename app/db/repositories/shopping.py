@@ -7,7 +7,7 @@ from sqlalchemy.sql import select
 from sqlalchemy.sql.sqltypes import String
 
 from app.db.models import ShoppingList, ShoppingListItem, utcnow
-from app.services.shopping_service import StoredShoppingItem, StoredShoppingList
+from app.services.shopping_service import ShoppingItemInput, StoredShoppingItem, StoredShoppingList
 
 
 class ShoppingRepository:
@@ -60,13 +60,17 @@ class ShoppingRepository:
         *,
         shopping_list: StoredShoppingList,
         user_id: int,
-        items: list[str],
+        items: list[ShoppingItemInput],
     ) -> list[StoredShoppingItem]:
         now = utcnow()
         rows = [
             ShoppingListItem(
                 list_id=_uuid(shopping_list.id),
-                text=item,
+                text=item.text,
+                quantity=item.quantity,
+                unit=item.unit,
+                note=item.note,
+                category=item.category,
                 status="active",
                 created_by_user_id=user_id,
                 created_at=now,
@@ -203,6 +207,10 @@ def _item_to_stored(item: ShoppingListItem) -> StoredShoppingItem:
         text=item.text,
         status=item.status,
         created_by_user_id=item.created_by_user_id,
+        quantity=item.quantity,
+        unit=item.unit,
+        note=item.note,
+        category=item.category,
         created_at=item.created_at,
         updated_at=item.updated_at,
         done_at=item.done_at,

@@ -1,7 +1,8 @@
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, cast
-from zoneinfo import ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
@@ -14,13 +15,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.middlewares.access import is_admin_user
 from app.db.models import BusinessConnection, BusinessConnectionStatus
+from app.db.repositories.daily_brief import DailyBriefSettingsRepository
+from app.db.repositories.household_memory import HouseholdMemoryRepository
 from app.db.repositories.messages import MessageRepository
+from app.db.repositories.reminders import ReminderRepository
 from app.db.repositories.runtime_settings import RuntimeSettingRepository
+from app.db.repositories.shopping import ShoppingRepository
 from app.db.repositories.telegram_access import TelegramAccessRepository
 from app.llm.base import LLMProviderError
 from app.llm.factory import build_llm_provider
 from app.llm.types import LLMMessage
+from app.services.daily_brief_service import (
+    DailyBriefService,
+)
+from app.services.daily_brief_service import (
+    DailyBriefSettingsInput as DailyBriefSettingsValue,
+)
+from app.services.household_memory_service import HouseholdMemoryService
 from app.services.memory_service import MemoryService
+from app.services.reminder_service import ReminderService
 from app.services.runtime_settings_service import (
     MAX_PROMPT_LENGTH,
     ActiveLLMProvider,
@@ -31,6 +44,7 @@ from app.services.runtime_settings_service import (
     RuntimeSettingsService,
     RuntimeSettingsUnavailable,
 )
+from app.services.shopping_service import ShoppingService
 from app.services.status_service import StatusService, render_status_html
 from app.services.telegram_access_service import (
     AccessEntry,
@@ -38,7 +52,10 @@ from app.services.telegram_access_service import (
     TelegramAccessService,
     TelegramAccessUnavailable,
 )
-from app.services.telegram_formatting import format_lists_reminders_private_help_html
+from app.services.telegram_formatting import (
+    format_daily_brief_html,
+    format_lists_reminders_private_help_html,
+)
 
 SETTINGS_CALLBACK_REFRESH = "settings:refresh"
 SETTINGS_CALLBACK_CLOSE = "settings:close"
@@ -49,6 +66,11 @@ SETTINGS_CALLBACK_LISTS_TIMEZONE = "settings:lists:timezone"
 SETTINGS_CALLBACK_LISTS_HELP = "settings:lists:help"
 SETTINGS_CALLBACK_LISTS_REMINDERS = "settings:lists:reminders"
 SETTINGS_CALLBACK_LISTS_SHOPPING = "settings:lists:shopping"
+SETTINGS_CALLBACK_DAILY_BRIEF = "settings:daily_brief"
+SETTINGS_CALLBACK_DAILY_BRIEF_TOGGLE = "settings:daily_brief:toggle"
+SETTINGS_CALLBACK_DAILY_BRIEF_TIME = "settings:daily_brief:time"
+SETTINGS_CALLBACK_DAILY_BRIEF_TIMEZONE = "settings:daily_brief:timezone"
+SETTINGS_CALLBACK_DAILY_BRIEF_SHOW = "settings:daily_brief:show"
 SETTINGS_CALLBACK_PROMPTS = "settings:prompts"
 SETTINGS_CALLBACK_PROMPTS_PRIVATE = "settings:prompts:private"
 SETTINGS_CALLBACK_PROMPTS_GROUP = "settings:prompts:group"
@@ -120,6 +142,11 @@ class PromptEditorInput(StatesGroup):
 
 
 class ListsRemindersSettingsInput(StatesGroup):
+    timezone = State()
+
+
+class DailyBriefSettingsInput(StatesGroup):
+    time = State()
     timezone = State()
 
 
@@ -220,6 +247,12 @@ def build_settings_keyboard() -> InlineKeyboardMarkup:
                 )
             ],
             [
+                InlineKeyboardButton(
+                    text="Сводка дня",
+                    callback_data=SETTINGS_CALLBACK_DAILY_BRIEF,
+                )
+            ],
+            [
                 InlineKeyboardButton(text="Обновить", callback_data=SETTINGS_CALLBACK_REFRESH),
                 InlineKeyboardButton(text="Закрыть", callback_data=SETTINGS_CALLBACK_CLOSE),
             ],
@@ -252,6 +285,40 @@ def build_lists_reminders_settings_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text="Мой список покупок",
                     callback_data=SETTINGS_CALLBACK_LISTS_SHOPPING,
+                )
+            ],
+            [
+                InlineKeyboardButton(text="Назад", callback_data=SETTINGS_CALLBACK_REFRESH),
+                InlineKeyboardButton(text="Закрыть", callback_data=SETTINGS_CALLBACK_CLOSE),
+            ],
+        ]
+    )
+
+
+def build_daily_brief_settings_keyboard(*, enabled: bool) -> InlineKeyboardMarkup:
+    toggle_text = "Выключить" if enabled else "Включить"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=toggle_text,
+                    callback_data=SETTINGS_CALLBACK_DAILY_BRIEF_TOGGLE,
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Время",
+                    callback_data=SETTINGS_CALLBACK_DAILY_BRIEF_TIME,
+                ),
+                InlineKeyboardButton(
+                    text="Часовой пояс",
+                    callback_data=SETTINGS_CALLBACK_DAILY_BRIEF_TIMEZONE,
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Показать сейчас",
+                    callback_data=SETTINGS_CALLBACK_DAILY_BRIEF_SHOW,
                 )
             ],
             [
@@ -478,7 +545,27 @@ def render_settings_home_text() -> str:
         "- Доступ\n"
         "- Промты\n"
         "- Стиль ответа\n"
-        "- Списки и напоминания"
+        "- Списки и напоминания\n"
+        "- Сводка дня"
+    )
+
+
+def render_daily_brief_settings_text(
+    *,
+    enabled: bool,
+    send_time: str,
+    timezone_name: str,
+) -> str:
+    status = "включена" if enabled else "выключена"
+    return (
+        "Сводка дня\n\n"
+        f"Статус: {status}\n"
+        f"Время: {send_time}\n"
+        f"Часовой пояс: {timezone_name}\n"
+        "Куда: личка\n\n"
+        "Авто-сводка для групп будет позже. "
+        "Сейчас группа поддерживает только команду \"сводка\".\n\n"
+        "Действия:"
     )
 
 
@@ -496,6 +583,24 @@ def render_lists_reminders_settings_text(timezone_name: str) -> str:
 def render_lists_timezone_prompt_text() -> str:
     return (
         "Отправьте часовой пояс, например:\n"
+        "Europe/Moscow\n"
+        "Europe/Amsterdam\n"
+        "Asia/Dubai\n\n"
+        "Для отмены отправьте /cancel."
+    )
+
+
+def render_daily_brief_time_prompt_text() -> str:
+    return (
+        "Отправьте время сводки в формате HH:MM.\n"
+        "Например: 09:00\n\n"
+        "Для отмены отправьте /cancel."
+    )
+
+
+def render_daily_brief_timezone_prompt_text() -> str:
+    return (
+        "Отправьте часовой пояс для сводки дня, например:\n"
         "Europe/Moscow\n"
         "Europe/Amsterdam\n"
         "Asia/Dubai\n\n"
@@ -621,6 +726,59 @@ def _telegram_access_service(session: object, admin_ids: set[int]) -> TelegramAc
         TelegramAccessRepository(session),  # type: ignore[arg-type]
         admin_ids=admin_ids,
     )
+
+
+def _daily_brief_settings_repository(session: object) -> DailyBriefSettingsRepository:
+    return DailyBriefSettingsRepository(session)  # type: ignore[arg-type]
+
+
+async def _get_private_daily_brief_settings(
+    session: object,
+    user_id: int,
+) -> object:
+    return await _daily_brief_settings_repository(session).get_or_create(
+        scope_type="private",
+        chat_id=user_id,
+        user_id=user_id,
+    )
+
+
+async def _render_private_daily_brief_settings(
+    session: object,
+    user_id: int,
+) -> tuple[str, InlineKeyboardMarkup]:
+    settings = await _get_private_daily_brief_settings(session, user_id)
+    text = render_daily_brief_settings_text(
+        enabled=bool(getattr(settings, "enabled", False)),
+        send_time=str(getattr(settings, "send_time", "09:00")),
+        timezone_name=str(getattr(settings, "timezone", "Europe/Moscow")),
+    )
+    return text, build_daily_brief_settings_keyboard(
+        enabled=bool(getattr(settings, "enabled", False))
+    )
+
+
+async def _send_private_daily_brief_now(
+    callback: CallbackQuery,
+    session: object,
+    user_id: int,
+) -> None:
+    settings = await _get_private_daily_brief_settings(session, user_id)
+    timezone = ZoneInfo(str(getattr(settings, "timezone", "Europe/Moscow")))
+    service = DailyBriefService(
+        shopping=ShoppingService(ShoppingRepository(session)),  # type: ignore[arg-type]
+        reminders=ReminderService(ReminderRepository(session)),  # type: ignore[arg-type]
+        household_memory=HouseholdMemoryService(HouseholdMemoryRepository(session)),  # type: ignore[arg-type]
+    )
+    brief = await service.build_brief(
+        scope_type="private",
+        chat_id=user_id,
+        user_id=user_id,
+        now=datetime.now(timezone),
+        timezone=timezone,
+    )
+    if callback.message is not None:
+        await callback.message.answer(format_daily_brief_html(brief), parse_mode="HTML")
 
 
 async def _prompt_profiles_snapshot(
@@ -1120,6 +1278,90 @@ async def handle_settings_callback(callback: CallbackQuery, **data: Any) -> None
             return
         await callback.answer()
         return
+    if callback_data == SETTINGS_CALLBACK_DAILY_BRIEF:
+        try:
+            text, keyboard = await _render_private_daily_brief_settings(session, user_id)
+        except Exception as exc:
+            logger.warning(
+                "daily_brief_settings_open_failed",
+                extra={"error_type": type(exc).__name__},
+            )
+            await callback.answer("Сводка дня временно недоступна.", show_alert=True)
+            return
+        edited = await _edit_settings_callback_message(
+            callback,
+            text=text,
+            reply_markup=keyboard,
+        )
+        if edited:
+            await callback.answer()
+        return
+    if callback_data == SETTINGS_CALLBACK_DAILY_BRIEF_TOGGLE:
+        try:
+            current = await _get_private_daily_brief_settings(session, user_id)
+            updated = await _daily_brief_settings_repository(session).upsert(
+                DailyBriefSettingsValue(
+                    scope_type="private",
+                    chat_id=user_id,
+                    user_id=user_id,
+                    enabled=not bool(getattr(current, "enabled", False)),
+                    send_time=str(getattr(current, "send_time", "09:00")),
+                    timezone=str(getattr(current, "timezone", "Europe/Moscow")),
+                )
+            )
+        except Exception as exc:
+            logger.warning(
+                "daily_brief_settings_toggle_failed",
+                extra={"error_type": type(exc).__name__},
+            )
+            await callback.answer("Сводка дня временно недоступна.", show_alert=True)
+            return
+        edited = await _edit_settings_callback_message(
+            callback,
+            text=render_daily_brief_settings_text(
+                enabled=updated.enabled,
+                send_time=updated.send_time,
+                timezone_name=updated.timezone,
+            ),
+            reply_markup=build_daily_brief_settings_keyboard(enabled=updated.enabled),
+        )
+        if edited:
+            await callback.answer("Настройки сохранены.", show_alert=False)
+        return
+    if callback_data in {
+        SETTINGS_CALLBACK_DAILY_BRIEF_TIME,
+        SETTINGS_CALLBACK_DAILY_BRIEF_TIMEZONE,
+    }:
+        state = cast(Any, data.get("state"))
+        if state is None or not all(hasattr(state, attr) for attr in ("set_state", "clear")):
+            await callback.answer("FSM временно недоступен.", show_alert=True)
+            return
+        if callback_data == SETTINGS_CALLBACK_DAILY_BRIEF_TIME:
+            await state.set_state(DailyBriefSettingsInput.time)
+            prompt_text = render_daily_brief_time_prompt_text()
+        else:
+            await state.set_state(DailyBriefSettingsInput.timezone)
+            prompt_text = render_daily_brief_timezone_prompt_text()
+        edited = await _edit_settings_callback_message(
+            callback,
+            text=prompt_text,
+            reply_markup=None,
+        )
+        if edited:
+            await callback.answer()
+        return
+    if callback_data == SETTINGS_CALLBACK_DAILY_BRIEF_SHOW:
+        try:
+            await _send_private_daily_brief_now(callback, session, user_id)
+        except Exception as exc:
+            logger.warning(
+                "daily_brief_show_now_failed",
+                extra={"error_type": type(exc).__name__},
+            )
+            await callback.answer("Сводка дня временно недоступна.", show_alert=True)
+            return
+        await callback.answer()
+        return
     if callback_data == SETTINGS_CALLBACK_PROMPTS:
         edited = await _edit_settings_callback_message(
             callback,
@@ -1422,6 +1664,9 @@ async def handle_access_input_message(
     if not is_admin_user(user_id, settings.admin_ids):
         await message.answer("Доступ запрещён.")
         return
+    if user_id is None:
+        await message.answer("Не удалось определить Telegram user ID.")
+        return
     text = message.text or message.caption
     if text and text.strip().lower() == "/cancel":
         await state.clear()
@@ -1572,6 +1817,9 @@ async def handle_prompt_input_message(
     if not is_admin_user(user_id, settings.admin_ids):
         await message.answer("Доступ запрещён.")
         return
+    if user_id is None:
+        await message.answer("Не удалось определить Telegram user ID.")
+        return
     current_state = await state.get_state()
     scope = _prompt_scope_from_state(current_state)
     if scope is None:
@@ -1641,6 +1889,9 @@ async def handle_lists_timezone_input_message(
     if not is_admin_user(user_id, settings.admin_ids):
         await message.answer("Доступ запрещён.")
         return
+    if user_id is None:
+        await message.answer("Не удалось определить Telegram user ID.")
+        return
     text = (message.text or message.caption or "").strip()
     if text.lower() == "/cancel":
         await state.clear()
@@ -1676,6 +1927,122 @@ async def handle_lists_timezone_input_message(
     )
 
 
+async def handle_daily_brief_time_input_message(
+    message: Message,
+    state: FSMContext,
+    **data: Any,
+) -> None:
+    settings = data["settings"]
+    user_id = _message_user_id(message)
+    if not is_admin_user(user_id, settings.admin_ids):
+        await message.answer("Доступ запрещён.")
+        return
+    if user_id is None:
+        await message.answer("Не удалось определить Telegram user ID.")
+        return
+    text = (message.text or message.caption or "").strip()
+    if text.lower() == "/cancel":
+        await state.clear()
+        await message.answer("Изменение времени сводки отменено.")
+        return
+    session = data.get("db_session")
+    if session is None:
+        await message.answer("Настройки доступны только в runtime с БД.")
+        return
+    try:
+        current = await _get_private_daily_brief_settings(session, user_id)
+        updated = await _daily_brief_settings_repository(session).upsert(
+            DailyBriefSettingsValue(
+                scope_type="private",
+                chat_id=user_id,
+                user_id=user_id,
+                enabled=bool(getattr(current, "enabled", False)),
+                send_time=text,
+                timezone=str(getattr(current, "timezone", "Europe/Moscow")),
+            )
+        )
+    except ValueError:
+        await message.answer(f"Не понял время.\n\n{render_daily_brief_time_prompt_text()}")
+        return
+    except Exception as exc:
+        logger.warning(
+            "daily_brief_time_save_failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        await message.answer("Сводка дня временно недоступна.")
+        return
+    await state.clear()
+    await message.answer(
+        "Время сводки сохранено.\n\n"
+        + render_daily_brief_settings_text(
+            enabled=updated.enabled,
+            send_time=updated.send_time,
+            timezone_name=updated.timezone,
+        ),
+        reply_markup=build_daily_brief_settings_keyboard(enabled=updated.enabled),
+    )
+
+
+async def handle_daily_brief_timezone_input_message(
+    message: Message,
+    state: FSMContext,
+    **data: Any,
+) -> None:
+    settings = data["settings"]
+    user_id = _message_user_id(message)
+    if not is_admin_user(user_id, settings.admin_ids):
+        await message.answer("Доступ запрещён.")
+        return
+    if user_id is None:
+        await message.answer("Не удалось определить Telegram user ID.")
+        return
+    text = (message.text or message.caption or "").strip()
+    if text.lower() == "/cancel":
+        await state.clear()
+        await message.answer("Изменение часового пояса сводки отменено.")
+        return
+    session = data.get("db_session")
+    if session is None:
+        await message.answer("Настройки доступны только в runtime с БД.")
+        return
+    try:
+        ZoneInfo(text)
+        current = await _get_private_daily_brief_settings(session, user_id)
+        updated = await _daily_brief_settings_repository(session).upsert(
+            DailyBriefSettingsValue(
+                scope_type="private",
+                chat_id=user_id,
+                user_id=user_id,
+                enabled=bool(getattr(current, "enabled", False)),
+                send_time=str(getattr(current, "send_time", "09:00")),
+                timezone=text,
+            )
+        )
+    except (ValueError, ZoneInfoNotFoundError):
+        await message.answer(
+            "Не знаю такой часовой пояс.\n\n"
+            f"{render_daily_brief_timezone_prompt_text()}"
+        )
+        return
+    except Exception as exc:
+        logger.warning(
+            "daily_brief_timezone_save_failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        await message.answer("Сводка дня временно недоступна.")
+        return
+    await state.clear()
+    await message.answer(
+        "Часовой пояс сводки сохранён.\n\n"
+        + render_daily_brief_settings_text(
+            enabled=updated.enabled,
+            send_time=updated.send_time,
+            timezone_name=updated.timezone,
+        ),
+        reply_markup=build_daily_brief_settings_keyboard(enabled=updated.enabled),
+    )
+
+
 async def handle_cancel_message(
     message: Message,
     state: FSMContext,
@@ -1687,6 +2054,12 @@ async def handle_cancel_message(
         return
     if current_state == ListsRemindersSettingsInput.timezone.state:
         await handle_lists_timezone_input_message(message, state, **data)
+        return
+    if current_state == DailyBriefSettingsInput.time.state:
+        await handle_daily_brief_time_input_message(message, state, **data)
+        return
+    if current_state == DailyBriefSettingsInput.timezone.state:
+        await handle_daily_brief_timezone_input_message(message, state, **data)
         return
     if current_state and (
         current_state.startswith("ShoppingListInput:")
@@ -1757,6 +2130,10 @@ def build_router() -> Router:
     router.message(StateFilter(PromptEditorInput.watcher))(handle_prompt_input_message)
     router.message(StateFilter(ListsRemindersSettingsInput.timezone))(
         handle_lists_timezone_input_message
+    )
+    router.message(StateFilter(DailyBriefSettingsInput.time))(handle_daily_brief_time_input_message)
+    router.message(StateFilter(DailyBriefSettingsInput.timezone))(
+        handle_daily_brief_timezone_input_message
     )
     router.message(StateFilter(TelegramAccessInput.add_user))(handle_access_input_message)
     router.message(StateFilter(TelegramAccessInput.remove_user))(handle_access_input_message)

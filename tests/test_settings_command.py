@@ -89,6 +89,33 @@ def telegram_edit_bad_request(message: str) -> TelegramBadRequest:
     )
 
 
+def test_settings_home_contains_daily_brief_section() -> None:
+    text = commands.render_settings_home_text()
+    keyboard = commands.build_settings_keyboard()
+
+    assert "Сводка дня" in text
+    assert any(
+        button.text == "Сводка дня"
+        and button.callback_data == commands.SETTINGS_CALLBACK_DAILY_BRIEF
+        for row in keyboard.inline_keyboard
+        for button in row
+    )
+
+
+def test_render_daily_brief_settings_text() -> None:
+    text = commands.render_daily_brief_settings_text(
+        enabled=True,
+        send_time="09:00",
+        timezone_name="Europe/Moscow",
+    )
+
+    assert "Сводка дня" in text
+    assert "Статус: включена" in text
+    assert "Время: 09:00" in text
+    assert "Часовой пояс: Europe/Moscow" in text
+    assert "Куда: личка" in text
+
+
 class FakeRuntimeSettingsService:
     instances: list["FakeRuntimeSettingsService"] = []
     provider = ActiveLLMProvider.AUTO
@@ -98,6 +125,9 @@ class FakeRuntimeSettingsService:
         PromptProfileScope.WATCHER: PromptProfile.BALANCED,
     }
     prompts: dict[PromptProfileScope, str] = {}
+    brief_enabled = False
+    brief_time = "09:00"
+    brief_timezone = "Europe/Moscow"
 
     def __init__(self, repository: object) -> None:
         del repository
@@ -158,6 +188,18 @@ class FakeRuntimeSettingsService:
         self.reset_prompts.append(scope)
         self.__class__.prompts.pop(scope, None)
         return PromptSetting(scope=scope, text=DEFAULT_PROMPTS[scope], source=PromptSource.DEFAULT)
+
+    async def get_daily_brief_settings(self, *, chat_id: int, user_id: int) -> object:
+        del chat_id, user_id
+        return type(
+            "DailyBriefSettings",
+            (),
+            {
+                "enabled": self.__class__.brief_enabled,
+                "send_time": self.__class__.brief_time,
+                "timezone": self.__class__.brief_timezone,
+            },
+        )()
 
 
 class FakeTelegramAccessService:

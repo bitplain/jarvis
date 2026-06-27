@@ -38,6 +38,43 @@ def test_format_shopping_list_escapes_user_text_and_renders_statuses() -> None:
     assert "<s>сыр" in html
 
 
+def test_format_shopping_list_groups_v2_items_by_category() -> None:
+    view = ShoppingListView(
+        scope_type="private",
+        scope_chat_id=100500,
+        title="Список покупок",
+        active=[
+            ShoppingItemView(
+                id="a1",
+                text="молоко",
+                status="active",
+                quantity=2,
+                unit="шт",
+                note="2.5%",
+                category="Молочка",
+            ),
+            ShoppingItemView(
+                id="a2",
+                text="памперсы",
+                status="active",
+                note="размер 4",
+                category="Ребёнок",
+            ),
+            ShoppingItemView(id="a3", text="хлеб", status="active", category="Хлеб"),
+        ],
+        done=[],
+    )
+
+    html = format_shopping_list_html(view)
+
+    assert "<b>🥛 Молочка</b>" in html
+    assert "1. ☐ молоко — 2 шт, 2.5%" in html
+    assert "<b>🍞 Хлеб</b>" in html
+    assert "2. ☐ хлеб" in html
+    assert "<b>👶 Ребёнок</b>" in html
+    assert "3. ☐ памперсы — размер 4" in html
+
+
 def test_format_empty_shopping_list() -> None:
     html = format_shopping_list_html(
         ShoppingListView(

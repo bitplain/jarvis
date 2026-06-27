@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,6 +16,7 @@ from app.services.runtime_settings_service import (
     RuntimeSettingsUnavailable,
 )
 from app.workers import jobs
+from app.workers.arq_settings import WorkerSettings
 from app.workers.jobs import process_llm_message, try_send_chat_action
 
 
@@ -26,6 +28,15 @@ class FailingBot:
 @pytest.mark.asyncio
 async def test_try_send_chat_action_does_not_raise() -> None:
     await try_send_chat_action(FailingBot(), chat_id=1)
+
+
+def test_daily_brief_worker_is_registered() -> None:
+    assert jobs.deliver_daily_briefs in WorkerSettings.functions
+    assert any(
+        getattr(cron_job, "coroutine", None) is jobs.deliver_daily_briefs
+        or getattr(cron_job, "name", "") == "cron:deliver_daily_briefs"
+        for cron_job in WorkerSettings.cron_jobs
+    )
 
 
 class FakeBot:
@@ -191,6 +202,57 @@ class FakeRuntimeSettingsService:
         return ZoneInfo("Europe/Moscow")
 
 
+class FakeDailyBriefRepository:
+    instances: list["FakeDailyBriefRepository"] = []
+
+    def __init__(self, session: object) -> None:
+        del session
+        self.marked: list[tuple[str, object]] = []
+        self.__class__.instances.append(self)
+
+    async def due_for_delivery(self, now: object) -> list[object]:
+        del now
+        return [
+            SimpleNamespace(
+                id="brief-settings-1",
+                scope_type="private",
+                chat_id=100500,
+                user_id=100500,
+                timezone="Europe/Moscow",
+            )
+        ]
+
+    async def mark_sent_if_due(self, settings_id: str, local_date: object) -> bool:
+        self.marked.append((settings_id, local_date))
+        return True
+
+
+class FakeDailyBriefService:
+    def __init__(self, **kwargs: object) -> None:
+        del kwargs
+
+    async def build_brief(self, **kwargs: object) -> object:
+        return kwargs
+
+
+class FakeRedis:
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+        self.set_calls: list[tuple[str, int, bool]] = []
+        self.deleted: list[str] = []
+
+    async def set(self, key: str, value: str, *, ex: int, nx: bool) -> bool | None:
+        self.set_calls.append((key, ex, nx))
+        if nx and key in self.values:
+            return None
+        self.values[key] = value
+        return True
+
+    async def delete(self, key: str) -> None:
+        self.deleted.append(key)
+        self.values.pop(key, None)
+
+
 @pytest.mark.asyncio
 async def test_worker_group_job_uses_send_message_without_private_streaming(
     monkeypatch: pytest.MonkeyPatch,
@@ -267,6 +329,38 @@ async def test_deliver_due_reminders_sends_html_and_marks_sent(
     ]
     assert bot.send_message_kwargs == {"parse_mode": "HTML"}
     assert repository.sent_ids == ["abc123"]
+    assert bot.closed is True
+
+
+@pytest.mark.asyncio
+async def test_deliver_daily_briefs_skips_duplicate_redis_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    FakeBot.instances = []
+    FakeDailyBriefRepository.instances = []
+    redis = FakeRedis()
+    redis.values["daily_brief:send:brief-settings-1:2026-06-27"] = "1"
+    monkeypatch.setattr(jobs, "Bot", FakeBot)
+    monkeypatch.setattr(
+        jobs,
+        "get_settings",
+        lambda: Settings(telegram_bot_token="123456:secret-token"),
+    )
+    monkeypatch.setattr(jobs, "SessionLocal", FakeSessionLocal())
+    monkeypatch.setattr(jobs, "DailyBriefSettingsRepository", FakeDailyBriefRepository)
+    monkeypatch.setattr(jobs, "DailyBriefService", FakeDailyBriefService)
+    monkeypatch.setattr(jobs, "format_daily_brief_html", lambda brief: "daily brief")
+    monkeypatch.setattr(jobs, "utcnow", lambda: datetime(2026, 6, 27, 6, 0, tzinfo=UTC))
+
+    await jobs.deliver_daily_briefs({"redis": redis})
+
+    bot = FakeBot.instances[0]
+    repository = FakeDailyBriefRepository.instances[0]
+    assert bot.sent_messages == []
+    assert repository.marked == []
+    assert redis.set_calls == [
+        ("daily_brief:send:brief-settings-1:2026-06-27", 129600, True)
+    ]
     assert bot.closed is True
 
 

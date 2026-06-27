@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from typing import Protocol
 from uuid import uuid4
 
@@ -10,10 +13,23 @@ SHOPPING_ITEM_STATUSES = {"active", "done"}
 
 
 @dataclass(frozen=True)
+class ShoppingItemInput:
+    text: str
+    quantity: Decimal | int | None = None
+    unit: str | None = None
+    note: str | None = None
+    category: str | None = None
+
+
+@dataclass(frozen=True)
 class ShoppingItemView:
     id: str
     text: str
     status: str
+    quantity: Decimal | None = None
+    unit: str | None = None
+    note: str | None = None
+    category: str | None = None
 
 
 @dataclass(frozen=True)
@@ -32,6 +48,10 @@ class StoredShoppingItem:
     text: str
     status: str
     created_by_user_id: int
+    quantity: Decimal | None = None
+    unit: str | None = None
+    note: str | None = None
+    category: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
     done_at: datetime | None = None
@@ -64,7 +84,7 @@ class ShoppingRepositoryProtocol(Protocol):
         *,
         shopping_list: StoredShoppingList,
         user_id: int,
-        items: list[str],
+        items: list[ShoppingItemInput],
     ) -> list[StoredShoppingItem]:
         raise NotImplementedError
 
@@ -109,11 +129,11 @@ class ShoppingService:
         scope: str,
         chat_id: int,
         user_id: int,
-        items: list[str],
+        items: Sequence[str | ShoppingItemInput],
     ) -> ShoppingListView:
         scope_type = _normalize_scope(scope)
-        normalized_items = [_normalize_item(item) for item in items]
-        normalized_items = [item for item in normalized_items if item]
+        normalized_items = [_normalize_input_item(item) for item in items]
+        normalized_items = [item for item in normalized_items if item.text]
         shopping_list = await self.repository.get_or_create_list(
             scope_type=scope_type,
             scope_chat_id=chat_id,
@@ -213,12 +233,28 @@ class ShoppingService:
     async def _view(self, shopping_list: StoredShoppingList) -> ShoppingListView:
         items = await self.repository.list_items(shopping_list.id)
         active = [
-            ShoppingItemView(id=item.id, text=item.text, status=item.status)
+            ShoppingItemView(
+                id=item.id,
+                text=item.text,
+                status=item.status,
+                quantity=item.quantity,
+                unit=item.unit,
+                note=item.note,
+                category=item.category,
+            )
             for item in items
             if item.status == "active"
         ]
         done = [
-            ShoppingItemView(id=item.id, text=item.text, status=item.status)
+            ShoppingItemView(
+                id=item.id,
+                text=item.text,
+                status=item.status,
+                quantity=item.quantity,
+                unit=item.unit,
+                note=item.note,
+                category=item.category,
+            )
             for item in items
             if item.status == "done"
         ]
@@ -272,16 +308,20 @@ class InMemoryShoppingRepository:
         *,
         shopping_list: StoredShoppingList,
         user_id: int,
-        items: list[str],
+        items: list[ShoppingItemInput],
     ) -> list[StoredShoppingItem]:
         created = []
-        for text in items:
+        for item_input in items:
             item = StoredShoppingItem(
                 id=uuid4().hex,
                 list_id=shopping_list.id,
-                text=text,
+                text=item_input.text,
                 status="active",
                 created_by_user_id=user_id,
+                quantity=_decimal_or_none(item_input.quantity),
+                unit=item_input.unit,
+                note=item_input.note,
+                category=item_input.category,
             )
             self.items[item.id] = item
             created.append(item)
@@ -366,6 +406,102 @@ def _normalize_scope(scope: str) -> str:
 
 def _normalize_item(item: str) -> str:
     return " ".join(item.strip().split())[:120]
+
+
+def _normalize_input_item(item: str | ShoppingItemInput) -> ShoppingItemInput:
+    if isinstance(item, ShoppingItemInput):
+        return ShoppingItemInput(
+            text=_normalize_item(item.text),
+            quantity=_decimal_or_none(item.quantity),
+            unit=_normalize_optional(item.unit),
+            note=_normalize_optional(item.note),
+            category=_normalize_optional(item.category) or categorize_shopping_item(item.text),
+        )
+    return parse_shopping_item(item)
+
+
+def parse_shopping_item(raw_text: str) -> ShoppingItemInput:
+    normalized = _normalize_item(raw_text)
+    if not normalized:
+        return ShoppingItemInput(text="", category="Другое")
+    text = normalized
+    notes: list[str] = []
+
+    parenthetical_notes = re.findall(r"\(([^()]+)\)", text)
+    for note in parenthetical_notes:
+        cleaned = _normalize_item(note)
+        if cleaned:
+            notes.append(cleaned)
+    text = re.sub(r"\([^()]+\)", " ", text)
+
+    size_match = re.search(r"\bразмер\s+\S+", text, flags=re.IGNORECASE)
+    if size_match:
+        notes.append(_normalize_item(size_match.group(0)))
+        text = (text[: size_match.start()] + " " + text[size_match.end() :]).strip()
+
+    percent_match = re.search(r"\b\d+(?:[,.]\d+)?\s*%", text)
+    if percent_match:
+        notes.append(percent_match.group(0).replace(" ", ""))
+        text = (text[: percent_match.start()] + " " + text[percent_match.end() :]).strip()
+
+    quantity: Decimal | None = None
+    unit: str | None = None
+    quantity_match = re.search(
+        r"\b(\d+(?:[,.]\d+)?)\s*(шт|кг|г|гр|бутылки|бутылка|бутылок|л|литр|литра|литров)\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if quantity_match:
+        quantity = _parse_decimal(quantity_match.group(1))
+        unit = quantity_match.group(2).casefold()
+        text = (text[: quantity_match.start()] + " " + text[quantity_match.end() :]).strip()
+
+    text = _normalize_item(text)
+    return ShoppingItemInput(
+        text=text or normalized,
+        quantity=quantity,
+        unit=unit,
+        note=", ".join(notes) or None,
+        category=categorize_shopping_item(text or normalized),
+    )
+
+
+def categorize_shopping_item(text: str) -> str:
+    normalized = text.casefold()
+    rules = (
+        ("Молочка", ("молоко", "сыр", "творог", "йогурт", "кефир", "майонез")),
+        ("Хлеб", ("хлеб", "булка", "лаваш")),
+        ("Ребёнок", ("памперс", "памперсы", "подгузник", "подгузники", "салфетки")),
+        ("Мясо", ("мясо", "курица", "фарш")),
+        ("Овощи", ("овощ", "картошка", "картофель", "морковь", "лук", "огур", "помидор")),
+        ("Фрукты", ("фрукт", "яблок", "банан", "груш", "апельсин", "мандарин")),
+    )
+    for category, keywords in rules:
+        if any(keyword in normalized for keyword in keywords):
+            return category
+    return "Другое"
+
+
+def _normalize_optional(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = _normalize_item(value)
+    return normalized or None
+
+
+def _parse_decimal(value: str) -> Decimal | None:
+    try:
+        return Decimal(value.replace(",", "."))
+    except InvalidOperation:
+        return None
+
+
+def _decimal_or_none(value: Decimal | int | None) -> Decimal | None:
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        return value
+    return Decimal(value)
 
 
 def _empty_view() -> ShoppingListView:
