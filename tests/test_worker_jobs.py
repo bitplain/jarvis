@@ -14,7 +14,10 @@ from app.services.runtime_settings_service import (
     PromptSetting,
     PromptSource,
     RuntimeSettingsUnavailable,
+    WebSearchProviderName,
+    WebSearchSettings,
 )
+from app.services.web_search.types import SearchResult, WebSearchResponse, WebSearchStatus
 from app.workers import jobs
 from app.workers.arq_settings import WorkerSettings
 from app.workers.jobs import process_llm_message, try_send_chat_action
@@ -65,10 +68,11 @@ class FakeProvider:
     def __init__(self) -> None:
         self.complete_called = False
         self.stream_called = False
+        self.messages: list[list[LLMMessage]] = []
 
     async def complete(self, messages: list[LLMMessage]) -> LLMResponse:
         self.complete_called = True
-        assert messages[-1].content == "group question"
+        self.messages.append(messages)
         return LLMResponse(content="group answer", provider="test", model="test-model")
 
     async def stream(self, messages: list[LLMMessage]):
@@ -196,6 +200,19 @@ class FakeRuntimeSettingsService:
     async def get_prompt(self, scope: PromptProfileScope) -> PromptSetting:
         return PromptSetting(scope=scope, text=DEFAULT_PROMPTS[scope], source=PromptSource.DEFAULT)
 
+    async def get_web_search_settings(
+        self,
+        *,
+        default_provider: str = "disabled",
+        default_max_results: int = 5,
+    ) -> WebSearchSettings:
+        del default_provider, default_max_results
+        return WebSearchSettings(
+            enabled=True,
+            provider=WebSearchProviderName.TAVILY,
+            max_results=5,
+        )
+
     async def get_lists_timezone(self) -> object:
         from zoneinfo import ZoneInfo
 
@@ -253,6 +270,22 @@ class FakeRedis:
         self.values.pop(key, None)
 
 
+class FakeWebSearchService:
+    instances: list["FakeWebSearchService"] = []
+    response = WebSearchResponse(
+        WebSearchStatus.OK,
+        [SearchResult("Railway changelog", "https://example.com/railway", "New release")],
+    )
+
+    def __init__(self) -> None:
+        self.requests: list[object] = []
+        self.__class__.instances.append(self)
+
+    async def search(self, request: object) -> WebSearchResponse:
+        self.requests.append(request)
+        return self.__class__.response
+
+
 @pytest.mark.asyncio
 async def test_worker_group_job_uses_send_message_without_private_streaming(
     monkeypatch: pytest.MonkeyPatch,
@@ -295,6 +328,136 @@ async def test_worker_group_job_uses_send_message_without_private_streaming(
     assert memory.added[0]["user_id"] is None
     assert memory.added[0]["text"] == "group answer"
     assert bot.closed is True
+
+
+@pytest.mark.asyncio
+async def test_worker_web_search_injects_context_and_appends_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = FakeProvider()
+    FakeBot.instances = []
+    FakeMemoryService.instances = []
+    FakeWebSearchService.instances = []
+    FakeWebSearchService.response = WebSearchResponse(
+        WebSearchStatus.OK,
+        [
+            SearchResult(
+                "Railway changelog",
+                "https://example.com/railway",
+                "Latest Railway deploy update",
+            )
+        ],
+    )
+    monkeypatch.setattr(jobs, "Bot", FakeBot)
+    monkeypatch.setattr(
+        jobs,
+        "get_settings",
+        lambda: Settings(
+            telegram_bot_token="123456:secret-token",
+            memory_max_messages=5,
+            streaming_group_fallback_enabled=True,
+        ),
+    )
+    monkeypatch.setattr(jobs, "SessionLocal", FakeSessionLocal())
+    monkeypatch.setattr(jobs, "MessageRepository", lambda session: object())
+    monkeypatch.setattr(jobs, "RuntimeSettingRepository", lambda session: object())
+    monkeypatch.setattr(jobs, "RuntimeSettingsService", FakeRuntimeSettingsService)
+    monkeypatch.setattr(jobs, "MemoryService", FakeMemoryService)
+    monkeypatch.setattr(jobs, "WebSearchCacheRepository", lambda session: object())
+    monkeypatch.setattr(
+        jobs,
+        "build_web_search_service",
+        lambda settings, *, provider_name, cache_repository: FakeWebSearchService(),
+    )
+    monkeypatch.setattr(
+        jobs,
+        "build_llm_provider",
+        lambda settings, *, active_provider: provider,
+    )
+
+    await process_llm_message(
+        {},
+        {
+            "chat_id": -100123,
+            "user_id": 456,
+            "private": False,
+            "web_search": {"query": "последние обновления Railway"},
+        },
+    )
+
+    bot = FakeBot.instances[0]
+    memory = FakeMemoryService.instances[0]
+    assert provider.complete_called is True
+    assert provider.stream_called is False
+    assert "Найденные источники" in memory.context_calls[0]["system_prompt"]
+    assert "Latest Railway deploy update" in memory.context_calls[0]["system_prompt"]
+    assert bot.sent_messages == [
+        (
+            -100123,
+            "Нашёл актуальные источники.\n\n"
+            "group answer\n\n"
+            "Источники:\n"
+            "1. Railway changelog — https://example.com/railway",
+        )
+    ]
+    assert memory.added[0]["text"] == bot.sent_messages[0][1]
+
+
+@pytest.mark.asyncio
+async def test_worker_web_search_disabled_returns_message_without_llm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = FakeProvider()
+    FakeBot.instances = []
+    FakeMemoryService.instances = []
+
+    class DisabledWebSearchRuntimeSettingsService(FakeRuntimeSettingsService):
+        async def get_web_search_settings(
+            self,
+            *,
+            default_provider: str = "disabled",
+            default_max_results: int = 5,
+        ) -> WebSearchSettings:
+            del default_provider, default_max_results
+            return WebSearchSettings(
+                enabled=False,
+                provider=WebSearchProviderName.DISABLED,
+                max_results=5,
+            )
+
+    monkeypatch.setattr(jobs, "Bot", FakeBot)
+    monkeypatch.setattr(
+        jobs,
+        "get_settings",
+        lambda: Settings(telegram_bot_token="123456:secret-token", memory_max_messages=5),
+    )
+    monkeypatch.setattr(jobs, "SessionLocal", FakeSessionLocal())
+    monkeypatch.setattr(jobs, "MessageRepository", lambda session: object())
+    monkeypatch.setattr(jobs, "RuntimeSettingRepository", lambda session: object())
+    monkeypatch.setattr(jobs, "RuntimeSettingsService", DisabledWebSearchRuntimeSettingsService)
+    monkeypatch.setattr(jobs, "MemoryService", FakeMemoryService)
+    monkeypatch.setattr(jobs, "WebSearchCacheRepository", lambda session: object())
+    monkeypatch.setattr(
+        jobs,
+        "build_llm_provider",
+        lambda settings, *, active_provider: provider,
+    )
+
+    await process_llm_message(
+        {},
+        {
+            "chat_id": 100500,
+            "user_id": 100500,
+            "private": True,
+            "web_search": {"query": "Railway"},
+        },
+    )
+
+    bot = FakeBot.instances[0]
+    assert provider.complete_called is False
+    assert bot.sent_messages == [
+        (100500, "Интернет-поиск выключен. Включите его в /settings -> Интернет-поиск.")
+    ]
 
 
 @pytest.mark.asyncio

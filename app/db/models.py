@@ -189,6 +189,25 @@ class RuntimeSetting(Base):
     updated_by_telegram_id: Mapped[int | None] = mapped_column(BigInteger)
 
 
+class WebSearchCache(Base):
+    __tablename__ = "web_search_cache"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "query_hash",
+            name="uq_web_search_cache_provider_query_hash",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    query_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    query_text: Mapped[str] = mapped_column(Text, nullable=False)
+    results_json: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class HouseholdMemoryEntry(Base):
     __tablename__ = "household_memory_entries"
     __table_args__ = (
@@ -502,3 +521,4 @@ Index(
     unique=True,
     postgresql_where=DailyBriefSettings.user_id.is_(None),
 )
+Index("ix_web_search_cache_expires_at", WebSearchCache.expires_at)

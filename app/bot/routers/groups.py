@@ -11,6 +11,7 @@ from app.core.logging import safe_extra
 from app.db.models import MessageRole
 from app.db.repositories.messages import MessageRepository
 from app.services.memory_service import MemoryService
+from app.services.web_search.intent import parse_web_search_intent
 
 logger = logging.getLogger(__name__)
 GROUP_CHAT_TYPES = {"group", "supergroup"}
@@ -171,14 +172,27 @@ async def handle_group_message(message: Message, **data: Any) -> None:
     if redis is None:
         await message.answer("Worker временно недоступен.")
         return
+    web_search_intent = parse_web_search_intent(
+        message.text,
+        bot_username=str(bot_username),
+    )
+    if web_search_intent is not None and not await _web_search_rate_limit_allowed(
+        redis,
+        user_id=message.from_user.id,
+    ):
+        await message.answer("Слишком много запросов к интернет-поиску. Попробуйте позже.")
+        return
     job_id = f"llm:{message.chat.id}:{message.message_id}"
+    payload: dict[str, Any] = {
+        "chat_id": message.chat.id,
+        "user_id": message.from_user.id,
+        "private": False,
+    }
+    if web_search_intent is not None:
+        payload["web_search"] = {"query": web_search_intent.query}
     await redis.enqueue_job(
         "process_llm_message",
-        {
-            "chat_id": message.chat.id,
-            "user_id": message.from_user.id,
-            "private": False,
-        },
+        payload,
         _job_id=job_id,
     )
     log_kwargs: dict[str, Any] = safe_extra(
@@ -192,6 +206,23 @@ async def handle_group_message(message: Message, **data: Any) -> None:
     logger.info("telegram_llm_job_enqueued", **log_kwargs)
     _log_group_routing(message=message, decision=decision, enqueue_job=True)
     await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
+
+
+async def _web_search_rate_limit_allowed(redis: object, *, user_id: int) -> bool:
+    if not hasattr(redis, "incr"):
+        return True
+    key = f"web_search:rate:{user_id}"
+    try:
+        count = await redis.incr(key)  # type: ignore[attr-defined]
+        if count == 1 and hasattr(redis, "expire"):
+            await redis.expire(key, 600)  # type: ignore[attr-defined]
+        return int(count) <= 10
+    except Exception as exc:
+        logger.warning(
+            "web_search_rate_limit_unavailable",
+            extra={"error_type": type(exc).__name__},
+        )
+        return True
 
 
 def build_router() -> Router:

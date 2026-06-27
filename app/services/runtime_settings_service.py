@@ -11,7 +11,11 @@ PROMPT_PRIVATE_KEY = "prompt.private"
 PROMPT_GROUP_KEY = "prompt.group"
 PROMPT_WATCH_KEY = "prompt.watch"
 LISTS_TIMEZONE_KEY = "lists.timezone"
+WEB_SEARCH_ENABLED_KEY = "web_search.enabled"
+WEB_SEARCH_PROVIDER_KEY = "web_search.provider"
+WEB_SEARCH_MAX_RESULTS_KEY = "web_search.max_results"
 DEFAULT_LISTS_TIMEZONE = "Europe/Moscow"
+DEFAULT_WEB_SEARCH_MAX_RESULTS = 5
 MAX_PROMPT_LENGTH = 4000
 
 
@@ -44,11 +48,24 @@ class PromptSource(StrEnum):
     CUSTOM = "custom"
 
 
+class WebSearchProviderName(StrEnum):
+    DISABLED = "disabled"
+    TAVILY = "tavily"
+    BRAVE = "brave"
+
+
 @dataclass(frozen=True)
 class PromptSetting:
     scope: PromptProfileScope
     text: str
     source: PromptSource
+
+
+@dataclass(frozen=True)
+class WebSearchSettings:
+    enabled: bool
+    provider: WebSearchProviderName
+    max_results: int
 
 
 PROMPT_PROFILE_KEYS = {
@@ -217,6 +234,74 @@ class RuntimeSettingsService:
             return ZoneInfo(raw_value)
         except ZoneInfoNotFoundError:
             return ZoneInfo(DEFAULT_LISTS_TIMEZONE)
+
+    async def get_web_search_settings(
+        self,
+        *,
+        default_provider: str = "disabled",
+        default_max_results: int = DEFAULT_WEB_SEARCH_MAX_RESULTS,
+    ) -> WebSearchSettings:
+        enabled_raw = await self.repository.get_value(WEB_SEARCH_ENABLED_KEY)
+        provider_raw = await self.repository.get_value(WEB_SEARCH_PROVIDER_KEY)
+        max_results_raw = await self.repository.get_value(WEB_SEARCH_MAX_RESULTS_KEY)
+        enabled = enabled_raw == "true"
+        try:
+            provider = WebSearchProviderName(provider_raw or default_provider)
+        except ValueError:
+            provider = WebSearchProviderName.DISABLED
+        try:
+            max_results = int(max_results_raw or default_max_results)
+        except ValueError:
+            max_results = default_max_results
+        return WebSearchSettings(
+            enabled=enabled,
+            provider=provider,
+            max_results=max(1, min(max_results, 10)),
+        )
+
+    async def set_web_search_enabled(
+        self,
+        enabled: bool,
+        *,
+        updated_by_telegram_id: int | None,
+    ) -> WebSearchSettings:
+        await self.repository.set_value(
+            WEB_SEARCH_ENABLED_KEY,
+            "true" if enabled else "false",
+            updated_by_telegram_id=updated_by_telegram_id,
+        )
+        return await self.get_web_search_settings()
+
+    async def set_web_search_provider(
+        self,
+        value: str | WebSearchProviderName,
+        *,
+        updated_by_telegram_id: int | None,
+    ) -> WebSearchProviderName:
+        try:
+            provider = WebSearchProviderName(value)
+        except ValueError as exc:
+            raise ValueError("unsupported_web_search_provider") from exc
+        await self.repository.set_value(
+            WEB_SEARCH_PROVIDER_KEY,
+            provider.value,
+            updated_by_telegram_id=updated_by_telegram_id,
+        )
+        return provider
+
+    async def set_web_search_max_results(
+        self,
+        value: int,
+        *,
+        updated_by_telegram_id: int | None,
+    ) -> int:
+        max_results = max(1, min(int(value), 10))
+        await self.repository.set_value(
+            WEB_SEARCH_MAX_RESULTS_KEY,
+            str(max_results),
+            updated_by_telegram_id=updated_by_telegram_id,
+        )
+        return max_results
 
     async def set_lists_timezone(
         self,

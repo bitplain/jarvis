@@ -19,6 +19,7 @@ from app.db.repositories.messages import MessageRepository
 from app.db.repositories.reminders import ReminderRepository
 from app.db.repositories.runtime_settings import RuntimeSettingRepository
 from app.db.repositories.shopping import ShoppingRepository
+from app.db.repositories.web_search_cache import WebSearchCacheRepository
 from app.db.session import SessionLocal
 from app.llm.base import LLMProviderError
 from app.llm.factory import build_llm_provider
@@ -36,6 +37,14 @@ from app.services.runtime_settings_service import (
 from app.services.shopping_service import ShoppingService
 from app.services.status_service import record_worker_heartbeat
 from app.services.telegram_formatting import format_daily_brief_html, format_reminder_due_html
+from app.services.web_search.context_builder import (
+    build_search_context,
+    build_search_system_prompt,
+    build_sources_text,
+)
+from app.services.web_search.factory import build_web_search_service
+from app.services.web_search.service import WEB_SEARCH_NO_RESULTS_MESSAGE
+from app.services.web_search.types import WebSearchRequest, WebSearchStatus
 
 logger = logging.getLogger(__name__)
 USER_ERROR_MESSAGE = "Не получилось подготовить ответ. Попробуйте позже."
@@ -274,6 +283,67 @@ async def process_llm_message(ctx: dict[str, Any], payload: dict[str, Any]) -> N
             prompt_text = DEFAULT_PROMPTS[profile_scope]
         else:
             prompt_text = prompt_setting.text
+        web_search_sources_text: str | None = None
+        web_search_payload = payload.get("web_search")
+        if isinstance(web_search_payload, dict):
+            query = str(web_search_payload.get("query") or "").strip()
+            try:
+                web_settings = await runtime_settings.get_web_search_settings(
+                    default_provider=settings.web_search_provider,
+                    default_max_results=settings.web_search_max_results,
+                )
+            except RuntimeSettingsUnavailable:
+                logger.warning("runtime_settings_unavailable_using_disabled_web_search")
+                web_settings = None
+            if web_settings is None:
+                final_text = "Интернет-поиск выключен. Включите его в /settings -> Интернет-поиск."
+                await send_final_messages(bot, chat_id=chat_id, text=final_text, path="web_search")
+                await memory.add_message(
+                    chat_id=chat_id,
+                    user_id=None,
+                    role=MessageRole.ASSISTANT,
+                    text=final_text,
+                )
+                await bot.session.close()
+                return
+            service = build_web_search_service(
+                settings,
+                provider_name=web_settings.provider.value,
+                cache_repository=WebSearchCacheRepository(session),
+            )
+            search_response = await service.search(
+                WebSearchRequest(
+                    query=query,
+                    provider_name=web_settings.provider.value,
+                    enabled=web_settings.enabled,
+                    max_results=web_settings.max_results,
+                )
+            )
+            logger.info(
+                "web_search_completed",
+                extra={
+                    "user_id": payload.get("user_id"),
+                    "provider": web_settings.provider.value,
+                    "query_length": len(query),
+                    "result_count": len(search_response.results),
+                    "status": search_response.status.value,
+                    "from_cache": search_response.from_cache,
+                },
+            )
+            if search_response.status is not WebSearchStatus.OK:
+                final_text = search_response.user_message or WEB_SEARCH_NO_RESULTS_MESSAGE
+                await send_final_messages(bot, chat_id=chat_id, text=final_text, path="web_search")
+                await memory.add_message(
+                    chat_id=chat_id,
+                    user_id=None,
+                    role=MessageRole.ASSISTANT,
+                    text=final_text,
+                )
+                await bot.session.close()
+                return
+            search_context = build_search_context(search_response.results)
+            web_search_sources_text = build_sources_text(search_response.results)
+            prompt_text = build_search_system_prompt(prompt_text, search_context)
         messages = await memory.build_context(
             chat_id=chat_id,
             system_prompt=prompt_text,
@@ -287,6 +357,16 @@ async def process_llm_message(ctx: dict[str, Any], payload: dict[str, Any]) -> N
             if payload.get("guest"):
                 response = await provider.complete(messages)
                 final_text = response.content
+            elif web_search_sources_text is not None:
+                response = await provider.complete(messages)
+                final_text = _with_web_search_sources(response.content, web_search_sources_text)
+                await send_final_messages(
+                    bot,
+                    chat_id=chat_id,
+                    text=final_text,
+                    path="web_search",
+                )
+                sent_final = True
             elif (
                 settings.streaming_enabled
                 and is_private
@@ -348,6 +428,13 @@ async def process_llm_message(ctx: dict[str, Any], payload: dict[str, Any]) -> N
             text=final_text,
         )
     await bot.session.close()
+
+
+def _with_web_search_sources(answer: str, sources_text: str) -> str:
+    clean_answer = answer.strip()
+    if clean_answer:
+        return f"Нашёл актуальные источники.\n\n{clean_answer}\n\n{sources_text}"
+    return f"Нашёл актуальные источники.\n\n{sources_text}"
 
 
 async def deliver_due_reminders(ctx: dict[str, Any]) -> None:

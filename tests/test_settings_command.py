@@ -14,6 +14,8 @@ from app.services.runtime_settings_service import (
     PromptSetting,
     PromptSource,
     RuntimeSettingsUnavailable,
+    WebSearchProviderName,
+    WebSearchSettings,
 )
 from app.services.telegram_access_service import AccessMutationResult
 
@@ -97,6 +99,43 @@ def test_settings_home_contains_daily_brief_section() -> None:
     assert any(
         button.text == "Сводка дня"
         and button.callback_data == commands.SETTINGS_CALLBACK_DAILY_BRIEF
+        for row in keyboard.inline_keyboard
+        for button in row
+    )
+
+
+def test_settings_home_contains_web_search_section() -> None:
+    text = commands.render_settings_home_text()
+    keyboard = commands.build_settings_keyboard()
+
+    assert "Интернет-поиск" in text
+    assert any(
+        button.text == "Интернет-поиск"
+        and button.callback_data == commands.SETTINGS_CALLBACK_WEB_SEARCH
+        for row in keyboard.inline_keyboard
+        for button in row
+    )
+
+
+def test_render_web_search_settings_text_shows_degraded_without_key() -> None:
+    text = commands.render_web_search_settings_text(
+        WebSearchSettings(
+            enabled=True,
+            provider=WebSearchProviderName.TAVILY,
+            max_results=5,
+        ),
+        provider_key_available=False,
+    )
+    keyboard = commands.build_web_search_settings_keyboard(enabled=True)
+
+    assert "Интернет-поиск" in text
+    assert "Статус: включён" in text
+    assert "Provider: tavily" in text
+    assert "Режим: только явные команды" in text
+    assert "Максимум источников: 5" in text
+    assert "provider key не настроен" in text
+    assert any(
+        button.callback_data == commands.SETTINGS_CALLBACK_WEB_SEARCH_MAX_RESULTS
         for row in keyboard.inline_keyboard
         for button in row
     )
