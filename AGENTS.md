@@ -277,15 +277,18 @@
 
 - Web Search — отдельный инструмент Jarvis, а не прямой интернет-доступ LLM provider-а.
 - Поиск запускается только явными командами: `найди ...`, `поищи ...`, `проверь в интернете ...`, `посмотри в интернете ...`, `что нового по ...`, `найди актуальную информацию ...`.
+- Явные current-info/weather фразы тоже считаются web search intent: `покажи погоду в Москве`, `погода в Москве сегодня`, `какая погода в Москве сейчас`, `покажи курс доллара`, `покажи новости про Telegram`.
 - Auto-search на обычные вопросы запрещён; обычный `Привет` и вопросы без explicit search trigger идут в normal LLM path.
 - Group/supergroup search работает только через mention/reply по текущей access policy; обычные group non-mention сообщения игнорируются как раньше.
+- Vague explicit search может создавать Redis pending clarification на 10 минут по scope private `chat+user` или group `chat+user`; `/cancel` очищает pending clarification. Redis unavailable не должен ломать обычный routing.
 - Search providers: `disabled`, `tavily`, `brave`; ключи только через env/Railway Variables `TAVILY_API_KEY`, `BRAVE_SEARCH_API_KEY`, значения не печатать.
 - Runtime settings: `web_search.enabled`, `web_search.provider`, `web_search.max_results`; `/settings -> Интернет-поиск` admin-only.
 - Если поиск выключен, отвечать `Интернет-поиск выключен. Включите его в /settings -> Интернет-поиск.`
-- Если provider включён, но key отсутствует, отвечать `Интернет-поиск включён, но ключ provider не настроен.` и не падать.
+- Если provider `disabled` или key отсутствует при включённом поиске, `/settings -> Интернет-поиск` показывает `Статус: не настроен`, а поиск отвечает `Интернет-поиск не настроен: выберите provider и добавьте API key.`
 - Search context строится snippets-only из provider results; page fetching, browser automation, выполнение кода со страниц, scraping private/auth/paywalled pages и обход login/paywall запрещены.
 - URL safety обязан отбрасывать localhost, loopback, private RFC1918 ranges, link-local, metadata IP `169.254.169.254`, non-http/https schemes и пустые hosts.
 - Финальный ответ должен быть на русском и включать deterministic список источников; если источников недостаточно, Jarvis честно говорит об этом.
+- Финальный Telegram web-search ответ не должен показывать raw Markdown markers (`**`, `__`, `[title](url)`); provider/model text должен быть escaped, links только safe http/https, Telegram HTML parse error должен иметь один plain fallback.
 - Cache хранится в PostgreSQL `web_search_cache` по `(provider, query_hash)`; provider error не cache-ится.
 - Логи не должны содержать full query text, API keys, Authorization headers, provider response body, prompts или private message text; допустимы provider, query length, result count, status и sanitized ids.
 - Stage 4K не включает watcher, voice/media, Telegram Business, Railway Variables changes, auto-reading group messages и live destructive Telegram calls.

@@ -200,3 +200,24 @@ async def test_secret_looking_query_is_not_sent_to_provider_or_cache() -> None:
     assert result.user_message == WEB_SEARCH_SECRET_QUERY_MESSAGE
     assert provider.calls == []
     assert cache.saved == []
+
+
+@pytest.mark.asyncio
+async def test_enabled_search_with_disabled_provider_is_config_error() -> None:
+    provider = FakeProvider()
+    cache = FakeCache()
+    service = WebSearchService(provider=provider, cache=cache)
+
+    result = await service.search(
+        WebSearchRequest(
+            query="погода в Москве сегодня",
+            provider_name="disabled",
+            enabled=True,
+            max_results=5,
+        )
+    )
+
+    assert result.status is WebSearchStatus.CONFIG_ERROR
+    assert result.user_message == WEB_SEARCH_KEY_MISSING_MESSAGE
+    assert provider.calls == []
+    assert cache.saved == []

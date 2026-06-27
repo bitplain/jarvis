@@ -64,6 +64,13 @@ class FakeBot:
         self.closed = True
 
 
+class HtmlFailingBot(FakeBot):
+    async def send_message(self, *, chat_id: int, text: str, **kwargs: object) -> None:
+        if kwargs.get("parse_mode") == "HTML":
+            raise RuntimeError("bad html")
+        await super().send_message(chat_id=chat_id, text=text, **kwargs)
+
+
 class FakeProvider:
     def __init__(self) -> None:
         self.complete_called = False
@@ -396,18 +403,79 @@ async def test_worker_web_search_injects_context_and_appends_sources(
     assert bot.sent_messages == [
         (
             -100123,
-            "Нашёл актуальные источники.\n\n"
+            "<b>Нашёл актуальные источники.</b>\n\n"
             "group answer\n\n"
-            "Источники:\n"
-            "1. Railway changelog — https://example.com/railway",
+            "<b>Источники:</b>\n"
+            '1. <a href="https://example.com/railway">Railway changelog</a>',
         )
     ]
+    assert bot.send_message_kwargs == {"parse_mode": "HTML"}
     assert memory.added[0]["text"] == bot.sent_messages[0][1]
     web_search_log = next(
         record for record in caplog.records if record.message == "web_search_completed"
     )
     assert not hasattr(web_search_log, "user_id")
     assert web_search_log.user_id_masked == "***456"
+
+
+@pytest.mark.asyncio
+async def test_worker_web_search_html_send_failure_falls_back_to_plain_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = FakeProvider()
+    FakeBot.instances = []
+    FakeMemoryService.instances = []
+    FakeWebSearchService.instances = []
+    FakeWebSearchService.response = WebSearchResponse(
+        WebSearchStatus.OK,
+        [
+            SearchResult(
+                "<Weather>",
+                "https://example.com/weather",
+                "<script>unsafe</script>",
+            )
+        ],
+    )
+    monkeypatch.setattr(jobs, "Bot", HtmlFailingBot)
+    monkeypatch.setattr(
+        jobs,
+        "get_settings",
+        lambda: Settings(telegram_bot_token="123456:secret-token", memory_max_messages=5),
+    )
+    monkeypatch.setattr(jobs, "SessionLocal", FakeSessionLocal())
+    monkeypatch.setattr(jobs, "MessageRepository", lambda session: object())
+    monkeypatch.setattr(jobs, "RuntimeSettingRepository", lambda session: object())
+    monkeypatch.setattr(jobs, "RuntimeSettingsService", FakeRuntimeSettingsService)
+    monkeypatch.setattr(jobs, "MemoryService", FakeMemoryService)
+    monkeypatch.setattr(jobs, "WebSearchCacheRepository", lambda session: object())
+    monkeypatch.setattr(
+        jobs,
+        "build_web_search_service",
+        lambda settings, *, provider_name, cache_repository: FakeWebSearchService(),
+    )
+    monkeypatch.setattr(
+        jobs,
+        "build_llm_provider",
+        lambda settings, *, active_provider: provider,
+    )
+
+    await process_llm_message(
+        {},
+        {
+            "chat_id": 100500,
+            "user_id": 456,
+            "private": True,
+            "web_search": {"query": "погода в Москве сегодня"},
+        },
+    )
+
+    bot = FakeBot.instances[0]
+    assert len(bot.sent_messages) == 1
+    assert bot.sent_messages[0][0] == 100500
+    assert "<b>" not in bot.sent_messages[0][1]
+    assert "<script>" not in bot.sent_messages[0][1]
+    assert "**" not in bot.sent_messages[0][1]
+    assert bot.send_message_kwargs == {}
 
 
 @pytest.mark.asyncio

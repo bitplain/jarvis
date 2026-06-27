@@ -620,14 +620,17 @@ def render_web_search_settings_text(
     *,
     provider_key_available: bool,
 ) -> str:
-    status = "включён" if web_settings.enabled else "выключен"
-    degraded = ""
-    if (
+    configured = (
         web_settings.enabled
         and web_settings.provider is not WebSearchProviderName.DISABLED
-        and not provider_key_available
-    ):
-        degraded = "\n\nИнтернет-поиск: включён, но provider key не настроен."
+        and provider_key_available
+    )
+    status = "включён" if configured else "выключен"
+    if web_settings.enabled and not configured:
+        status = "не настроен"
+    degraded = ""
+    if web_settings.enabled and not configured:
+        degraded = "\n\nИнтернет-поиск не настроен: выберите provider и добавьте API key."
     return (
         "Интернет-поиск\n\n"
         f"Статус: {status}\n"

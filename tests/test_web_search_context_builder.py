@@ -1,6 +1,10 @@
 from datetime import UTC, datetime
 
-from app.services.web_search.context_builder import build_search_context, build_sources_text
+from app.services.web_search.context_builder import (
+    build_search_context,
+    build_sources_text,
+    format_web_search_answer_html,
+)
 from app.services.web_search.types import SearchResult
 
 
@@ -51,3 +55,23 @@ def test_build_sources_text_is_deterministic() -> None:
         "1. First — https://example.com/1\n"
         "2. Second — https://example.com/2"
     )
+
+
+def test_format_web_search_answer_html_strips_markdown_and_escapes_provider_text() -> None:
+    html = format_web_search_answer_html(
+        "**Сейчас:**\n**+17°C**\n<script>alert(1)</script>\n[bad](javascript:alert(1))",
+        [
+            SearchResult(
+                "<Weather>",
+                "https://example.com/weather",
+                "<script>unsafe</script>",
+            )
+        ],
+    )
+
+    assert "**" not in html
+    assert "<script>" not in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+    assert "&lt;Weather&gt;" in html
+    assert '<a href="https://example.com/weather">' in html
+    assert "javascript:alert" not in html

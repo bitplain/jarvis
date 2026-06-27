@@ -133,11 +133,14 @@ LLM provider остаётся заменяемым: Yandex, OpenRouter, OpenAI-c
 - `app/services/web_search/service.py` — disabled/config/no-results/provider-error handling, max query length, max results, cache TTL и safe URL filtering.
 - `app/services/web_search/context_builder.py` — HTML-safe context и deterministic sources list.
 - `app/services/web_search/intent.py` — explicit trigger parser.
+- `app/services/web_search/clarification.py` — short-lived Redis pending clarification для vague explicit search follow-up.
 - `app/db/repositories/web_search_cache.py` и `web_search_cache` — PostgreSQL cache по `(provider, query_hash)`.
 
 Private/group routers проверяют explicit search trigger до generic LLM enqueue.
 Private команда вида `найди последние обновления Railway` сохраняется как обычное user message, но arq payload получает `web_search: {"query": ...}`.
+Явные current-info/weather формы вроде `Покажи погоду в Москве`, `погода в Москве сегодня`, `покажи курс доллара` и `покажи новости про Telegram` тоже считаются explicit search intent, но обычные `Привет`, `Кто ты?` и `Помоги со списком` остаются generic LLM/list routing.
 Group команда работает только если group router уже решил, что message should_process: mention текущего bot username или reply на сообщение бота. Обычный group non-mention всё ещё игнорируется без LLM job.
+Если explicit search требует уточнения (`найди в интернете погода на сегодня`, `найди в интернете новости`), router сохраняет в Redis key `web_search:clarification:<scope>:<chat_id>:<user_id>` небольшой sanitized context с TTL 10 минут. Follow-up `Москва` превращается в `погода Москва сегодня`, follow-up `Telegram` после `новости` — в `новости Telegram`; `/cancel` очищает pending state. Redis unavailable fail-open: обычный routing не ломается.
 
 Worker при `web_search` payload читает runtime settings:
 
@@ -151,9 +154,10 @@ Worker при `web_search` payload читает runtime settings:
 - `TAVILY_API_KEY`
 - `BRAVE_SEARCH_API_KEY`
 
-Если поиск выключен, provider disabled или ключ отсутствует, worker возвращает русское user-friendly сообщение и не вызывает LLM.
+Если поиск выключен, worker отвечает `Интернет-поиск выключен. Включите его в /settings -> Интернет-поиск.` и не вызывает LLM.
+Если provider `disabled` или ключ отсутствует при включённом поиске, worker отвечает `Интернет-поиск не настроен: выберите provider и добавьте API key.` и не вызывает LLM.
 Если результаты есть, worker добавляет `Найденные источники` в system prompt с instruction: отвечать на русском, использовать только найденные источники для актуальных фактов и честно сказать, если источников недостаточно.
-Финальный Telegram ответ получает deterministic `Источники:` list даже если LLM уже упомянул источники.
+Финальный Telegram ответ получает deterministic `Источники:` list даже если LLM уже упомянул источники. Web-search финал отправляется как Telegram HTML: provider/model text escaping обязателен, простые markdown markers (`**`, `__`, markdown links) не должны попадать сырыми в чат, unsafe links отбрасываются, а HTML send error имеет один escaped/plain fallback.
 
 URL safety фильтрует provider results до передачи в LLM: допускаются только `http/https`, отбрасываются `localhost`, loopback, private RFC1918 ranges, link-local, metadata IP `169.254.169.254`, non-http schemes и пустые hosts.
 Stage 4K intentionally не fetch-ит страницы, не обходит login/paywall и не выполняет код с сайтов.
