@@ -333,6 +333,7 @@ async def test_worker_group_job_uses_send_message_without_private_streaming(
 @pytest.mark.asyncio
 async def test_worker_web_search_injects_context_and_appends_sources(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     provider = FakeProvider()
     FakeBot.instances = []
@@ -374,6 +375,7 @@ async def test_worker_web_search_injects_context_and_appends_sources(
         "build_llm_provider",
         lambda settings, *, active_provider: provider,
     )
+    caplog.set_level("INFO", logger="app.workers.jobs")
 
     await process_llm_message(
         {},
@@ -401,6 +403,11 @@ async def test_worker_web_search_injects_context_and_appends_sources(
         )
     ]
     assert memory.added[0]["text"] == bot.sent_messages[0][1]
+    web_search_log = next(
+        record for record in caplog.records if record.message == "web_search_completed"
+    )
+    assert not hasattr(web_search_log, "user_id")
+    assert web_search_log.user_id_masked == "***456"
 
 
 @pytest.mark.asyncio

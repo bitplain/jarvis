@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import re
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any, Protocol
@@ -22,11 +23,17 @@ WEB_SEARCH_DISABLED_MESSAGE = (
 WEB_SEARCH_KEY_MISSING_MESSAGE = "Интернет-поиск включён, но ключ provider не настроен."
 WEB_SEARCH_NO_RESULTS_MESSAGE = "Ничего надёжного не нашёл по запросу."
 WEB_SEARCH_INVALID_QUERY_MESSAGE = "Запрос для интернет-поиска слишком длинный."
+WEB_SEARCH_SECRET_QUERY_MESSAGE = "Похоже на секрет. Я не буду искать это в интернете."
 WEB_SEARCH_PROVIDER_ERROR_MESSAGE = "Интернет-поиск временно недоступен. Попробуйте позже."
 MAX_QUERY_LENGTH = 300
 MAX_RESULTS_LIMIT = 10
 DEFAULT_CACHE_TTL = timedelta(hours=1)
 NEWS_CACHE_TTL = timedelta(minutes=30)
+SECRET_QUERY_PATTERNS = (
+    re.compile(r"\b(api[_\s-]?key|authorization|bearer|password|passwd|token|secret)\b", re.I),
+    re.compile(r"\b[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\b"),
+    re.compile(r"\bsk-[A-Za-z0-9_-]{12,}\b", re.I),
+)
 logger = logging.getLogger(__name__)
 
 
@@ -79,6 +86,12 @@ class WebSearchService:
                 WebSearchStatus.INVALID_QUERY,
                 [],
                 WEB_SEARCH_INVALID_QUERY_MESSAGE,
+            )
+        if _looks_like_secret_query(query):
+            return WebSearchResponse(
+                WebSearchStatus.INVALID_QUERY,
+                [],
+                WEB_SEARCH_SECRET_QUERY_MESSAGE,
             )
         if self.provider is None:
             return WebSearchResponse(
@@ -160,3 +173,7 @@ class WebSearchService:
         if any(marker in lowered for marker in ("последние", "сегодня", "новости", "что нового")):
             return NEWS_CACHE_TTL
         return DEFAULT_CACHE_TTL
+
+
+def _looks_like_secret_query(query: str) -> bool:
+    return any(pattern.search(query) is not None for pattern in SECRET_QUERY_PATTERNS)

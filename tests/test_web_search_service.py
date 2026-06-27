@@ -7,6 +7,7 @@ from app.db.models import utcnow
 from app.services.web_search.service import (
     WEB_SEARCH_DISABLED_MESSAGE,
     WEB_SEARCH_KEY_MISSING_MESSAGE,
+    WEB_SEARCH_SECRET_QUERY_MESSAGE,
     WebSearchService,
 )
 from app.services.web_search.types import SearchResult, WebSearchRequest, WebSearchStatus
@@ -178,3 +179,24 @@ async def test_query_length_enforced() -> None:
 
     assert result.status is WebSearchStatus.INVALID_QUERY
     assert provider.calls == []
+
+
+@pytest.mark.asyncio
+async def test_secret_looking_query_is_not_sent_to_provider_or_cache() -> None:
+    provider = FakeProvider()
+    cache = FakeCache()
+    service = WebSearchService(provider=provider, cache=cache)
+
+    result = await service.search(
+        WebSearchRequest(
+            query="найди Authorization Bearer secret-token",
+            provider_name="fake",
+            enabled=True,
+            max_results=5,
+        )
+    )
+
+    assert result.status is WebSearchStatus.INVALID_QUERY
+    assert result.user_message == WEB_SEARCH_SECRET_QUERY_MESSAGE
+    assert provider.calls == []
+    assert cache.saved == []
