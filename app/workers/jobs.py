@@ -1,6 +1,6 @@
 import logging
 import time
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -39,6 +39,7 @@ from app.services.telegram_formatting import format_daily_brief_html, format_rem
 
 logger = logging.getLogger(__name__)
 USER_ERROR_MESSAGE = "Не получилось подготовить ответ. Попробуйте позже."
+DAILY_BRIEF_SEND_CLAIM_TTL_SECONDS = 36 * 60 * 60
 
 
 async def try_send_chat_action(bot: Bot, *, chat_id: int) -> None:
@@ -382,6 +383,13 @@ async def deliver_daily_briefs(ctx: dict[str, Any]) -> None:
             due_settings = await repository.due_for_delivery(now)
             for brief_settings in due_settings:
                 timezone = ZoneInfo(brief_settings.timezone)
+                local_date = now.astimezone(timezone).date()
+                if not await _claim_daily_brief_send(
+                    redis,
+                    settings_id=brief_settings.id,
+                    local_date=local_date,
+                ):
+                    continue
                 service = DailyBriefService(
                     shopping=ShoppingService(ShoppingRepository(session)),
                     reminders=ReminderService(ReminderRepository(session)),
@@ -405,13 +413,68 @@ async def deliver_daily_briefs(ctx: dict[str, Any]) -> None:
                         "daily_brief_send_failed",
                         extra={"error_type": type(exc).__name__},
                     )
+                    await _release_daily_brief_send_claim(
+                        redis,
+                        settings_id=brief_settings.id,
+                        local_date=local_date,
+                    )
                     continue
                 await repository.mark_sent_if_due(
                     brief_settings.id,
-                    now.astimezone(timezone).date(),
+                    local_date,
                 )
     finally:
         await bot.session.close()
+
+
+async def _claim_daily_brief_send(
+    redis: Any,
+    *,
+    settings_id: str,
+    local_date: date,
+) -> bool:
+    if redis is None:
+        return True
+    key = _daily_brief_send_claim_key(settings_id=settings_id, local_date=local_date)
+    try:
+        claimed = await redis.set(
+            key,
+            "1",
+            ex=DAILY_BRIEF_SEND_CLAIM_TTL_SECONDS,
+            nx=True,
+        )
+    except Exception as exc:
+        logger.warning(
+            "daily_brief_send_claim_unavailable",
+            extra={"error_type": type(exc).__name__},
+        )
+        return True
+    if not claimed:
+        logger.info("daily_brief_duplicate_send_skipped")
+        return False
+    return True
+
+
+async def _release_daily_brief_send_claim(
+    redis: Any,
+    *,
+    settings_id: str,
+    local_date: date,
+) -> None:
+    if redis is None:
+        return
+    key = _daily_brief_send_claim_key(settings_id=settings_id, local_date=local_date)
+    try:
+        await redis.delete(key)
+    except Exception as exc:
+        logger.warning(
+            "daily_brief_send_claim_release_failed",
+            extra={"error_type": type(exc).__name__},
+        )
+
+
+def _daily_brief_send_claim_key(*, settings_id: str, local_date: date) -> str:
+    return f"daily_brief:send:{settings_id}:{local_date.isoformat()}"
 
 
 async def _deliver_one_reminder(
