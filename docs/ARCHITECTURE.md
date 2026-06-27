@@ -163,6 +163,12 @@ Webhook route защищён от повторной доставки одног
 Private и group routers ставят LLM jobs со стабильным arq `_job_id=llm:<chat_id>:<message_id>`. Это дополнительная защита от duplicate enqueue при повторной доставке одного и того же Telegram message.
 Polling readiness и polling runner могут удалять webhook только для local/Mac polling smoke. При `APP_ENV=production` они не выполняют `deleteWebhook`, чтобы production webhook не замолчал после диагностического smoke.
 
+## Logging hygiene
+
+`app/core/logging.py` задаёт общий stdout/stderr split и redaction для API и worker. `RedactingFilter` очищает `record.msg`, `record.args` и structured `extra`, а `RedactingFormatter` дополнительно очищает итоговую formatted log string и `formatException`.
+
+За счёт formatter-level redaction stack traces остаются видимыми для debugging (`Traceback`, exception type и безопасный message context), но Telegram Bot API URL с token, raw token-like fragments, Authorization/Bearer headers, API keys, passwords и webhook secrets маскируются даже если они попали в текст исключения. HTTP client loggers `httpx`, `httpcore` и `aiohttp` по умолчанию понижены до `WARNING`, чтобы routine request URLs не попадали в operational logs.
+
 ## Guest Mode
 
 Guest Mode обрабатывает Telegram update type `guest_message` через отдельный aiogram router.

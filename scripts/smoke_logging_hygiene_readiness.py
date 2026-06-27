@@ -40,9 +40,18 @@ def run_readiness() -> LoggingHygieneReadinessResult:
 
     result.statuses["central_redactor"] = (
         "OK"
-        if "def redact(" in logging_source
+        if "def redact_secrets(" in logging_source
+        and "def redact(" in logging_source
         and "https://api\\.telegram\\.org/bot" in logging_source
         and "LOG_RECORD_STANDARD_ATTRS" in logging_source
+        else "MISSING"
+    )
+    result.statuses["redacting_formatter"] = (
+        "OK"
+        if "class RedactingFormatter" in logging_source
+        and "def formatException" in logging_source
+        and "return redact_secrets(rendered)" in logging_source
+        and "formatter = RedactingFormatter" in logging_source
         else "MISSING"
     )
     result.statuses["stdout_stderr_split"] = (
@@ -80,6 +89,9 @@ def run_readiness() -> LoggingHygieneReadinessResult:
                 "test_redact_masks_httpx_url_object",
                 "test_configure_logging_routes_info_to_stdout_and_errors_to_stderr",
                 "test_configure_logging_quiets_http_client_info_logs",
+                "test_logger_exception_redacts_traceback_secrets",
+                "test_logger_error_exc_info_redacts_traceback_secrets",
+                "Traceback (most recent call last)",
             ]
         )
         and "test_webhook_setup_result_redacts_telegram_url_and_authorization" in webhook_tests

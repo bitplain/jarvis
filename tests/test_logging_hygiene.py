@@ -109,3 +109,58 @@ def test_configure_logging_quiets_http_client_info_logs(
     assert logging.getLogger("httpx").getEffectiveLevel() >= logging.WARNING
     assert logging.getLogger("httpcore").getEffectiveLevel() >= logging.WARNING
     assert logging.getLogger("aiohttp").getEffectiveLevel() >= logging.WARNING
+
+
+def test_logger_exception_redacts_traceback_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", stdout)
+    monkeypatch.setattr(sys, "stderr", stderr)
+    configure_logging("INFO")
+    logger = logging.getLogger("tests.logging_hygiene.traceback")
+
+    try:
+        raise RuntimeError(
+            "https://api.telegram.org/bot123456:ABC-secret-token/setWebhook "
+            "Authorization: Bearer secret-value"
+        )
+    except RuntimeError:
+        logger.exception("telegram setup failed")
+
+    rendered = stderr.getvalue()
+    assert "123456:ABC-secret-token" not in rendered
+    assert "Bearer secret-value" not in rendered
+    assert "https://api.telegram.org/bot123456:ABC-secret-token/setWebhook" not in rendered
+    assert "https://api.telegram.org/bot<redacted>/setWebhook" in rendered
+    assert "Authorization: <redacted>" in rendered
+    assert "telegram setup failed" in rendered
+    assert "RuntimeError" in rendered
+    assert "Traceback (most recent call last)" in rendered
+
+
+def test_logger_error_exc_info_redacts_traceback_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", stdout)
+    monkeypatch.setattr(sys, "stderr", stderr)
+    configure_logging("INFO")
+    logger = logging.getLogger("tests.logging_hygiene.traceback")
+
+    try:
+        raise RuntimeError(
+            "https://api.telegram.org/bot123456:ABC-secret-token/setWebhook "
+            "Authorization: Bearer secret-value"
+        )
+    except RuntimeError:
+        exc_info = sys.exc_info()
+        logger.error("failed", exc_info=exc_info)
+
+    rendered = stderr.getvalue()
+    assert "123456:ABC-secret-token" not in rendered
+    assert "Bearer secret-value" not in rendered
+    assert "https://api.telegram.org/bot123456:ABC-secret-token/setWebhook" not in rendered
+    assert "https://api.telegram.org/bot<redacted>/setWebhook" in rendered
+    assert "Authorization: <redacted>" in rendered
+    assert "failed" in rendered
+    assert "RuntimeError" in rendered
+    assert "Traceback (most recent call last)" in rendered

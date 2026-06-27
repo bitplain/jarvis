@@ -9,7 +9,13 @@ from pythonjsonlogger import json as jsonlogger
 SECRET_PATTERNS = [
     re.compile(r"(https://api\.telegram\.org/bot)[^/\s]+", re.I),
     re.compile(r"(Authorization\s*:\s*)Bearer\s+[A-Za-z0-9._~+/=-]+", re.I),
+    re.compile(r"(\bX-API-Key\s*:\s*)[A-Za-z0-9._~+/=-]+", re.I),
+    re.compile(
+        r"(\b(?:token|api[_-]?key|authorization|password|secret)\b\s*:\s*)[A-Za-z0-9._~+/=-]+",
+        re.I,
+    ),
     re.compile(r"(\b(?:token|api[_-]?key|authorization|password|secret)\b=)[^,\s]+", re.I),
+    re.compile(r"(^|[^A-Za-z0-9_])\d{5,}:[A-Za-z0-9_-]{8,}\b"),
     re.compile(r"(Bearer\s+)[A-Za-z0-9._\-]+", re.I),
 ]
 LOG_RECORD_STANDARD_ATTRS = set(logging.makeLogRecord({}).__dict__)
@@ -24,12 +30,16 @@ class MaxLevelFilter(logging.Filter):
         return record.levelno <= self.max_level
 
 
+def redact_secrets(value: str) -> str:
+    redacted = value
+    for pattern in SECRET_PATTERNS:
+        redacted = pattern.sub(r"\1<redacted>", redacted)
+    return redacted
+
+
 def redact(value: object) -> object:
     if isinstance(value, str):
-        redacted = value
-        for pattern in SECRET_PATTERNS:
-            redacted = pattern.sub(r"\1<redacted>", redacted)
-        return redacted
+        return redact_secrets(value)
     if isinstance(value, Mapping):
         safe: dict[object, object] = {}
         for key, item in value.items():
@@ -65,8 +75,20 @@ class RedactingFilter(logging.Filter):
         return True
 
 
+class RedactingFormatter(jsonlogger.JsonFormatter):
+    def format(self, record: logging.LogRecord) -> str:
+        rendered = super().format(record)
+        return redact_secrets(rendered)
+
+    def formatException(self, ei: Any) -> str:
+        rendered = super().formatException(ei)
+        if isinstance(rendered, list):
+            rendered = "\n".join(rendered)
+        return redact_secrets(rendered)
+
+
 def configure_logging(level: str) -> None:
-    formatter = jsonlogger.JsonFormatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+    formatter = RedactingFormatter("%(asctime)s %(levelname)s %(name)s %(message)s")
     redacting_filter = RedactingFilter()
     stdout_handler = logging.StreamHandler(sys.stdout)
     stdout_handler.setFormatter(formatter)

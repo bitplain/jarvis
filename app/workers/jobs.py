@@ -1,5 +1,6 @@
 import logging
 import time
+from datetime import datetime
 from typing import Any
 
 from aiogram import Bot
@@ -353,11 +354,12 @@ async def deliver_due_reminders(ctx: dict[str, Any]) -> None:
             repository = ReminderRepository(session)
             service = ReminderService(repository)
             for _ in range(50):
-                reminders = await repository.due(utcnow(), limit=1)
+                now = utcnow()
+                reminders = await repository.due(now, limit=1)
                 if not reminders:
                     break
                 reminder = reminders[0]
-                if not await _deliver_one_reminder(bot, service, session, reminder):
+                if not await _deliver_one_reminder(bot, service, session, reminder, now=now):
                     break
     finally:
         await bot.session.close()
@@ -368,6 +370,8 @@ async def _deliver_one_reminder(
     service: ReminderService,
     session: Any,
     reminder: Any,
+    *,
+    now: datetime,
 ) -> bool:
     try:
         timezone = await RuntimeSettingsService(
@@ -385,6 +389,7 @@ async def _deliver_one_reminder(
                     remind_at=reminder.remind_at,
                     status=reminder.status,
                 ),
+                now=now,
                 timezone=timezone,
             ),
             parse_mode="HTML",

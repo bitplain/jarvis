@@ -222,6 +222,14 @@ Production API автоматически выполняет `alembic upgrade he
 
 Webhook state хранится на стороне Telegram, поэтому production API дополнительно self-heal-ит webhook на startup: после успешных миграций пробует установить `<PUBLIC_BASE_URL>/telegram/webhook`. Ошибки setup логируются sanitized событиями `telegram_webhook_setup_failed` и не останавливают API.
 
+## Логирование и redaction
+
+Central logging config находится в `app/core/logging.py` и используется API startup и arq worker. App-controlled `DEBUG`/`INFO` пишутся в stdout, warning/error/exception — в stderr.
+
+Redaction маскирует Telegram Bot API URLs, raw Telegram token-like значения, Authorization/Bearer headers, API keys, passwords, webhook secrets и nested structured `extra`. Formatter дополнительно redacts финальную formatted log string и exception traceback text, поэтому `logger.exception(...)` и `logger.error(..., exc_info=True)` сохраняют `Traceback`/exception type для отладки, но не печатают token/header fragments.
+
+`httpx`, `httpcore` и `aiohttp` routine request logs понижены до `WARNING`; если сторонний warning/error всё же содержит secret-bearing URL/header, app formatter применяет redaction перед выводом.
+
 Railway Variables всё равно нужны: ключи и model ids `YANDEX_*` и `OPENROUTER_*` остаются только в `jarvis-worker` variables и не отображаются в Telegram UI, логах или документации.
 
 Readiness без секретов:
