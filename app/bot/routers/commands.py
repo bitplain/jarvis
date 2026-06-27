@@ -43,6 +43,8 @@ from app.services.runtime_settings_service import (
     PromptSource,
     RuntimeSettingsService,
     RuntimeSettingsUnavailable,
+    WebSearchProviderName,
+    WebSearchSettings,
 )
 from app.services.shopping_service import ShoppingService
 from app.services.status_service import StatusService, render_status_html
@@ -71,6 +73,10 @@ SETTINGS_CALLBACK_DAILY_BRIEF_TOGGLE = "settings:daily_brief:toggle"
 SETTINGS_CALLBACK_DAILY_BRIEF_TIME = "settings:daily_brief:time"
 SETTINGS_CALLBACK_DAILY_BRIEF_TIMEZONE = "settings:daily_brief:timezone"
 SETTINGS_CALLBACK_DAILY_BRIEF_SHOW = "settings:daily_brief:show"
+SETTINGS_CALLBACK_WEB_SEARCH = "settings:web_search"
+SETTINGS_CALLBACK_WEB_SEARCH_TOGGLE = "settings:web_search:toggle"
+SETTINGS_CALLBACK_WEB_SEARCH_PROVIDER = "settings:web_search:provider"
+SETTINGS_CALLBACK_WEB_SEARCH_MAX_RESULTS = "settings:web_search:max_results"
 SETTINGS_CALLBACK_PROMPTS = "settings:prompts"
 SETTINGS_CALLBACK_PROMPTS_PRIVATE = "settings:prompts:private"
 SETTINGS_CALLBACK_PROMPTS_GROUP = "settings:prompts:group"
@@ -96,6 +102,11 @@ PROVIDER_LABELS = {
     ActiveLLMProvider.AUTO: "Auto",
     ActiveLLMProvider.YANDEX: "Yandex",
     ActiveLLMProvider.OPENROUTER: "OpenRouter",
+}
+WEB_SEARCH_PROVIDER_LABELS = {
+    WebSearchProviderName.DISABLED: "disabled",
+    WebSearchProviderName.TAVILY: "tavily",
+    WebSearchProviderName.BRAVE: "brave",
 }
 PROMPT_PROFILE_LABELS = {
     PromptProfile.BALANCED: "Сбалансированный",
@@ -253,6 +264,12 @@ def build_settings_keyboard() -> InlineKeyboardMarkup:
                 )
             ],
             [
+                InlineKeyboardButton(
+                    text="Интернет-поиск",
+                    callback_data=SETTINGS_CALLBACK_WEB_SEARCH,
+                )
+            ],
+            [
                 InlineKeyboardButton(text="Обновить", callback_data=SETTINGS_CALLBACK_REFRESH),
                 InlineKeyboardButton(text="Закрыть", callback_data=SETTINGS_CALLBACK_CLOSE),
             ],
@@ -320,6 +337,34 @@ def build_daily_brief_settings_keyboard(*, enabled: bool) -> InlineKeyboardMarku
                     text="Показать сейчас",
                     callback_data=SETTINGS_CALLBACK_DAILY_BRIEF_SHOW,
                 )
+            ],
+            [
+                InlineKeyboardButton(text="Назад", callback_data=SETTINGS_CALLBACK_REFRESH),
+                InlineKeyboardButton(text="Закрыть", callback_data=SETTINGS_CALLBACK_CLOSE),
+            ],
+        ]
+    )
+
+
+def build_web_search_settings_keyboard(*, enabled: bool) -> InlineKeyboardMarkup:
+    toggle_text = "Выключить" if enabled else "Включить"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=toggle_text,
+                    callback_data=SETTINGS_CALLBACK_WEB_SEARCH_TOGGLE,
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Provider",
+                    callback_data=SETTINGS_CALLBACK_WEB_SEARCH_PROVIDER,
+                ),
+                InlineKeyboardButton(
+                    text="Максимум источников",
+                    callback_data=SETTINGS_CALLBACK_WEB_SEARCH_MAX_RESULTS,
+                ),
             ],
             [
                 InlineKeyboardButton(text="Назад", callback_data=SETTINGS_CALLBACK_REFRESH),
@@ -546,7 +591,8 @@ def render_settings_home_text() -> str:
         "- Промты\n"
         "- Стиль ответа\n"
         "- Списки и напоминания\n"
-        "- Сводка дня"
+        "- Сводка дня\n"
+        "- Интернет-поиск"
     )
 
 
@@ -566,6 +612,35 @@ def render_daily_brief_settings_text(
         "Авто-сводка для групп будет позже. "
         "Сейчас группа поддерживает только команду \"сводка\".\n\n"
         "Действия:"
+    )
+
+
+def render_web_search_settings_text(
+    web_settings: WebSearchSettings,
+    *,
+    provider_key_available: bool,
+) -> str:
+    status = "включён" if web_settings.enabled else "выключен"
+    degraded = ""
+    if (
+        web_settings.enabled
+        and web_settings.provider is not WebSearchProviderName.DISABLED
+        and not provider_key_available
+    ):
+        degraded = "\n\nИнтернет-поиск: включён, но provider key не настроен."
+    return (
+        "Интернет-поиск\n\n"
+        f"Статус: {status}\n"
+        f"Provider: {WEB_SEARCH_PROVIDER_LABELS[web_settings.provider]}\n"
+        "Режим: только явные команды\n"
+        f"Максимум источников: {web_settings.max_results}\n\n"
+        "Команды:\n"
+        "найди ...\n"
+        "поищи ...\n"
+        "проверь в интернете ...\n"
+        "что нового по ...\n\n"
+        "Действия:"
+        f"{degraded}"
     )
 
 
@@ -756,6 +831,49 @@ async def _render_private_daily_brief_settings(
     return text, build_daily_brief_settings_keyboard(
         enabled=bool(getattr(settings, "enabled", False))
     )
+
+
+async def _render_web_search_settings(
+    session: object,
+    settings: object,
+) -> tuple[str, InlineKeyboardMarkup]:
+    service = _runtime_settings_service(session)
+    web_settings = await service.get_web_search_settings(
+        default_provider=str(getattr(settings, "web_search_provider", "disabled")),
+        default_max_results=int(getattr(settings, "web_search_max_results", 5)),
+    )
+    text = render_web_search_settings_text(
+        web_settings,
+        provider_key_available=_web_search_provider_key_available(settings, web_settings.provider),
+    )
+    return text, build_web_search_settings_keyboard(enabled=web_settings.enabled)
+
+
+def _web_search_provider_key_available(settings: object, provider: WebSearchProviderName) -> bool:
+    if provider is WebSearchProviderName.DISABLED:
+        return True
+    if provider is WebSearchProviderName.TAVILY:
+        return bool(str(getattr(settings, "tavily_api_key", "")).strip())
+    if provider is WebSearchProviderName.BRAVE:
+        return bool(str(getattr(settings, "brave_search_api_key", "")).strip())
+    return False
+
+
+def _next_web_search_provider(provider: WebSearchProviderName) -> WebSearchProviderName:
+    order = [
+        WebSearchProviderName.DISABLED,
+        WebSearchProviderName.TAVILY,
+        WebSearchProviderName.BRAVE,
+    ]
+    return order[(order.index(provider) + 1) % len(order)]
+
+
+def _next_web_search_max_results(value: int) -> int:
+    if value < 5:
+        return 5
+    if value < 10:
+        return 10
+    return 3
 
 
 async def _send_private_daily_brief_now(
@@ -1361,6 +1479,89 @@ async def handle_settings_callback(callback: CallbackQuery, **data: Any) -> None
             await callback.answer("Сводка дня временно недоступна.", show_alert=True)
             return
         await callback.answer()
+        return
+    if callback_data == SETTINGS_CALLBACK_WEB_SEARCH:
+        try:
+            text, keyboard = await _render_web_search_settings(session, settings)
+        except RuntimeSettingsUnavailable:
+            await callback.answer(SETTINGS_UNAVAILABLE_MESSAGE, show_alert=True)
+            return
+        edited = await _edit_settings_callback_message(
+            callback,
+            text=text,
+            reply_markup=keyboard,
+        )
+        if edited:
+            await callback.answer()
+        return
+    if callback_data == SETTINGS_CALLBACK_WEB_SEARCH_TOGGLE:
+        service = _runtime_settings_service(session)
+        try:
+            current = await service.get_web_search_settings(
+                default_provider=settings.web_search_provider,
+                default_max_results=settings.web_search_max_results,
+            )
+            await service.set_web_search_enabled(
+                not current.enabled,
+                updated_by_telegram_id=user_id,
+            )
+            text, keyboard = await _render_web_search_settings(session, settings)
+        except RuntimeSettingsUnavailable:
+            await callback.answer(SETTINGS_UNAVAILABLE_MESSAGE, show_alert=True)
+            return
+        edited = await _edit_settings_callback_message(
+            callback,
+            text=text,
+            reply_markup=keyboard,
+        )
+        if edited:
+            await callback.answer("Настройки сохранены.", show_alert=False)
+        return
+    if callback_data == SETTINGS_CALLBACK_WEB_SEARCH_PROVIDER:
+        service = _runtime_settings_service(session)
+        try:
+            current = await service.get_web_search_settings(
+                default_provider=settings.web_search_provider,
+                default_max_results=settings.web_search_max_results,
+            )
+            await service.set_web_search_provider(
+                _next_web_search_provider(current.provider),
+                updated_by_telegram_id=user_id,
+            )
+            text, keyboard = await _render_web_search_settings(session, settings)
+        except RuntimeSettingsUnavailable:
+            await callback.answer(SETTINGS_UNAVAILABLE_MESSAGE, show_alert=True)
+            return
+        edited = await _edit_settings_callback_message(
+            callback,
+            text=text,
+            reply_markup=keyboard,
+        )
+        if edited:
+            await callback.answer("Provider сохранён.", show_alert=False)
+        return
+    if callback_data == SETTINGS_CALLBACK_WEB_SEARCH_MAX_RESULTS:
+        service = _runtime_settings_service(session)
+        try:
+            current = await service.get_web_search_settings(
+                default_provider=settings.web_search_provider,
+                default_max_results=settings.web_search_max_results,
+            )
+            await service.set_web_search_max_results(
+                _next_web_search_max_results(current.max_results),
+                updated_by_telegram_id=user_id,
+            )
+            text, keyboard = await _render_web_search_settings(session, settings)
+        except RuntimeSettingsUnavailable:
+            await callback.answer(SETTINGS_UNAVAILABLE_MESSAGE, show_alert=True)
+            return
+        edited = await _edit_settings_callback_message(
+            callback,
+            text=text,
+            reply_markup=keyboard,
+        )
+        if edited:
+            await callback.answer("Лимит сохранён.", show_alert=False)
         return
     if callback_data == SETTINGS_CALLBACK_PROMPTS:
         edited = await _edit_settings_callback_message(

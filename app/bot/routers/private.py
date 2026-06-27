@@ -14,6 +14,7 @@ from app.services.regular_assistant_service import (
     RegularAssistantService,
     is_draft_reply_request,
 )
+from app.services.web_search.intent import parse_web_search_intent
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,9 @@ async def handle_private_text(message: Message, **data: Any) -> None:
     session = data.get("db_session")
     redis = data.get("redis")
     settings = data["settings"]
-    memory = None
+    memory = data.get("memory_service")
+    if not isinstance(memory, MemoryService):
+        memory = None
     if session is not None:
         memory = MemoryService(
             MessageRepository(session),
@@ -100,10 +103,13 @@ async def handle_private_text(message: Message, **data: Any) -> None:
         await message.answer(DRAFT_REPLY_EMPTY_CONTEXT)
         return
 
-    if session is None:
+    if session is None and memory is None:
         await message.answer("База данных временно недоступна.")
         return
     if memory is None:
+        if session is None:
+            await message.answer("База данных временно недоступна.")
+            return
         memory = MemoryService(
             MessageRepository(session),
             max_messages=settings.memory_max_messages,
@@ -116,14 +122,24 @@ async def handle_private_text(message: Message, **data: Any) -> None:
         telegram_message_id=message.message_id,
     )
     if redis is not None:
+        web_search_intent = parse_web_search_intent(text)
+        if web_search_intent is not None and not await _web_search_rate_limit_allowed(
+            redis,
+            user_id=message.from_user.id,
+        ):
+            await message.answer("Слишком много запросов к интернет-поиску. Попробуйте позже.")
+            return
         job_id = f"llm:{message.chat.id}:{message.message_id}"
+        payload: dict[str, Any] = {
+            "chat_id": message.chat.id,
+            "user_id": message.from_user.id,
+            "private": True,
+        }
+        if web_search_intent is not None:
+            payload["web_search"] = {"query": web_search_intent.query}
         await redis.enqueue_job(
             "process_llm_message",
-            {
-                "chat_id": message.chat.id,
-                "user_id": message.from_user.id,
-                "private": True,
-            },
+            payload,
             _job_id=job_id,
         )
         log_kwargs: dict[str, Any] = safe_extra(
@@ -143,6 +159,23 @@ async def handle_private_text(message: Message, **data: Any) -> None:
             await message.answer(THINKING_TEXT)
         return
     await message.answer("Worker временно недоступен.")
+
+
+async def _web_search_rate_limit_allowed(redis: object, *, user_id: int) -> bool:
+    if not hasattr(redis, "incr"):
+        return True
+    key = f"web_search:rate:{user_id}"
+    try:
+        count = await redis.incr(key)  # type: ignore[attr-defined]
+        if count == 1 and hasattr(redis, "expire"):
+            await redis.expire(key, 600)  # type: ignore[attr-defined]
+        return int(count) <= 10
+    except Exception as exc:
+        logger.warning(
+            "web_search_rate_limit_unavailable",
+            extra={"error_type": type(exc).__name__},
+        )
+        return True
 
 
 def build_router() -> Router:

@@ -273,6 +273,23 @@
 - Shopping list display группирует active items по категориям, но старые items без v2 fields отображаются нормально; весь пользовательский текст в HTML обязательно escaping через `html.escape`.
 - Stage 4J не меняет Railway Variables, Prompt Profiles, access routing, Mira/private streaming, Guest Mode, Business Mode, `/status`, reminder delivery semantics и logging redaction.
 
+## Stage 4K Provider-agnostic Web Search
+
+- Web Search — отдельный инструмент Jarvis, а не прямой интернет-доступ LLM provider-а.
+- Поиск запускается только явными командами: `найди ...`, `поищи ...`, `проверь в интернете ...`, `посмотри в интернете ...`, `что нового по ...`, `найди актуальную информацию ...`.
+- Auto-search на обычные вопросы запрещён; обычный `Привет` и вопросы без explicit search trigger идут в normal LLM path.
+- Group/supergroup search работает только через mention/reply по текущей access policy; обычные group non-mention сообщения игнорируются как раньше.
+- Search providers: `disabled`, `tavily`, `brave`; ключи только через env/Railway Variables `TAVILY_API_KEY`, `BRAVE_SEARCH_API_KEY`, значения не печатать.
+- Runtime settings: `web_search.enabled`, `web_search.provider`, `web_search.max_results`; `/settings -> Интернет-поиск` admin-only.
+- Если поиск выключен, отвечать `Интернет-поиск выключен. Включите его в /settings -> Интернет-поиск.`
+- Если provider включён, но key отсутствует, отвечать `Интернет-поиск включён, но ключ provider не настроен.` и не падать.
+- Search context строится snippets-only из provider results; page fetching, browser automation, выполнение кода со страниц, scraping private/auth/paywalled pages и обход login/paywall запрещены.
+- URL safety обязан отбрасывать localhost, loopback, private RFC1918 ranges, link-local, metadata IP `169.254.169.254`, non-http/https schemes и пустые hosts.
+- Финальный ответ должен быть на русском и включать deterministic список источников; если источников недостаточно, Jarvis честно говорит об этом.
+- Cache хранится в PostgreSQL `web_search_cache` по `(provider, query_hash)`; provider error не cache-ится.
+- Логи не должны содержать full query text, API keys, Authorization headers, provider response body, prompts или private message text; допустимы provider, query length, result count, status и sanitized ids.
+- Stage 4K не включает watcher, voice/media, Telegram Business, Railway Variables changes, auto-reading group messages и live destructive Telegram calls.
+
 ## Logging Hygiene
 
 - Normal operational app logs уровня `DEBUG`/`INFO` должны писаться в stdout; реальные warning/error/exception остаются на stderr.

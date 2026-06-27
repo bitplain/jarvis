@@ -69,6 +69,11 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_model: str = ""
 
+    web_search_provider: str = "disabled"
+    web_search_max_results: int = Field(default=5, ge=1, le=10)
+    tavily_api_key: str = ""
+    brave_search_api_key: str = ""
+
     log_level: str = "INFO"
 
     @property
