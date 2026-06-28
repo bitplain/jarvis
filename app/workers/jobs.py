@@ -16,6 +16,7 @@ from app.bot.streaming.text_limits import split_telegram_text
 from app.core.config import get_settings
 from app.db.models import MessageRole, utcnow
 from app.db.repositories.daily_brief import DailyBriefSettingsRepository
+from app.db.repositories.helpdesk_email_events import HelpdeskEmailEventRepository
 from app.db.repositories.household_memory import HouseholdMemoryRepository
 from app.db.repositories.messages import MessageRepository
 from app.db.repositories.reminders import ReminderRepository
@@ -26,6 +27,13 @@ from app.db.session import SessionLocal
 from app.llm.base import LLMProviderError
 from app.llm.factory import build_llm_provider
 from app.services.daily_brief_service import DailyBriefService
+from app.services.helpdesk_imap.client import HelpdeskImapClient
+from app.services.helpdesk_imap.config import HelpdeskImapConfig
+from app.services.helpdesk_imap.service import (
+    HelpdeskImapService,
+    TelegramHelpdeskNotifier,
+    record_helpdesk_status,
+)
 from app.services.household_memory_service import HouseholdMemoryService
 from app.services.memory_service import MemoryService
 from app.services.reminder_service import ReminderService, ReminderView
@@ -557,6 +565,39 @@ async def deliver_daily_briefs(ctx: dict[str, Any]) -> None:
                     brief_settings.id,
                     local_date,
                 )
+    finally:
+        await bot.session.close()
+
+
+async def check_helpdesk_imap_mailbox(ctx: dict[str, Any]) -> None:
+    settings = get_settings()
+    redis = ctx.get("redis") if isinstance(ctx, dict) else None
+    await record_worker_heartbeat(redis)
+    config = HelpdeskImapConfig.from_settings(settings)
+    if not config.enabled:
+        return
+    if not config.configured:
+        logger.warning(
+            "helpdesk_imap_config_incomplete",
+            extra={
+                "missing": ",".join(config.missing_required),
+                "host": "configured" if config.host else "missing",
+                "username": config.safe_username,
+            },
+        )
+        await record_helpdesk_status(redis, last_error="config")
+        return
+    bot = Bot(token=settings.telegram_bot_token)
+    try:
+        async with SessionLocal() as session:
+            service = HelpdeskImapService(
+                config=config,
+                repository=HelpdeskEmailEventRepository(session),
+                client=HelpdeskImapClient(config),
+                notifier=TelegramHelpdeskNotifier(bot),
+                redis=redis,
+            )
+            await service.run_once()
     finally:
         await bot.session.close()
 

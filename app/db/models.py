@@ -208,6 +208,32 @@ class WebSearchCache(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class HelpdeskEmailEvent(Base):
+    __tablename__ = "helpdesk_email_events"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    message_id: Mapped[str | None] = mapped_column(Text)
+    imap_uid: Mapped[str | None] = mapped_column(Text)
+    folder: Mapped[str] = mapped_column(Text, nullable=False)
+    subject: Mapped[str] = mapped_column(Text, nullable=False)
+    from_email_masked: Mapped[str | None] = mapped_column(Text)
+    received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    glpi_ticket_id: Mapped[str | None] = mapped_column(Text)
+    ticket_url: Mapped[str | None] = mapped_column(Text)
+    event_type: Mapped[str | None] = mapped_column(Text)
+    parse_status: Mapped[str] = mapped_column(Text, nullable=False)
+    notify_status: Mapped[str] = mapped_column(Text, nullable=False)
+    telegram_chat_id: Mapped[int | None] = mapped_column(BigInteger)
+    telegram_message_id: Mapped[int | None] = mapped_column(BigInteger)
+    error_code: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        onupdate=utcnow,
+    )
+
+
 class HouseholdMemoryEntry(Base):
     __tablename__ = "household_memory_entries"
     __table_args__ = (
@@ -522,3 +548,19 @@ Index(
     postgresql_where=DailyBriefSettings.user_id.is_(None),
 )
 Index("ix_web_search_cache_expires_at", WebSearchCache.expires_at)
+Index(
+    "uq_helpdesk_email_events_message_id",
+    HelpdeskEmailEvent.message_id,
+    unique=True,
+    postgresql_where=HelpdeskEmailEvent.message_id.is_not(None),
+)
+Index(
+    "uq_helpdesk_email_events_folder_imap_uid",
+    HelpdeskEmailEvent.folder,
+    HelpdeskEmailEvent.imap_uid,
+    unique=True,
+    postgresql_where=HelpdeskEmailEvent.imap_uid.is_not(None),
+)
+Index("ix_helpdesk_email_events_created_at", HelpdeskEmailEvent.created_at)
+Index("ix_helpdesk_email_events_notify_status", HelpdeskEmailEvent.notify_status)
+Index("ix_helpdesk_email_events_glpi_ticket_id", HelpdeskEmailEvent.glpi_ticket_id)
