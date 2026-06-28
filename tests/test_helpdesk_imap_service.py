@@ -92,14 +92,93 @@ class FakeHelpdeskRepository:
         self.failed.append((event_id, error_code))
 
 
+class FakeMailboxState:
+    def __init__(
+        self,
+        *,
+        folder: str = "INBOX",
+        uidvalidity: str | None = "100",
+        last_seen_uid: int | None = None,
+    ) -> None:
+        self.folder = folder
+        self.uidvalidity = uidvalidity
+        self.last_seen_uid = last_seen_uid
+
+
+class FakeMailboxStateRepository:
+    def __init__(self, state: FakeMailboxState | None = None) -> None:
+        self.state = state
+        self.saved: list[dict[str, object]] = []
+
+    async def get_state(self, *, folder: str) -> FakeMailboxState | None:
+        if self.state is None or self.state.folder != folder:
+            return None
+        return self.state
+
+    async def upsert_state(
+        self,
+        *,
+        folder: str,
+        uidvalidity: str | None,
+        last_seen_uid: int | None,
+        baseline: bool = False,
+        last_error_code: str | None = None,
+    ) -> FakeMailboxState:
+        self.state = FakeMailboxState(
+            folder=folder,
+            uidvalidity=uidvalidity,
+            last_seen_uid=last_seen_uid,
+        )
+        self.saved.append(
+            {
+                "folder": folder,
+                "uidvalidity": uidvalidity,
+                "last_seen_uid": last_seen_uid,
+                "baseline": baseline,
+                "last_error_code": last_error_code,
+            }
+        )
+        return self.state
+
+
 class FakeHelpdeskClient:
-    def __init__(self, messages: list[HelpdeskFetchedEmail] | None = None) -> None:
+    def __init__(
+        self,
+        messages: list[HelpdeskFetchedEmail] | None = None,
+        *,
+        uidvalidity: str | None = "100",
+        max_uid: int | None = None,
+    ) -> None:
         self.messages = messages or []
+        self.uidvalidity = uidvalidity
+        self.max_uid = max_uid
+        self.fetch_since_calls: list[int] = []
+        self.fetch_recent_calls = 0
         self.marked_seen: list[tuple[str, str]] = []
         self.closed = False
 
     async def fetch_recent(self) -> list[HelpdeskFetchedEmail]:
+        self.fetch_recent_calls += 1
         return self.messages
+
+    async def mailbox_snapshot(self) -> object:
+        return type(
+            "MailboxSnapshot",
+            (),
+            {
+                "folder": "INBOX",
+                "uidvalidity": self.uidvalidity,
+                "max_uid": self.max_uid,
+            },
+        )()
+
+    async def fetch_since(self, last_seen_uid: int) -> list[HelpdeskFetchedEmail]:
+        self.fetch_since_calls.append(last_seen_uid)
+        return [
+            message
+            for message in self.messages
+            if message.uid is not None and int(message.uid) > last_seen_uid
+        ]
 
     async def mark_seen(self, *, folder: str, uid: str) -> None:
         self.marked_seen.append((folder, uid))
@@ -114,6 +193,13 @@ class FailingHelpdeskClient(FakeHelpdeskClient):
         self.exc = exc
 
     async def fetch_recent(self) -> list[HelpdeskFetchedEmail]:
+        raise self.exc
+
+    async def mailbox_snapshot(self) -> object:
+        raise self.exc
+
+    async def fetch_since(self, last_seen_uid: int) -> list[HelpdeskFetchedEmail]:
+        del last_seen_uid
         raise self.exc
 
 
@@ -144,6 +230,121 @@ class FakeRedis:
         return True
 
 
+def _existing_state(last_seen_uid: int = 0) -> FakeMailboxStateRepository:
+    return FakeMailboxStateRepository(FakeMailboxState(last_seen_uid=last_seen_uid))
+
+
+@pytest.mark.asyncio
+async def test_helpdesk_service_first_poll_sets_baseline_without_notifications() -> None:
+    state_repository = FakeMailboxStateRepository()
+    repository = FakeHelpdeskRepository()
+    client = FakeHelpdeskClient(
+        [
+            _message(uid="10"),
+            _message(uid="11", message_id="<msg-2>"),
+            _message(uid="12", message_id="<msg-3>"),
+        ],
+        max_uid=12,
+    )
+    notifier = FakeNotifier()
+    service = HelpdeskImapService(
+        config=_config(),
+        repository=repository,  # type: ignore[arg-type]
+        state_repository=state_repository,  # type: ignore[arg-type]
+        client=client,
+        notifier=notifier,
+    )
+
+    result = await service.run_once()
+
+    assert result.status == "baseline_set"
+    assert result.processed == 0
+    assert notifier.sent == []
+    assert repository.events == []
+    assert state_repository.state is not None
+    assert state_repository.state.last_seen_uid == 12
+    assert state_repository.saved[-1]["baseline"] is True
+
+
+@pytest.mark.asyncio
+async def test_helpdesk_service_second_poll_processes_only_new_uid_after_baseline() -> None:
+    state_repository = FakeMailboxStateRepository(FakeMailboxState(last_seen_uid=12))
+    repository = FakeHelpdeskRepository()
+    client = FakeHelpdeskClient([_message(uid="13", message_id="<msg-13>")], max_uid=13)
+    notifier = FakeNotifier()
+    service = HelpdeskImapService(
+        config=_config(),
+        repository=repository,  # type: ignore[arg-type]
+        state_repository=state_repository,  # type: ignore[arg-type]
+        client=client,
+        notifier=notifier,
+    )
+
+    result = await service.run_once()
+
+    assert result.status == "ok"
+    assert result.processed == 1
+    assert client.fetch_since_calls == [12]
+    assert len(notifier.sent) == 1
+    assert state_repository.state is not None
+    assert state_repository.state.last_seen_uid == 13
+
+
+@pytest.mark.asyncio
+async def test_helpdesk_service_new_comment_email_after_baseline_is_not_skipped() -> None:
+    state_repository = FakeMailboxStateRepository(FakeMailboxState(last_seen_uid=12))
+    comment = _message(uid="13", message_id="<comment-13>")
+    comment = replace(
+        comment,
+        subject="[GLPI #0047513] Новый комментарий",
+        body=GLPI_BODY + "\nНовый комментарий:\nГотово.",
+    )
+    notifier = FakeNotifier()
+    service = HelpdeskImapService(
+        config=_config(),
+        repository=FakeHelpdeskRepository(),  # type: ignore[arg-type]
+        state_repository=state_repository,  # type: ignore[arg-type]
+        client=FakeHelpdeskClient([comment], max_uid=13),
+        notifier=notifier,
+    )
+
+    result = await service.run_once()
+
+    assert result.processed == 1
+    assert len(notifier.sent) == 1
+    assert notifier.sent[0].event_type == "comment"
+
+
+@pytest.mark.asyncio
+async def test_helpdesk_service_uidvalidity_change_resets_baseline_without_flood() -> None:
+    state_repository = FakeMailboxStateRepository(
+        FakeMailboxState(uidvalidity="old", last_seen_uid=12)
+    )
+    client = FakeHelpdeskClient(
+        [_message(uid="30", message_id="<old-30>")],
+        uidvalidity="new",
+        max_uid=30,
+    )
+    notifier = FakeNotifier()
+    service = HelpdeskImapService(
+        config=_config(),
+        repository=FakeHelpdeskRepository(),  # type: ignore[arg-type]
+        state_repository=state_repository,  # type: ignore[arg-type]
+        client=client,
+        notifier=notifier,
+    )
+
+    result = await service.run_once()
+
+    assert result.status == "baseline_reset"
+    assert result.processed == 0
+    assert notifier.sent == []
+    assert client.fetch_since_calls == []
+    assert state_repository.state is not None
+    assert state_repository.state.uidvalidity == "new"
+    assert state_repository.state.last_seen_uid == 30
+
+
 @pytest.mark.asyncio
 async def test_helpdesk_service_dedupes_same_message_id() -> None:
     repository = FakeHelpdeskRepository()
@@ -152,6 +353,7 @@ async def test_helpdesk_service_dedupes_same_message_id() -> None:
     service = HelpdeskImapService(
         config=_config(),
         repository=repository,  # type: ignore[arg-type]
+        state_repository=_existing_state(),  # type: ignore[arg-type]
         client=client,
         notifier=notifier,
     )
@@ -160,7 +362,7 @@ async def test_helpdesk_service_dedupes_same_message_id() -> None:
     second = await service.run_once()
 
     assert first.processed == 1
-    assert second.skipped_duplicates == 1
+    assert second.processed == 0
     assert len(notifier.sent) == 1
     assert len(repository.events) == 1
 
@@ -173,6 +375,7 @@ async def test_helpdesk_service_dedupes_same_folder_uid_without_message_id() -> 
     service = HelpdeskImapService(
         config=_config(),
         repository=repository,  # type: ignore[arg-type]
+        state_repository=_existing_state(),  # type: ignore[arg-type]
         client=client,
         notifier=notifier,
     )
@@ -192,6 +395,7 @@ async def test_helpdesk_service_telegram_failure_does_not_mark_seen() -> None:
     service = HelpdeskImapService(
         config=_config(mark_seen=True),
         repository=repository,  # type: ignore[arg-type]
+        state_repository=_existing_state(),  # type: ignore[arg-type]
         client=client,
         notifier=notifier,
     )
@@ -209,6 +413,7 @@ async def test_helpdesk_service_telegram_failure_updates_status_error() -> None:
     service = HelpdeskImapService(
         config=_config(mark_seen=True),
         repository=FakeHelpdeskRepository(),  # type: ignore[arg-type]
+        state_repository=_existing_state(),  # type: ignore[arg-type]
         client=FakeHelpdeskClient([_message()]),
         notifier=FakeNotifier(fail=True),
         redis=redis,
@@ -225,6 +430,7 @@ async def test_helpdesk_service_mark_seen_false_never_marks_seen() -> None:
     service = HelpdeskImapService(
         config=_config(mark_seen=False),
         repository=FakeHelpdeskRepository(),  # type: ignore[arg-type]
+        state_repository=_existing_state(),  # type: ignore[arg-type]
         client=client,
         notifier=FakeNotifier(),
     )
@@ -240,6 +446,7 @@ async def test_helpdesk_service_mark_seen_true_marks_seen_after_success() -> Non
     service = HelpdeskImapService(
         config=_config(mark_seen=True),
         repository=FakeHelpdeskRepository(),  # type: ignore[arg-type]
+        state_repository=_existing_state(),  # type: ignore[arg-type]
         client=client,
         notifier=FakeNotifier(),
     )
@@ -258,6 +465,7 @@ async def test_helpdesk_service_imap_failure_does_not_crash(exc: Exception) -> N
     service = HelpdeskImapService(
         config=_config(),
         repository=FakeHelpdeskRepository(),  # type: ignore[arg-type]
+        state_repository=_existing_state(),  # type: ignore[arg-type]
         client=FailingHelpdeskClient(exc),
         notifier=FakeNotifier(),
     )
@@ -273,6 +481,7 @@ async def test_helpdesk_service_skips_disabled_config() -> None:
     service = HelpdeskImapService(
         config=replace(_config(), enabled=False),
         repository=FakeHelpdeskRepository(),  # type: ignore[arg-type]
+        state_repository=_existing_state(),  # type: ignore[arg-type]
         client=FakeHelpdeskClient([_message()]),
         notifier=FakeNotifier(),
     )

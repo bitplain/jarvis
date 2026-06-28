@@ -16,6 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.bot.middlewares.access import is_admin_user
 from app.db.models import BusinessConnection, BusinessConnectionStatus
 from app.db.repositories.daily_brief import DailyBriefSettingsRepository
+from app.db.repositories.helpdesk_email_events import HelpdeskEmailEventRepository
+from app.db.repositories.helpdesk_imap_mailbox_state import HelpdeskImapMailboxStateRepository
 from app.db.repositories.household_memory import HouseholdMemoryRepository
 from app.db.repositories.messages import MessageRepository
 from app.db.repositories.reminders import ReminderRepository
@@ -31,6 +33,10 @@ from app.services.daily_brief_service import (
 from app.services.daily_brief_service import (
     DailyBriefSettingsInput as DailyBriefSettingsValue,
 )
+from app.services.helpdesk_imap.client import HelpdeskImapClient
+from app.services.helpdesk_imap.config import HelpdeskImapConfig
+from app.services.helpdesk_imap.parser import ParsedHelpdeskTicket
+from app.services.helpdesk_imap.service import HelpdeskImapService
 from app.services.household_memory_service import HouseholdMemoryService
 from app.services.memory_service import MemoryService
 from app.services.reminder_service import ReminderService
@@ -161,6 +167,12 @@ class DailyBriefSettingsInput(StatesGroup):
     timezone = State()
 
 
+class _BaselineNoopNotifier:
+    async def send_ticket(self, *, chat_id: int, ticket: ParsedHelpdeskTicket) -> int:
+        del chat_id, ticket
+        raise RuntimeError("baseline command must not send notifications")
+
+
 @dataclass(frozen=True)
 class AccessInput:
     telegram_ids: list[int]
@@ -221,6 +233,7 @@ async def cmd_help(message: Message) -> None:
         "/reset — очистить память\n"
         "/models — модели\n"
         "/status — статус\n"
+        "/helpdesk_baseline_now — обновить HelpDesk IMAP baseline\n"
         "/settings — настройки\n"
         "/summary — кратко пересказать последний переданный контекст\n"
         "/draft_reply — подготовить ответ\n"
@@ -1780,6 +1793,61 @@ async def cmd_status(message: Message, **data: Any) -> None:
     await message.answer(render_status_html(snapshot), parse_mode="HTML")
 
 
+async def cmd_helpdesk_baseline_now(message: Message, **data: Any) -> None:
+    settings = data["settings"]
+    bot_username = await _resolve_bot_username(data, settings.telegram_bot_username)
+    if _is_command_for_other_bot(message, bot_username):
+        return
+    user_id = _message_user_id(message)
+    if not is_admin_user(user_id, settings.admin_ids):
+        chat = getattr(message, "chat", None)
+        if getattr(chat, "type", "private") == "private":
+            await message.answer("Доступ запрещён.")
+        return
+    config = HelpdeskImapConfig.from_settings(settings)
+    if not config.enabled or not config.configured:
+        await message.answer("HelpDesk IMAP не настроен.")
+        return
+    injected_service = data.get("helpdesk_baseline_service")
+    if injected_service is not None:
+        result = await injected_service.baseline_now()
+    else:
+        session = data.get("db_session")
+        if isinstance(session, AsyncSession):
+            result = await _run_helpdesk_baseline_now(config=config, session=session)
+        else:
+            from app.db.session import SessionLocal
+
+            async with SessionLocal() as created_session:
+                result = await _run_helpdesk_baseline_now(
+                    config=config,
+                    session=created_session,
+                )
+    if getattr(result, "status", "") == "baseline_set":
+        last_seen_uid = getattr(result, "last_seen_uid", None)
+        await message.answer(
+            "HelpDesk baseline обновлён.\n"
+            f"Старые письма до UID {last_seen_uid or 0} больше не будут отправляться."
+        )
+        return
+    await message.answer("HelpDesk baseline не обновлён: IMAP временно недоступен.")
+
+
+async def _run_helpdesk_baseline_now(
+    *,
+    config: HelpdeskImapConfig,
+    session: AsyncSession,
+) -> object:
+    service = HelpdeskImapService(
+        config=config,
+        repository=HelpdeskEmailEventRepository(session),
+        state_repository=HelpdeskImapMailboxStateRepository(session),
+        client=HelpdeskImapClient(config),
+        notifier=_BaselineNoopNotifier(),
+    )
+    return await service.baseline_now()
+
+
 async def _handle_context_command(
     message: Message,
     data: dict[str, Any],
@@ -2322,6 +2390,7 @@ def build_router() -> Router:
     router.message(Command("whoami"))(cmd_whoami)
     router.message(Command("settings"))(cmd_settings)
     router.message(Command("status"))(cmd_status)
+    router.message(Command("helpdesk_baseline_now"))(cmd_helpdesk_baseline_now)
     router.message(Command("models"))(cmd_models)
     router.message(Command("reset"))(cmd_reset)
     router.message(Command("summary"))(cmd_summary)

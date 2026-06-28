@@ -2,7 +2,7 @@ from app.services.helpdesk_imap.formatter import build_helpdesk_ticket_card
 from app.services.helpdesk_imap.parser import ParsedHelpdeskTicket
 
 
-def test_helpdesk_formatter_escapes_html_and_creates_open_button() -> None:
+def test_helpdesk_formatter_escapes_html_and_omits_open_button_by_default() -> None:
     ticket = ParsedHelpdeskTicket(
         ticket_id="0047513",
         event_type="new_ticket",
@@ -30,12 +30,7 @@ def test_helpdesk_formatter_escapes_html_and_creates_open_button() -> None:
     assert "□ почта &lt;cofi.ru&gt;" in card.text
     assert "<script>" not in card.text
     assert "**" not in card.text
-    assert card.reply_markup is not None
-    assert card.reply_markup.inline_keyboard[0][0].text == "Открыть заявку"
-    assert (
-        card.reply_markup.inline_keyboard[0][0].url
-        == "https://sd.asdf.help/index.php?redirect=ticket_47513&noAUTO=1"
-    )
+    assert card.reply_markup is None
 
 
 def test_helpdesk_formatter_omits_invalid_url_button() -> None:

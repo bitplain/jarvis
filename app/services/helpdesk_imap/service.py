@@ -12,6 +12,7 @@ from app.services.helpdesk_imap.client import (
     HelpdeskFetchedEmail,
     HelpdeskImapAuthError,
     HelpdeskImapNetworkError,
+    HelpdeskMailboxSnapshot,
 )
 from app.services.helpdesk_imap.config import HelpdeskImapConfig
 from app.services.helpdesk_imap.formatter import build_helpdesk_ticket_card
@@ -48,8 +49,32 @@ class HelpdeskEventRepository(Protocol):
     async def mark_notify_failed(self, event_id: str, *, error_code: str) -> None: ...
 
 
+class HelpdeskMailboxState(Protocol):
+    folder: str
+    uidvalidity: str | None
+    last_seen_uid: int | None
+
+
+class HelpdeskMailboxStateRepository(Protocol):
+    async def get_state(self, *, folder: str) -> HelpdeskMailboxState | None: ...
+
+    async def upsert_state(
+        self,
+        *,
+        folder: str,
+        uidvalidity: str | None,
+        last_seen_uid: int | None,
+        baseline: bool = False,
+        last_error_code: str | None = None,
+    ) -> HelpdeskMailboxState: ...
+
+
 class HelpdeskClient(Protocol):
     async def fetch_recent(self) -> list[HelpdeskFetchedEmail]: ...
+
+    async def mailbox_snapshot(self) -> HelpdeskMailboxSnapshot: ...
+
+    async def fetch_since(self, last_seen_uid: int) -> list[HelpdeskFetchedEmail]: ...
 
     async def mark_seen(self, *, folder: str, uid: str) -> None: ...
 
@@ -81,6 +106,7 @@ class HelpdeskRunResult:
     skipped_filtered: int = 0
     failed: int = 0
     error_code: str | None = None
+    last_seen_uid: int | None = None
 
 
 class TelegramHelpdeskNotifier:
@@ -104,12 +130,14 @@ class HelpdeskImapService:
         *,
         config: HelpdeskImapConfig,
         repository: HelpdeskEventRepository,
+        state_repository: HelpdeskMailboxStateRepository,
         client: HelpdeskClient,
         notifier: HelpdeskNotifier,
         redis: RedisLike | None = None,
     ) -> None:
         self.config = config
         self.repository = repository
+        self.state_repository = state_repository
         self.client = client
         self.notifier = notifier
         self.redis = redis
@@ -138,11 +166,48 @@ class HelpdeskImapService:
         skipped_filtered = 0
         failed = 0
         last_error = "none"
+        current_last_seen_uid: int | None = None
         try:
-            messages = await self.client.fetch_recent()
+            snapshot = await self.client.mailbox_snapshot()
+            state = await self.state_repository.get_state(folder=self.config.folder)
+            if state is None:
+                baseline_uid = snapshot.max_uid or 0
+                await self.state_repository.upsert_state(
+                    folder=self.config.folder,
+                    uidvalidity=snapshot.uidvalidity,
+                    last_seen_uid=baseline_uid,
+                    baseline=True,
+                )
+                await record_helpdesk_status(self.redis, success=True, last_error=last_error)
+                return HelpdeskRunResult(status="baseline_set", last_seen_uid=baseline_uid)
+            if (
+                state.uidvalidity is not None
+                and snapshot.uidvalidity is not None
+                and state.uidvalidity != snapshot.uidvalidity
+            ):
+                baseline_uid = snapshot.max_uid or 0
+                logger.warning(
+                    "helpdesk_imap_uidvalidity_changed",
+                    extra={"folder": self.config.folder},
+                )
+                await self.state_repository.upsert_state(
+                    folder=self.config.folder,
+                    uidvalidity=snapshot.uidvalidity,
+                    last_seen_uid=baseline_uid,
+                    baseline=True,
+                )
+                await record_helpdesk_status(self.redis, success=True, last_error=last_error)
+                return HelpdeskRunResult(status="baseline_reset", last_seen_uid=baseline_uid)
+            current_last_seen_uid = state.last_seen_uid or 0
+            messages = await self.client.fetch_since(current_last_seen_uid)
             for message in messages:
+                message_uid = _uid_int(message.uid)
+                if message_uid is not None and message_uid <= current_last_seen_uid:
+                    skipped_duplicates += 1
+                    continue
                 if not self._candidate_matches(message):
                     skipped_filtered += 1
+                    current_last_seen_uid = _max_uid(current_last_seen_uid, message_uid)
                     continue
                 if await self.repository.exists(
                     folder=message.folder,
@@ -150,18 +215,30 @@ class HelpdeskImapService:
                     message_id=message.message_id,
                 ):
                     skipped_duplicates += 1
+                    current_last_seen_uid = _max_uid(current_last_seen_uid, message_uid)
                     continue
                 result = await self._process_message(message)
                 processed += result.processed
                 failed += result.failed
                 if result.error_code is not None:
                     last_error = result.error_code
+                current_last_seen_uid = _max_uid(current_last_seen_uid, message_uid)
+            current_last_seen_uid = _max_uid(current_last_seen_uid, snapshot.max_uid)
+            await self.state_repository.upsert_state(
+                folder=self.config.folder,
+                uidvalidity=snapshot.uidvalidity,
+                last_seen_uid=current_last_seen_uid,
+                baseline=False,
+                last_error_code=None if last_error == "none" else last_error,
+            )
             await record_helpdesk_status(self.redis, success=True, last_error=last_error)
         except HelpdeskImapAuthError:
+            await self._record_state_error("auth")
             await record_helpdesk_status(self.redis, last_error="auth")
             logger.warning("helpdesk_imap_auth_failed", extra=self.config.safe_summary())
             return HelpdeskRunResult(status="failed", error_code="auth")
         except HelpdeskImapNetworkError:
+            await self._record_state_error("network")
             await record_helpdesk_status(self.redis, last_error="network")
             logger.warning("helpdesk_imap_network_failed", extra=self.config.safe_summary())
             return HelpdeskRunResult(status="failed", error_code="network")
@@ -173,7 +250,51 @@ class HelpdeskImapService:
             skipped_duplicates=skipped_duplicates,
             skipped_filtered=skipped_filtered,
             failed=failed,
+            last_seen_uid=current_last_seen_uid,
         )
+
+    async def baseline_now(self) -> HelpdeskRunResult:
+        if not self.config.enabled or not self.config.configured:
+            return HelpdeskRunResult(status="config_incomplete", error_code="config")
+        try:
+            snapshot = await self.client.mailbox_snapshot()
+            baseline_uid = snapshot.max_uid or 0
+            await self.state_repository.upsert_state(
+                folder=self.config.folder,
+                uidvalidity=snapshot.uidvalidity,
+                last_seen_uid=baseline_uid,
+                baseline=True,
+            )
+            await record_helpdesk_status(self.redis, success=True, last_error="none")
+            return HelpdeskRunResult(status="baseline_set", last_seen_uid=baseline_uid)
+        except HelpdeskImapAuthError:
+            await self._record_state_error("auth")
+            await record_helpdesk_status(self.redis, last_error="auth")
+            logger.warning("helpdesk_imap_auth_failed", extra=self.config.safe_summary())
+            return HelpdeskRunResult(status="failed", error_code="auth")
+        except HelpdeskImapNetworkError:
+            await self._record_state_error("network")
+            await record_helpdesk_status(self.redis, last_error="network")
+            logger.warning("helpdesk_imap_network_failed", extra=self.config.safe_summary())
+            return HelpdeskRunResult(status="failed", error_code="network")
+        finally:
+            await self.client.close()
+
+    async def _record_state_error(self, error_code: str) -> None:
+        try:
+            state = await self.state_repository.get_state(folder=self.config.folder)
+            await self.state_repository.upsert_state(
+                folder=self.config.folder,
+                uidvalidity=getattr(state, "uidvalidity", None),
+                last_seen_uid=getattr(state, "last_seen_uid", None),
+                baseline=False,
+                last_error_code=error_code,
+            )
+        except Exception as exc:
+            logger.warning(
+                "helpdesk_imap_state_error_store_failed",
+                extra={"error_type": type(exc).__name__},
+            )
 
     def _candidate_matches(self, message: HelpdeskFetchedEmail) -> bool:
         if self.config.subject_prefix and not message.subject.startswith(
@@ -322,6 +443,19 @@ def _float_or_none(value: object) -> float | None:
         return float(str(value))
     except (TypeError, ValueError):
         return None
+
+
+def _uid_int(value: str | None) -> int | None:
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _max_uid(current: int, candidate: int | None) -> int:
+    if candidate is None:
+        return current
+    return max(current, candidate)
 
 
 def _now_iso() -> str:

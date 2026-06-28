@@ -440,16 +440,21 @@ HELPDESK_MARK_SEEN=false
 ```
 
 Worker job `check_helpdesk_imap_mailbox` запускается cron раз в минуту и внутри throttles polling по `HELPDESK_IMAP_POLL_INTERVAL_SECONDS`.
+При первом успешном включении worker ставит baseline по текущему максимальному UID mailbox и не отправляет старые письма из INBOX.
+После baseline worker читает только письма с UID больше сохранённого `last_seen_uid`; новый комментарий к старой заявке всё равно приходит как новое email message с новым UID и отправляется в Telegram.
+Ручной admin-only reset baseline доступен командой `/helpdesk_baseline_now`: команда подключается к IMAP, сохраняет текущий max UID и не отправляет уведомления за старые письма.
 Письма читаются через IMAP `BODY.PEEK[]`; MVP не помечает письма прочитанными, если `HELPDESK_MARK_SEEN=false`.
 Если `HELPDESK_MARK_SEEN=true`, письмо получает `Seen` только после успешной Telegram notification.
 
 Парсер deterministic и без LLM: извлекает GLPI ticket id, событие `Новая заявка`/`Новый комментарий`, URL, тему, описание, ФИО, должность, руководителя, дату выхода, список доступов, счётчики комментариев/задач и masked sender email.
-В Telegram отправляется HTML-safe карточка с кнопкой `Открыть заявку`, если URL имеет схему `http/https`.
+В Telegram отправляется HTML-safe карточка без кнопки `Открыть заявку`; внутренний ticket URL сохраняется в parsed/event данных, но не показывается как Telegram-кнопка.
 Все данные из письма экранируются через `html.escape`; тело письма целиком не логируется.
 
 Дедупликация хранится в PostgreSQL таблице `helpdesk_email_events` по `Message-ID` и `(folder, imap_uid)`.
 Повторный polling не создаёт повторную карточку.
-`/status` показывает sanitized блок HelpDesk IMAP: enabled/configured, host configured/missing, port, ssl, masked username, folder, telegram chat id configured/missing, missing config keys, last check/success/error, processed last 24h и pending notifications. `/status` не подключается к IMAP live.
+Mailbox baseline хранится в PostgreSQL таблице `helpdesk_imap_mailbox_state`.
+Если IMAP `UIDVALIDITY` изменился, worker безопасно ставит новый baseline на текущий max UID и не рассылает весь ящик заново.
+`/status` показывает sanitized блок HelpDesk IMAP: enabled/configured, host configured/missing, port, ssl, masked username, folder, telegram chat id configured/missing, missing config keys, Redis last check/success/error, baseline set/not set, last seen uid, mailbox last check/success/error, processed last 24h и pending notifications. `/status` не подключается к IMAP live.
 IMAP SSL использует default TLS context; если старый сервер отвечает `DH_KEY_TOO_SMALL`, client делает точечный legacy retry с `SECLEVEL=1`.
 
 Ограничения MVP:
