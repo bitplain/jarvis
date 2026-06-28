@@ -73,13 +73,19 @@ Reminder/hide buttons не входят в MVP.
 
 - enabled/configured;
 - host configured/missing;
+- port;
+- ssl;
 - masked username;
 - folder;
+- telegram chat id configured/missing;
+- missing config keys;
 - last check;
 - last success;
 - last error;
 - processed last 24h;
 - pending notifications.
+
+Hotfix note: для старых IMAP серверов, которые падают на TLS handshake с `DH_KEY_TOO_SMALL`, client делает точечный retry с legacy OpenSSL `SECLEVEL=1`. Остальные TLS ошибки не даунгрейдятся автоматически.
 
 ## Ограничения
 

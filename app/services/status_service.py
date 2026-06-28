@@ -200,8 +200,12 @@ class StatusService:
             "enabled": config.enabled,
             "configured": config.configured,
             "host": "configured" if config.host else "missing",
+            "port": config.port,
+            "ssl": config.ssl,
             "username": config.safe_username,
             "folder": config.folder,
+            "telegram_chat_id": "configured" if config.telegram_chat_id is not None else "missing",
+            "missing": ", ".join(config.missing_required) or "none",
             "last_check": await self._redis_text(HELPDESK_LAST_CHECK_KEY),
             "last_success": await self._redis_text(HELPDESK_LAST_SUCCESS_KEY),
             "last_error": await self._redis_text(HELPDESK_LAST_ERROR_KEY, default="none"),
@@ -244,8 +248,12 @@ def render_status_html(snapshot: dict[str, Any]) -> str:
         f"- enabled: {_yes_no(bool(helpdesk.get('enabled', False)))}\n"
         f"- configured: {_yes_no(bool(helpdesk.get('configured', False)))}\n"
         f"- host: {helpdesk.get('host', 'missing')}\n"
+        f"- port: {helpdesk.get('port', 'unknown')}\n"
+        f"- ssl: {_yes_no(bool(helpdesk.get('ssl', False)))}\n"
         f"- username: {helpdesk.get('username', 'missing')}\n"
         f"- folder: {helpdesk.get('folder', 'INBOX')}\n"
+        f"- telegram chat id: {helpdesk.get('telegram_chat_id', 'missing')}\n"
+        f"- missing: {helpdesk.get('missing', 'unknown')}\n"
         f"- last check: {helpdesk.get('last_check', 'unknown')}\n"
         f"- last success: {helpdesk.get('last_success', 'unknown')}\n"
         f"- last error: {helpdesk.get('last_error', 'unknown')}\n"
