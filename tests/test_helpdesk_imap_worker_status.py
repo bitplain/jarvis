@@ -70,7 +70,11 @@ async def test_status_collects_helpdesk_imap_without_live_imap_connection() -> N
     assert snapshot["helpdesk_imap"]["enabled"] is True
     assert snapshot["helpdesk_imap"]["configured"] is True
     assert snapshot["helpdesk_imap"]["host"] == "configured"
+    assert snapshot["helpdesk_imap"]["port"] == 993
+    assert snapshot["helpdesk_imap"]["ssl"] is True
     assert snapshot["helpdesk_imap"]["username"] == "s***t@example.ru"
+    assert snapshot["helpdesk_imap"]["telegram_chat_id"] == "configured"
+    assert snapshot["helpdesk_imap"]["missing"] == "none"
     assert snapshot["helpdesk_imap"]["processed_last_24h"] == 3
     assert snapshot["helpdesk_imap"]["pending_notifications"] == 1
     assert "real-password" not in str(snapshot)
@@ -94,8 +98,12 @@ def test_status_render_includes_helpdesk_imap_section_without_password() -> None
                 "enabled": True,
                 "configured": False,
                 "host": "missing",
+                "port": 993,
+                "ssl": True,
                 "username": "missing",
                 "folder": "INBOX",
+                "telegram_chat_id": "missing",
+                "missing": "helpdesk_imap_host, helpdesk_telegram_chat_id",
                 "last_check": "unknown",
                 "last_success": "unknown",
                 "last_error": "config",
@@ -108,6 +116,10 @@ def test_status_render_includes_helpdesk_imap_section_without_password() -> None
     assert "HelpDesk IMAP:" in rendered
     assert "- enabled: yes" in rendered
     assert "- configured: no" in rendered
+    assert "- port: 993" in rendered
+    assert "- ssl: yes" in rendered
+    assert "- telegram chat id: missing" in rendered
+    assert "- missing: helpdesk_imap_host, helpdesk_telegram_chat_id" in rendered
     assert "- last error: config" in rendered
     assert "password" not in rendered.lower()
 

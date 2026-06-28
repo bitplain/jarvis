@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import imaplib
+import ssl
 from dataclasses import dataclass
 from datetime import datetime
 from email import policy
@@ -56,7 +57,7 @@ class HelpdeskImapClient:
             return self._connection
         try:
             connection = (
-                imaplib.IMAP4_SSL(self.config.host, self.config.port)
+                self._connect_ssl()
                 if self.config.ssl
                 else imaplib.IMAP4(self.config.host, self.config.port)
             )
@@ -68,6 +69,20 @@ class HelpdeskImapClient:
             raise HelpdeskImapNetworkError("imap_network_failed") from exc
         self._connection = connection
         return connection
+
+    def _connect_ssl(self) -> Any:
+        try:
+            return imaplib.IMAP4_SSL(self.config.host, self.config.port)
+        except ssl.SSLError as exc:
+            if not _is_weak_dh_error(exc):
+                raise
+        legacy_context = ssl.create_default_context()
+        legacy_context.set_ciphers("DEFAULT:@SECLEVEL=1")
+        return imaplib.IMAP4_SSL(
+            self.config.host,
+            self.config.port,
+            ssl_context=legacy_context,
+        )
 
     def _fetch_recent_sync(self) -> list[HelpdeskFetchedEmail]:
         connection = self._connect()
@@ -152,3 +167,8 @@ def _parse_date(value: str) -> datetime | None:
         return parsedate_to_datetime(value)
     except (TypeError, ValueError):
         return None
+
+
+def _is_weak_dh_error(exc: ssl.SSLError) -> bool:
+    text = str(exc).lower()
+    return "dh_key_too_small" in text or "dh key too small" in text

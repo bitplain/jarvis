@@ -300,7 +300,8 @@
 - Обязательные runtime переменные при включении: `HELPDESK_IMAP_HOST`, `HELPDESK_IMAP_USERNAME`, `HELPDESK_IMAP_PASSWORD`, `HELPDESK_TELEGRAM_CHAT_ID`; порт/SSL/folder/filter/prefix/interval/mark-seen имеют defaults.
 - IMAP password никогда не вводится через Telegram и не показывается в `/settings`, `/status`, docs, logs или PR.
 - Worker job `check_helpdesk_imap_mailbox` делает polling, а не IMAP IDLE; если config disabled/incomplete, job no-op/sanitized warning и не падает.
-- `/status` показывает только stored diagnostics из Redis/PostgreSQL: enabled/configured, host configured/missing, masked username, folder, last check/success/error, processed last 24h и pending notifications. `/status` не подключается к IMAP live.
+- `/status` показывает только stored diagnostics из Redis/PostgreSQL: enabled/configured, host configured/missing, port, ssl, masked username, folder, telegram chat id configured/missing, missing config keys, last check/success/error, processed last 24h и pending notifications. `/status` не подключается к IMAP live.
+- IMAP SSL client использует default TLS context; legacy fallback `SECLEVEL=1` разрешён только точечно после `DH_KEY_TOO_SMALL` от старого IMAP сервера.
 - IMAP чтение использует `BODY.PEEK[]`; письма не помечаются прочитанными в MVP при `HELPDESK_MARK_SEEN=false`.
 - Если `HELPDESK_MARK_SEEN=true`, `Seen` ставится только после успешной Telegram notification.
 - GLPI parser deterministic и без LLM: поддерживает `Новая заявка`, `Новый комментарий`, `Заголовок`, `Описание`, `ФИО`, `Должность`, `Руководитель`, `Предварительная дата выхода`, `Настроить доступы`, URL и счётчики.
