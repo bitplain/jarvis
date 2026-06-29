@@ -174,7 +174,6 @@ async def run_readiness() -> HelpdeskTicketWorkflowReadinessResult:
                 "Доступ запрещён.",
             ]
         )
-        and "tiket" not in router.lower()
         else "MISSING"
     )
     result.statuses["worker_cron"] = (
@@ -250,7 +249,7 @@ async def run_readiness() -> HelpdeskTicketWorkflowReadinessResult:
             ]
         )
         and "Railway Variables не меняются" in docs
-        and "не закрепляется как API" in docs
+        and "другие алиасы не добавляются" in docs.lower()
         else "MISSING"
     )
     result.statuses["no_email_destructive_actions"] = (

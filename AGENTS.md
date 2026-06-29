@@ -322,7 +322,7 @@
 - Новая GLPI заявка создаёт/обновляет work item в статусе `waiting_ack`, добавляет в Telegram карточку кнопку `В работу`, ставит `reminder_interval_minutes=10` и `next_reminder_at=now+10m`.
 - Повторное письмо с тем же `glpi_ticket_id` не создаёт дубль; status `done` не переоткрывается автоматически для того же ticket id.
 - Callback `hd_ticket:take:<id>` доступен только admin/allowed user в текущем HelpDesk chat, переводит заявку в `in_work`, сохраняет `assigned_by_user_id`, `assigned_at`, `reminder_interval_minutes=30`, `next_reminder_at=now+30m`.
-- Команда `/ticket` показывает заявки в работе; алиас `/tiket` не добавляется и не закрепляется как API.
+- Команда `/ticket` показывает заявки в работе; другие алиасы не добавляются.
 - В карточке заявки в работе используются кнопки `Готово` и `Отложить 1ч`; callbacks `hd_ticket:done:<id>` и `hd_ticket:snooze:<id>:60` обязательно access-gated.
 - Worker cron `remind_helpdesk_tickets` запускается раз в минуту, использует Redis claim `helpdesk_ticket:reminder:<id>` против duplicate reminders и отправляет reminders только для `waiting_ack`/`in_work`.
 - Reminder `waiting_ack`: `Новая заявка GLPI #... ещё не взята в работу.` с кнопкой `В работу`; после успешной отправки следующий reminder через 10 минут.

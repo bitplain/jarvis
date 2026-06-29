@@ -218,5 +218,5 @@ async def test_private_admin_ticket_callback_uses_configured_helpdesk_chat() -> 
     assert "взята в работу" in callback.message.edits[0]["text"]
 
 
-def test_router_registers_only_ticket_command_without_tiket_alias() -> None:
+def test_router_registers_only_ticket_command() -> None:
     assert helpdesk_tickets.HELPDESK_TICKET_COMMANDS == ("ticket",)

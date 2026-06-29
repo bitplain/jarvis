@@ -117,7 +117,7 @@ Stage 4L-2 HelpDesk Ticket Workflow добавляет только рабоче
 - команда `/ticket` показывает заявки в статусе `in_work`;
 - callbacks `hd_ticket:take:<id>`, `hd_ticket:done:<id>`, `hd_ticket:snooze:<id>:60` меняют только work item state;
 - worker cron `remind_helpdesk_tickets` напоминает каждые 10 минут для `waiting_ack` и каждые 30 минут для `in_work`;
-- алиас `/tiket` не добавлен и не закрепляется как API.
+- другие алиасы команды `/ticket` не добавлены и не закрепляются как API.
 
 Эта extension не меняет IMAP чтение: нет email replies, удаления писем, destructive IMAP calls, Railway Variables changes или внутренней ticket URL button.
 

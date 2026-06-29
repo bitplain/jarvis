@@ -183,7 +183,7 @@ Stage 4L HelpDesk IMAP Inbox добавляет узкий polling path для �
 - `app/db/repositories/helpdesk_email_events.py` и `helpdesk_email_events` — event dedup/status storage.
 - `app/db/repositories/helpdesk_imap_mailbox_state.py` и `helpdesk_imap_mailbox_state` — mailbox baseline/state storage.
 - `app/db/repositories/helpdesk_ticket_work_items.py` и `helpdesk_ticket_work_items` — workflow storage по unique `(glpi_ticket_id, telegram_chat_id)`.
-- `app/bot/routers/helpdesk_tickets.py` — команда `/ticket` и callbacks `hd_ticket:*`; `/tiket` не регистрируется.
+- `app/bot/routers/helpdesk_tickets.py` — команда `/ticket` и callbacks `hd_ticket:*`; другие алиасы не регистрируются.
 
 Worker job `check_helpdesk_imap_mailbox` зарегистрирован в arq cron раз в минуту.
 Фактическая частота polling управляется `HELPDESK_IMAP_POLL_INTERVAL_SECONDS` через Redis throttle.
