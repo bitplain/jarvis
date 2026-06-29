@@ -41,6 +41,20 @@ class FakeCountResult:
 class FakeStatusSession:
     async def execute(self, statement: Any) -> FakeCountResult:
         rendered = str(statement)
+        if "helpdesk_imap_mailbox_state" in rendered:
+            row = (
+                "INBOX",
+                12345,
+                "2026-06-28T09:00:00+00:00",
+                "2026-06-28T09:05:00+00:00",
+                "2026-06-28T09:06:00+00:00",
+                None,
+            )
+            return type(
+                "FakeStateResult",
+                (),
+                {"one_or_none": lambda self: row},
+            )()
         if "helpdesk_email_events" in rendered and "notify_status" in rendered:
             return FakeCountResult(1)
         if "helpdesk_email_events" in rendered:
@@ -75,6 +89,11 @@ async def test_status_collects_helpdesk_imap_without_live_imap_connection() -> N
     assert snapshot["helpdesk_imap"]["username"] == "s***t@example.ru"
     assert snapshot["helpdesk_imap"]["telegram_chat_id"] == "configured"
     assert snapshot["helpdesk_imap"]["missing"] == "none"
+    assert snapshot["helpdesk_imap"]["baseline"] == "set"
+    assert snapshot["helpdesk_imap"]["last_seen_uid"] == 12345
+    assert snapshot["helpdesk_imap"]["mailbox_last_check"] == "2026-06-28T09:05:00+00:00"
+    assert snapshot["helpdesk_imap"]["mailbox_last_success"] == "2026-06-28T09:06:00+00:00"
+    assert snapshot["helpdesk_imap"]["mailbox_last_error"] == "none"
     assert snapshot["helpdesk_imap"]["processed_last_24h"] == 3
     assert snapshot["helpdesk_imap"]["pending_notifications"] == 1
     assert "real-password" not in str(snapshot)
@@ -107,6 +126,11 @@ def test_status_render_includes_helpdesk_imap_section_without_password() -> None
                 "last_check": "unknown",
                 "last_success": "unknown",
                 "last_error": "config",
+                "baseline": "set",
+                "last_seen_uid": 12345,
+                "mailbox_last_check": "2026-06-28T09:05:00+00:00",
+                "mailbox_last_success": "2026-06-28T09:06:00+00:00",
+                "mailbox_last_error": "none",
                 "processed_last_24h": 0,
                 "pending_notifications": 0,
             },
@@ -121,6 +145,11 @@ def test_status_render_includes_helpdesk_imap_section_without_password() -> None
     assert "- telegram chat id: missing" in rendered
     assert "- missing: helpdesk_imap_host, helpdesk_telegram_chat_id" in rendered
     assert "- last error: config" in rendered
+    assert "- baseline: set" in rendered
+    assert "- last seen uid: 12345" in rendered
+    assert "- mailbox last check: 2026-06-28T09:05:00+00:00" in rendered
+    assert "- mailbox last success: 2026-06-28T09:06:00+00:00" in rendered
+    assert "- mailbox last error: none" in rendered
     assert "password" not in rendered.lower()
 
 

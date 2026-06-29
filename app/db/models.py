@@ -234,6 +234,26 @@ class HelpdeskEmailEvent(Base):
     )
 
 
+class HelpdeskImapMailboxState(Base):
+    __tablename__ = "helpdesk_imap_mailbox_state"
+    __table_args__ = (UniqueConstraint("folder", name="uq_helpdesk_imap_mailbox_state_folder"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    folder: Mapped[str] = mapped_column(Text, nullable=False)
+    uidvalidity: Mapped[str | None] = mapped_column(Text)
+    last_seen_uid: Mapped[int | None] = mapped_column(BigInteger)
+    baseline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error_code: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        onupdate=utcnow,
+    )
+
+
 class HouseholdMemoryEntry(Base):
     __tablename__ = "household_memory_entries"
     __table_args__ = (
@@ -564,3 +584,4 @@ Index(
 Index("ix_helpdesk_email_events_created_at", HelpdeskEmailEvent.created_at)
 Index("ix_helpdesk_email_events_notify_status", HelpdeskEmailEvent.notify_status)
 Index("ix_helpdesk_email_events_glpi_ticket_id", HelpdeskEmailEvent.glpi_ticket_id)
+Index("ix_helpdesk_imap_mailbox_state_updated_at", HelpdeskImapMailboxState.updated_at)

@@ -8,7 +8,13 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
-from app.db.models import HelpdeskEmailEvent, Reminder, RuntimeSetting, TelegramAccessEntry
+from app.db.models import (
+    HelpdeskEmailEvent,
+    HelpdeskImapMailboxState,
+    Reminder,
+    RuntimeSetting,
+    TelegramAccessEntry,
+)
 from app.db.repositories.runtime_settings import RuntimeSettingRepository
 from app.services.helpdesk_imap.config import HelpdeskImapConfig
 from app.services.helpdesk_imap.service import (
@@ -178,6 +184,11 @@ class StatusService:
         config = HelpdeskImapConfig.from_settings(self.settings)
         processed_last_24h: int | None = None
         pending_notifications: int | None = None
+        baseline = "not set"
+        last_seen_uid: int | None = None
+        mailbox_last_check = "unknown"
+        mailbox_last_success = "unknown"
+        mailbox_last_error = "none"
         if self.session is not None and postgres_ok:
             try:
                 result = await self.session.execute(
@@ -192,6 +203,23 @@ class StatusService:
                     )
                 )
                 pending_notifications = int(result.scalar_one())
+                result = await self.session.execute(
+                    select(
+                        HelpdeskImapMailboxState.folder,
+                        HelpdeskImapMailboxState.last_seen_uid,
+                        HelpdeskImapMailboxState.baseline_at,
+                        HelpdeskImapMailboxState.last_check_at,
+                        HelpdeskImapMailboxState.last_success_at,
+                        HelpdeskImapMailboxState.last_error_code,
+                    ).where(HelpdeskImapMailboxState.folder == config.folder)
+                )
+                state_row = result.one_or_none()
+                if state_row is not None:
+                    baseline = "set" if state_row[2] is not None else "not set"
+                    last_seen_uid = state_row[1]
+                    mailbox_last_check = _iso_or_unknown(state_row[3])
+                    mailbox_last_success = _iso_or_unknown(state_row[4])
+                    mailbox_last_error = state_row[5] or "none"
             except Exception:
                 await self.session.rollback()
                 processed_last_24h = None
@@ -209,6 +237,11 @@ class StatusService:
             "last_check": await self._redis_text(HELPDESK_LAST_CHECK_KEY),
             "last_success": await self._redis_text(HELPDESK_LAST_SUCCESS_KEY),
             "last_error": await self._redis_text(HELPDESK_LAST_ERROR_KEY, default="none"),
+            "baseline": baseline,
+            "last_seen_uid": last_seen_uid,
+            "mailbox_last_check": mailbox_last_check,
+            "mailbox_last_success": mailbox_last_success,
+            "mailbox_last_error": mailbox_last_error,
             "processed_last_24h": processed_last_24h,
             "pending_notifications": pending_notifications,
         }
@@ -257,6 +290,11 @@ def render_status_html(snapshot: dict[str, Any]) -> str:
         f"- last check: {helpdesk.get('last_check', 'unknown')}\n"
         f"- last success: {helpdesk.get('last_success', 'unknown')}\n"
         f"- last error: {helpdesk.get('last_error', 'unknown')}\n"
+        f"- baseline: {helpdesk.get('baseline', 'not set')}\n"
+        f"- last seen uid: {_count(helpdesk.get('last_seen_uid'))}\n"
+        f"- mailbox last check: {helpdesk.get('mailbox_last_check', 'unknown')}\n"
+        f"- mailbox last success: {helpdesk.get('mailbox_last_success', 'unknown')}\n"
+        f"- mailbox last error: {helpdesk.get('mailbox_last_error', 'unknown')}\n"
         f"- processed last 24h: {_count(helpdesk.get('processed_last_24h'))}\n"
         f"- pending notifications: {_count(helpdesk.get('pending_notifications'))}\n\n"
         "Last checks:\n"
@@ -314,6 +352,14 @@ def _count(value: object) -> str:
     if isinstance(value, int | float | str | bytes | bytearray):
         return str(int(value))
     return "unknown"
+
+
+def _iso_or_unknown(value: object) -> str:
+    if value is None:
+        return "unknown"
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
 
 
 def _yes_no(value: bool) -> str:

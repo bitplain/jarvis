@@ -17,6 +17,7 @@ from app.core.config import get_settings
 from app.db.models import MessageRole, utcnow
 from app.db.repositories.daily_brief import DailyBriefSettingsRepository
 from app.db.repositories.helpdesk_email_events import HelpdeskEmailEventRepository
+from app.db.repositories.helpdesk_imap_mailbox_state import HelpdeskImapMailboxStateRepository
 from app.db.repositories.household_memory import HouseholdMemoryRepository
 from app.db.repositories.messages import MessageRepository
 from app.db.repositories.reminders import ReminderRepository
@@ -593,6 +594,7 @@ async def check_helpdesk_imap_mailbox(ctx: dict[str, Any]) -> None:
             service = HelpdeskImapService(
                 config=config,
                 repository=HelpdeskEmailEventRepository(session),
+                state_repository=HelpdeskImapMailboxStateRepository(session),
                 client=HelpdeskImapClient(config),
                 notifier=TelegramHelpdeskNotifier(bot),
                 redis=redis,

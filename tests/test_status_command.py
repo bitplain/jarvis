@@ -2,7 +2,7 @@ from typing import Any
 
 import pytest
 
-from app.bot.routers.commands import cmd_status
+from app.bot.routers.commands import cmd_helpdesk_baseline_now, cmd_status
 from app.core.config import Settings
 
 
@@ -58,3 +58,51 @@ async def test_status_command_for_other_bot_is_ignored() -> None:
     )
 
     assert message.answers == []
+
+
+@pytest.mark.asyncio
+async def test_helpdesk_baseline_now_admin_command_sets_baseline_without_notifications() -> None:
+    class FakeBaselineService:
+        async def baseline_now(self) -> object:
+            return type("BaselineResult", (), {"status": "baseline_set", "last_seen_uid": 12345})()
+
+    message = FakeMessage("/helpdesk_baseline_now")
+
+    await cmd_helpdesk_baseline_now(
+        message,  # type: ignore[arg-type]
+        settings=Settings(
+            admin_telegram_ids="100500",
+            helpdesk_imap_enabled=True,
+            helpdesk_imap_host="imap.example.ru",
+            helpdesk_imap_username="support@example.ru",
+            helpdesk_imap_password="real-password",
+            helpdesk_telegram_chat_id="-1001234567890",
+        ),
+        helpdesk_baseline_service=FakeBaselineService(),
+    )
+
+    assert message.answers == [
+        {
+            "text": (
+                "HelpDesk baseline обновлён.\n"
+                "Старые письма до UID 12345 больше не будут отправляться."
+            )
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_helpdesk_baseline_now_reports_not_configured_without_imap_call() -> None:
+    class UnexpectedBaselineService:
+        async def baseline_now(self) -> object:
+            raise AssertionError("baseline service must not be called")
+
+    message = FakeMessage("/helpdesk_baseline_now")
+
+    await cmd_helpdesk_baseline_now(
+        message,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500", helpdesk_imap_enabled=False),
+        helpdesk_baseline_service=UnexpectedBaselineService(),
+    )
+
+    assert message.answers == [{"text": "HelpDesk IMAP не настроен."}]

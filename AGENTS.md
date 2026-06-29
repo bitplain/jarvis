@@ -300,12 +300,16 @@
 - Обязательные runtime переменные при включении: `HELPDESK_IMAP_HOST`, `HELPDESK_IMAP_USERNAME`, `HELPDESK_IMAP_PASSWORD`, `HELPDESK_TELEGRAM_CHAT_ID`; порт/SSL/folder/filter/prefix/interval/mark-seen имеют defaults.
 - IMAP password никогда не вводится через Telegram и не показывается в `/settings`, `/status`, docs, logs или PR.
 - Worker job `check_helpdesk_imap_mailbox` делает polling, а не IMAP IDLE; если config disabled/incomplete, job no-op/sanitized warning и не падает.
-- `/status` показывает только stored diagnostics из Redis/PostgreSQL: enabled/configured, host configured/missing, port, ssl, masked username, folder, telegram chat id configured/missing, missing config keys, last check/success/error, processed last 24h и pending notifications. `/status` не подключается к IMAP live.
+- При первом успешном включении HelpDesk IMAP без mailbox state worker ставит baseline на текущий максимальный UID и не отправляет старые письма из INBOX.
+- После baseline worker обрабатывает только новые письма с UID больше сохранённого `last_seen_uid`; новый комментарий к старой заявке должен отправляться, потому что это новое email message с новым UID.
+- Если IMAP `UIDVALIDITY` изменился, worker безопасно ставит новый baseline на current max UID, логирует sanitized `helpdesk_imap_uidvalidity_changed` и не рассылает весь mailbox заново.
+- Admin-only команда `/helpdesk_baseline_now` подключается к IMAP, сохраняет текущий max UID как baseline и не отправляет Telegram notifications за старые письма.
+- `/status` показывает только stored diagnostics из Redis/PostgreSQL: enabled/configured, host configured/missing, port, ssl, masked username, folder, telegram chat id configured/missing, missing config keys, last check/success/error, baseline set/not set, last seen uid, mailbox last check/success/error, processed last 24h и pending notifications. `/status` не подключается к IMAP live.
 - IMAP SSL client использует default TLS context; legacy fallback `SECLEVEL=1` разрешён только точечно после `DH_KEY_TOO_SMALL` от старого IMAP сервера.
 - IMAP чтение использует `BODY.PEEK[]`; письма не помечаются прочитанными в MVP при `HELPDESK_MARK_SEEN=false`.
 - Если `HELPDESK_MARK_SEEN=true`, `Seen` ставится только после успешной Telegram notification.
 - GLPI parser deterministic и без LLM: поддерживает `Новая заявка`, `Новый комментарий`, `Заголовок`, `Описание`, `ФИО`, `Должность`, `Руководитель`, `Предварительная дата выхода`, `Настроить доступы`, URL и счётчики.
-- Telegram карточка заявки использует safe HTML; весь текст из email проходит escaping, URL button добавляется только для `http/https`.
+- Telegram карточка заявки использует safe HTML; весь текст из email проходит escaping; кнопка `Открыть заявку` не отправляется по умолчанию, потому что HelpDesk URL внутренний.
 - Дедупликация хранится в PostgreSQL `helpdesk_email_events` по `Message-ID` и `(folder, imap_uid)`, чтобы повторный polling не создавал duplicate Telegram cards.
 - В логах нельзя печатать тело письма целиком, raw email, полный sender email, IMAP password, Telegram token, API keys, Authorization headers или provider response body.
 - Stage 4L не включает Telegram-ввод пароля, несколько mailbox-ов, email replies, удаление писем, mark-seen по умолчанию, RAG/OCR, Smart Watcher, multi-mailbox UI и live destructive Telegram calls.
