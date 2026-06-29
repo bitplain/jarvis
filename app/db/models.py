@@ -234,6 +234,43 @@ class HelpdeskEmailEvent(Base):
     )
 
 
+class HelpdeskTicketWorkItem(Base):
+    __tablename__ = "helpdesk_ticket_work_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "glpi_ticket_id",
+            "telegram_chat_id",
+            name="uq_helpdesk_ticket_work_items_ticket_chat",
+        ),
+        CheckConstraint(
+            "status IN ('waiting_ack', 'in_work', 'done', 'dismissed')",
+            name="ck_helpdesk_ticket_work_items_status",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    glpi_ticket_id: Mapped[str] = mapped_column(Text, nullable=False)
+    latest_event_id: Mapped[UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("helpdesk_email_events.id", ondelete="SET NULL"),
+    )
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    telegram_chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    assigned_by_user_id: Mapped[int | None] = mapped_column(BigInteger)
+    assigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    done_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_reminder_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_reminded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reminder_interval_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        onupdate=utcnow,
+    )
+
+
 class HelpdeskImapMailboxState(Base):
     __tablename__ = "helpdesk_imap_mailbox_state"
     __table_args__ = (UniqueConstraint("folder", name="uq_helpdesk_imap_mailbox_state_folder"),)
@@ -584,4 +621,14 @@ Index(
 Index("ix_helpdesk_email_events_created_at", HelpdeskEmailEvent.created_at)
 Index("ix_helpdesk_email_events_notify_status", HelpdeskEmailEvent.notify_status)
 Index("ix_helpdesk_email_events_glpi_ticket_id", HelpdeskEmailEvent.glpi_ticket_id)
+Index(
+    "ix_helpdesk_ticket_work_items_status_next",
+    HelpdeskTicketWorkItem.status,
+    HelpdeskTicketWorkItem.next_reminder_at,
+)
+Index(
+    "ix_helpdesk_ticket_work_items_chat_status",
+    HelpdeskTicketWorkItem.telegram_chat_id,
+    HelpdeskTicketWorkItem.status,
+)
 Index("ix_helpdesk_imap_mailbox_state_updated_at", HelpdeskImapMailboxState.updated_at)

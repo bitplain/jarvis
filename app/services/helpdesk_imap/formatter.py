@@ -6,6 +6,7 @@ from html import escape
 from aiogram.types import InlineKeyboardMarkup
 
 from app.services.helpdesk_imap.parser import ParsedHelpdeskTicket
+from app.services.helpdesk_ticket_workflow import build_waiting_ack_keyboard
 
 TELEGRAM_HTML_LIMIT = 4096
 
@@ -16,7 +17,11 @@ class HelpdeskTicketCard:
     reply_markup: InlineKeyboardMarkup | None
 
 
-def build_helpdesk_ticket_card(ticket: ParsedHelpdeskTicket) -> HelpdeskTicketCard:
+def build_helpdesk_ticket_card(
+    ticket: ParsedHelpdeskTicket,
+    *,
+    work_item_id: str | None = None,
+) -> HelpdeskTicketCard:
     ticket_number = ticket.ticket_id or "unknown"
     icon = "💬" if ticket.event_type == "comment" else "🆕"
     lines = [f"{icon} <b>Заявка GLPI #{escape(ticket_number)}</b>", ""]
@@ -43,7 +48,8 @@ def build_helpdesk_ticket_card(ticket: ParsedHelpdeskTicket) -> HelpdeskTicketCa
     text = "\n".join(lines).strip()
     if len(text) > TELEGRAM_HTML_LIMIT:
         text = text[: TELEGRAM_HTML_LIMIT - 1] + "…"
-    return HelpdeskTicketCard(text=text, reply_markup=None)
+    reply_markup = build_waiting_ack_keyboard(work_item_id) if work_item_id else None
+    return HelpdeskTicketCard(text=text, reply_markup=reply_markup)
 
 
 def _clip(value: str, limit: int) -> str:

@@ -33,6 +33,33 @@ def test_helpdesk_formatter_escapes_html_and_omits_open_button_by_default() -> N
     assert card.reply_markup is None
 
 
+def test_helpdesk_formatter_adds_take_button_for_waiting_work_item() -> None:
+    ticket = ParsedHelpdeskTicket(
+        ticket_id="0047513",
+        event_type="new_ticket",
+        ticket_url=None,
+        title="Выход нового сотрудника",
+        employee_full_name=None,
+        position=None,
+        manager=None,
+        start_date=None,
+        access_items=[],
+        comment_count=None,
+        task_count=None,
+        sender_name=None,
+        sender_email_masked=None,
+        raw_excerpt="",
+        parse_status="parsed",
+    )
+
+    card = build_helpdesk_ticket_card(ticket, work_item_id="work-123")
+
+    assert card.reply_markup is not None
+    button = card.reply_markup.inline_keyboard[0][0]
+    assert button.text == "В работу"
+    assert button.callback_data == "hd_ticket:take:work-123"
+
+
 def test_helpdesk_formatter_omits_invalid_url_button() -> None:
     ticket = ParsedHelpdeskTicket(
         ticket_id="0047513",

@@ -235,12 +235,53 @@ class FakeNotifier:
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
         self.sent: list[object] = []
+        self.work_item_ids: list[str | None] = []
 
-    async def send_ticket(self, *, chat_id: int, ticket: object) -> int:
+    async def send_ticket(
+        self,
+        *,
+        chat_id: int,
+        ticket: object,
+        work_item_id: str | None = None,
+    ) -> int:
         self.sent.append(ticket)
+        self.work_item_ids.append(work_item_id)
         if self.fail:
             raise RuntimeError("telegram unavailable")
         return 9001
+
+
+class FakeTicketWorkflowRepository:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+        self.item_id = "ticket-work-1"
+
+    async def upsert_waiting_ack(
+        self,
+        *,
+        glpi_ticket_id: str,
+        latest_event_id: str | None,
+        title: str,
+        telegram_chat_id: int,
+        now: object,
+    ) -> object:
+        self.calls.append(
+            {
+                "glpi_ticket_id": glpi_ticket_id,
+                "latest_event_id": latest_event_id,
+                "title": title,
+                "telegram_chat_id": telegram_chat_id,
+                "now": now,
+            }
+        )
+        return type(
+            "WorkItem",
+            (),
+            {
+                "id": self.item_id,
+                "status": "waiting_ack",
+            },
+        )()
 
 
 class FakeRedis:
@@ -316,6 +357,35 @@ async def test_helpdesk_service_second_poll_processes_only_new_uid_after_baselin
     assert len(notifier.sent) == 1
     assert state_repository.state is not None
     assert state_repository.state.last_seen_uid == 13
+
+
+@pytest.mark.asyncio
+async def test_helpdesk_service_creates_waiting_work_item_before_new_ticket_card() -> None:
+    repository = FakeHelpdeskRepository()
+    workflow_repository = FakeTicketWorkflowRepository()
+    notifier = FakeNotifier()
+    service = HelpdeskImapService(
+        config=_config(),
+        repository=repository,  # type: ignore[arg-type]
+        state_repository=_existing_state(),  # type: ignore[arg-type]
+        client=FakeHelpdeskClient([_message(uid="13", message_id="<msg-13>")], max_uid=13),
+        notifier=notifier,
+        ticket_work_repository=workflow_repository,  # type: ignore[arg-type]
+    )
+
+    result = await service.run_once()
+
+    assert result.processed == 1
+    assert workflow_repository.calls == [
+        {
+            "glpi_ticket_id": "0047513",
+            "latest_event_id": "event-1",
+            "title": "Выход нового сотрудника",
+            "telegram_chat_id": -1001234567890,
+            "now": workflow_repository.calls[0]["now"],
+        }
+    ]
+    assert notifier.work_item_ids == ["ticket-work-1"]
 
 
 @pytest.mark.asyncio

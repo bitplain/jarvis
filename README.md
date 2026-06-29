@@ -457,6 +457,23 @@ Mailbox baseline хранится в PostgreSQL таблице `helpdesk_imap_ma
 `/status` показывает sanitized блок HelpDesk IMAP: enabled/configured, host configured/missing, port, ssl, masked username, folder, telegram chat id configured/missing, missing config keys, Redis last check/success/error, baseline set/not set, last seen uid, mailbox last check/success/error, processed last 24h, pending notifications и failed notifications. Если failed notifications > 0, `/status` показывает короткое attention-предупреждение. `/status` не подключается к IMAP live.
 IMAP SSL использует default TLS context; если старый сервер отвечает `DH_KEY_TOO_SMALL`, client делает точечный legacy retry с `SECLEVEL=1`.
 
+### Stage 4L-2 HelpDesk Ticket Workflow
+
+Stage 4L-2 добавляет рабочий процесс поверх карточек GLPI: новая заявка получает статус `waiting_ack`, кнопку `В работу` и reminder через 10 минут. После нажатия `В работу` заявка переходит в `in_work`, появляется в `/ticket`, а reminders идут каждые 30 минут до `Готово`.
+
+Данные хранятся в PostgreSQL таблице `helpdesk_ticket_work_items` с unique `(glpi_ticket_id, telegram_chat_id)`. Повторное письмо по тому же GLPI ticket id обновляет `latest_event_id`/title и не создаёт дубль. Статус `done` не переоткрывается автоматически для того же ticket id.
+
+Команды и кнопки:
+
+- `/ticket` — показывает заявки в работе; алиас `/tiket` не добавляется и не закрепляется как API.
+- `В работу` — callback `hd_ticket:take:<id>`, переводит заявку в `in_work`.
+- `Готово` — callback `hd_ticket:done:<id>`, переводит заявку в `done` и выключает reminders.
+- `Отложить 1ч` — callback `hd_ticket:snooze:<id>:60`, переносит `next_reminder_at` на +1 час.
+
+Worker cron `remind_helpdesk_tickets` запускается раз в минуту, использует Redis claim `helpdesk_ticket:reminder:<id>` и продвигает `next_reminder_at` только после успешной Telegram отправки. Если Telegram send падает, reminder не теряется и будет повторён позже.
+
+Все email-derived поля в Telegram HTML экранируются; callback data не содержит title/body/URL. Внутренняя URL-кнопка заявки по-прежнему не отправляется. Railway Variables не меняются из кода или PR.
+
 Ограничения MVP:
 
 - один mailbox;

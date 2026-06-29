@@ -315,6 +315,22 @@
 - Stage 4L не включает Telegram-ввод пароля, несколько mailbox-ов, email replies, удаление писем, mark-seen по умолчанию, RAG/OCR, Smart Watcher, multi-mailbox UI и live destructive Telegram calls.
 - Railway Variables не меняются в PR; после merge пользователь добавляет их вручную в Railway UI.
 
+## Stage 4L-2 HelpDesk Ticket Workflow
+
+- Stage 4L-2 добавляет workflow заявок поверх уже принятого HelpDesk IMAP inbox: email reading остаётся read-only через `BODY.PEEK[]`, без email replies, удаления писем и mark-seen по умолчанию.
+- Work items хранятся в PostgreSQL `helpdesk_ticket_work_items` по unique `(glpi_ticket_id, telegram_chat_id)`.
+- Новая GLPI заявка создаёт/обновляет work item в статусе `waiting_ack`, добавляет в Telegram карточку кнопку `В работу`, ставит `reminder_interval_minutes=10` и `next_reminder_at=now+10m`.
+- Повторное письмо с тем же `glpi_ticket_id` не создаёт дубль; status `done` не переоткрывается автоматически для того же ticket id.
+- Callback `hd_ticket:take:<id>` доступен только admin/allowed user в текущем HelpDesk chat, переводит заявку в `in_work`, сохраняет `assigned_by_user_id`, `assigned_at`, `reminder_interval_minutes=30`, `next_reminder_at=now+30m`.
+- Команда `/ticket` показывает заявки в работе; алиас `/tiket` не добавляется и не закрепляется как API.
+- В карточке заявки в работе используются кнопки `Готово` и `Отложить 1ч`; callbacks `hd_ticket:done:<id>` и `hd_ticket:snooze:<id>:60` обязательно access-gated.
+- Worker cron `remind_helpdesk_tickets` запускается раз в минуту, использует Redis claim `helpdesk_ticket:reminder:<id>` против duplicate reminders и отправляет reminders только для `waiting_ack`/`in_work`.
+- Reminder `waiting_ack`: `Новая заявка GLPI #... ещё не взята в работу.` с кнопкой `В работу`; после успешной отправки следующий reminder через 10 минут.
+- Reminder `in_work`: `Заявка GLPI #... всё ещё в работе.` с кнопками `Готово` и `Отложить 1ч`; после успешной отправки следующий reminder через 30 минут.
+- Telegram send failure не продвигает `next_reminder_at`; retry остаётся возможен на следующем cron run.
+- Все Telegram HTML тексты экранируют пользовательские/email-derived поля через `html.escape`; callback data не содержит email body, title, URL или secrets.
+- Stage 4L-2 не добавляет внутреннюю ticket URL button, Railway Variables changes, destructive Telegram/IMAP calls, Smart Watcher, RAG/OCR, multi-mailbox UI и чтение/ответы на письма.
+
 ## Logging Hygiene
 
 - Normal operational app logs уровня `DEBUG`/`INFO` должны писаться в stdout; реальные warning/error/exception остаются на stderr.

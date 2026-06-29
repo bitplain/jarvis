@@ -42,6 +42,15 @@ def test_daily_brief_worker_is_registered() -> None:
     )
 
 
+def test_helpdesk_ticket_reminder_worker_is_registered() -> None:
+    assert jobs.remind_helpdesk_tickets in WorkerSettings.functions
+    assert any(
+        getattr(cron_job, "coroutine", None) is jobs.remind_helpdesk_tickets
+        or getattr(cron_job, "name", "") == "cron:remind_helpdesk_tickets"
+        for cron_job in WorkerSettings.cron_jobs
+    )
+
+
 class FakeBot:
     instances: list["FakeBot"] = []
 
@@ -69,6 +78,12 @@ class HtmlFailingBot(FakeBot):
         if kwargs.get("parse_mode") == "HTML":
             raise RuntimeError("bad html")
         await super().send_message(chat_id=chat_id, text=text, **kwargs)
+
+
+class FailingSendBot(FakeBot):
+    async def send_message(self, *, chat_id: int, text: str, **kwargs: object) -> None:
+        del chat_id, text, kwargs
+        raise RuntimeError("telegram unavailable")
 
 
 class FakeProvider:
@@ -191,6 +206,42 @@ class FakeReminderRepository:
             self.sent_ids.append(reminder_id)
             self.is_sent = True
         return None
+
+
+class FakeHelpdeskTicketRepository:
+    instances: list["FakeHelpdeskTicketRepository"] = []
+
+    def __init__(self, session: object) -> None:
+        del session
+        self.reminded: list[str] = []
+        self.items = [
+            SimpleNamespace(
+                id="ticket-1",
+                glpi_ticket_id="0047513",
+                latest_event_id=None,
+                title="Выход <нового> сотрудника",
+                status="waiting_ack",
+                telegram_chat_id=-100123,
+                assigned_by_user_id=None,
+                assigned_at=None,
+                done_at=None,
+                next_reminder_at=datetime(2026, 6, 29, 9, 0, tzinfo=UTC),
+                last_reminded_at=None,
+                reminder_interval_minutes=10,
+                created_at=datetime(2026, 6, 29, 8, 50, tzinfo=UTC),
+                updated_at=datetime(2026, 6, 29, 8, 50, tzinfo=UTC),
+            )
+        ]
+        self.__class__.instances.append(self)
+
+    async def due_reminders(self, now: object, *, limit: int) -> list[object]:
+        del now, limit
+        return list(self.items)
+
+    async def mark_reminded(self, item_id: str, *, now: object) -> object | None:
+        del now
+        self.reminded.append(item_id)
+        return self.items[0]
 
 
 class FakeRuntimeSettingsService:
@@ -568,6 +619,61 @@ async def test_deliver_due_reminders_sends_html_and_marks_sent(
     assert bot.send_message_kwargs == {"parse_mode": "HTML"}
     assert repository.sent_ids == ["abc123"]
     assert bot.closed is True
+
+
+@pytest.mark.asyncio
+async def test_remind_helpdesk_tickets_sends_html_and_advances_after_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    FakeBot.instances = []
+    FakeHelpdeskTicketRepository.instances = []
+    redis = FakeRedis()
+    monkeypatch.setattr(jobs, "Bot", FakeBot)
+    monkeypatch.setattr(
+        jobs,
+        "get_settings",
+        lambda: Settings(telegram_bot_token="123456:secret-token"),
+    )
+    monkeypatch.setattr(jobs, "SessionLocal", FakeSessionLocal())
+    monkeypatch.setattr(jobs, "HelpdeskTicketWorkItemRepository", FakeHelpdeskTicketRepository)
+    monkeypatch.setattr(jobs, "utcnow", lambda: datetime(2026, 6, 29, 9, 0, tzinfo=UTC))
+
+    await jobs.remind_helpdesk_tickets({"redis": redis})
+
+    bot = FakeBot.instances[0]
+    repository = FakeHelpdeskTicketRepository.instances[0]
+    assert bot.sent_messages == [
+        (
+            -100123,
+            "Новая заявка GLPI #0047513 ещё не взята в работу.\n\n"
+            "<blockquote>Выход &lt;нового&gt; сотрудника</blockquote>",
+        )
+    ]
+    assert bot.send_message_kwargs["parse_mode"] == "HTML"
+    assert repository.reminded == ["ticket-1"]
+    assert redis.set_calls == [("helpdesk_ticket:reminder:ticket-1", 120, True)]
+
+
+@pytest.mark.asyncio
+async def test_remind_helpdesk_tickets_send_failure_does_not_advance_reminder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    FakeBot.instances = []
+    FakeHelpdeskTicketRepository.instances = []
+    monkeypatch.setattr(jobs, "Bot", FailingSendBot)
+    monkeypatch.setattr(
+        jobs,
+        "get_settings",
+        lambda: Settings(telegram_bot_token="123456:secret-token"),
+    )
+    monkeypatch.setattr(jobs, "SessionLocal", FakeSessionLocal())
+    monkeypatch.setattr(jobs, "HelpdeskTicketWorkItemRepository", FakeHelpdeskTicketRepository)
+    monkeypatch.setattr(jobs, "utcnow", lambda: datetime(2026, 6, 29, 9, 0, tzinfo=UTC))
+
+    await jobs.remind_helpdesk_tickets({"redis": FakeRedis()})
+
+    repository = FakeHelpdeskTicketRepository.instances[0]
+    assert repository.reminded == []
 
 
 @pytest.mark.asyncio

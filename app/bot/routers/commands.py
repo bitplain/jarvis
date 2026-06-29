@@ -168,8 +168,14 @@ class DailyBriefSettingsInput(StatesGroup):
 
 
 class _BaselineNoopNotifier:
-    async def send_ticket(self, *, chat_id: int, ticket: ParsedHelpdeskTicket) -> int:
-        del chat_id, ticket
+    async def send_ticket(
+        self,
+        *,
+        chat_id: int,
+        ticket: ParsedHelpdeskTicket,
+        work_item_id: str | None = None,
+    ) -> int:
+        del chat_id, ticket, work_item_id
         raise RuntimeError("baseline command must not send notifications")
 
 
@@ -234,6 +240,7 @@ async def cmd_help(message: Message) -> None:
         "/models — модели\n"
         "/status — статус\n"
         "/helpdesk_baseline_now — обновить HelpDesk IMAP baseline\n"
+        "/ticket — заявки HelpDesk в работе\n"
         "/settings — настройки\n"
         "/summary — кратко пересказать последний переданный контекст\n"
         "/draft_reply — подготовить ответ\n"
