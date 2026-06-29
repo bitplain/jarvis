@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from email.utils import parseaddr
 from typing import Protocol
 
@@ -17,6 +18,7 @@ from app.services.helpdesk_imap.client import (
 from app.services.helpdesk_imap.config import HelpdeskImapConfig
 from app.services.helpdesk_imap.formatter import build_helpdesk_ticket_card
 from app.services.helpdesk_imap.parser import ParsedHelpdeskTicket, parse_glpi_email
+from app.services.helpdesk_ticket_workflow import WAITING_ACK, StoredHelpdeskTicketWorkItem
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +92,25 @@ class HelpdeskClient(Protocol):
 
 
 class HelpdeskNotifier(Protocol):
-    async def send_ticket(self, *, chat_id: int, ticket: ParsedHelpdeskTicket) -> int: ...
+    async def send_ticket(
+        self,
+        *,
+        chat_id: int,
+        ticket: ParsedHelpdeskTicket,
+        work_item_id: str | None = None,
+    ) -> int: ...
+
+
+class HelpdeskTicketWorkRepository(Protocol):
+    async def upsert_waiting_ack(
+        self,
+        *,
+        glpi_ticket_id: str,
+        latest_event_id: str | None,
+        title: str,
+        telegram_chat_id: int,
+        now: datetime,
+    ) -> StoredHelpdeskTicketWorkItem: ...
 
 
 class RedisLike(Protocol):
@@ -121,8 +141,14 @@ class TelegramHelpdeskNotifier:
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
 
-    async def send_ticket(self, *, chat_id: int, ticket: ParsedHelpdeskTicket) -> int:
-        card = build_helpdesk_ticket_card(ticket)
+    async def send_ticket(
+        self,
+        *,
+        chat_id: int,
+        ticket: ParsedHelpdeskTicket,
+        work_item_id: str | None = None,
+    ) -> int:
+        card = build_helpdesk_ticket_card(ticket, work_item_id=work_item_id)
         message = await self.bot.send_message(
             chat_id=chat_id,
             text=card.text,
@@ -142,6 +168,7 @@ class HelpdeskImapService:
         client: HelpdeskClient,
         notifier: HelpdeskNotifier,
         redis: RedisLike | None = None,
+        ticket_work_repository: HelpdeskTicketWorkRepository | None = None,
     ) -> None:
         self.config = config
         self.repository = repository
@@ -149,6 +176,7 @@ class HelpdeskImapService:
         self.client = client
         self.notifier = notifier
         self.redis = redis
+        self.ticket_work_repository = ticket_work_repository
 
     async def run_once(self) -> HelpdeskRunResult:
         if not self.config.enabled:
@@ -397,10 +425,12 @@ class HelpdeskImapService:
         ticket: ParsedHelpdeskTicket,
     ) -> HelpdeskRunResult:
         assert self.config.telegram_chat_id is not None
+        work_item_id = await self._ensure_work_item_id(event_id, message, ticket)
         try:
             message_id = await self.notifier.send_ticket(
                 chat_id=self.config.telegram_chat_id,
                 ticket=ticket,
+                work_item_id=work_item_id,
             )
         except Exception as exc:
             logger.warning(
@@ -428,6 +458,34 @@ class HelpdeskImapService:
                     extra={"error_type": type(exc).__name__},
                 )
         return HelpdeskRunResult(status="sent", processed=1)
+
+    async def _ensure_work_item_id(
+        self,
+        event_id: str,
+        message: HelpdeskFetchedEmail,
+        ticket: ParsedHelpdeskTicket,
+    ) -> str | None:
+        if (
+            self.ticket_work_repository is None
+            or ticket.event_type != "new_ticket"
+            or not ticket.ticket_id
+        ):
+            return None
+        try:
+            item = await self.ticket_work_repository.upsert_waiting_ack(
+                glpi_ticket_id=ticket.ticket_id,
+                latest_event_id=event_id,
+                title=ticket.title or message.subject,
+                telegram_chat_id=self.config.telegram_chat_id or 0,
+                now=_utcnow(),
+            )
+        except Exception as exc:
+            logger.warning(
+                "helpdesk_ticket_work_item_upsert_failed",
+                extra={"error_type": type(exc).__name__},
+            )
+            return None
+        return item.id if item.status == WAITING_ACK else None
 
 
 async def record_helpdesk_status(
@@ -517,6 +575,8 @@ def _max_uid(current: int, candidate: int | None) -> int:
 
 
 def _now_iso() -> str:
-    from datetime import UTC, datetime
+    return _utcnow().isoformat()
 
-    return datetime.now(UTC).isoformat()
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)

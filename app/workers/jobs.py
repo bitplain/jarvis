@@ -18,6 +18,7 @@ from app.db.models import MessageRole, utcnow
 from app.db.repositories.daily_brief import DailyBriefSettingsRepository
 from app.db.repositories.helpdesk_email_events import HelpdeskEmailEventRepository
 from app.db.repositories.helpdesk_imap_mailbox_state import HelpdeskImapMailboxStateRepository
+from app.db.repositories.helpdesk_ticket_work_items import HelpdeskTicketWorkItemRepository
 from app.db.repositories.household_memory import HouseholdMemoryRepository
 from app.db.repositories.messages import MessageRepository
 from app.db.repositories.reminders import ReminderRepository
@@ -34,6 +35,12 @@ from app.services.helpdesk_imap.service import (
     HelpdeskImapService,
     TelegramHelpdeskNotifier,
     record_helpdesk_status,
+)
+from app.services.helpdesk_ticket_workflow import (
+    WAITING_ACK,
+    build_in_work_keyboard,
+    build_waiting_ack_keyboard,
+    format_helpdesk_ticket_reminder_html,
 )
 from app.services.household_memory_service import HouseholdMemoryService
 from app.services.memory_service import MemoryService
@@ -61,6 +68,7 @@ from app.services.web_search.types import WebSearchRequest, WebSearchStatus
 logger = logging.getLogger(__name__)
 USER_ERROR_MESSAGE = "Не получилось подготовить ответ. Попробуйте позже."
 DAILY_BRIEF_SEND_CLAIM_TTL_SECONDS = 36 * 60 * 60
+HELPDESK_TICKET_REMINDER_CLAIM_TTL_SECONDS = 120
 
 
 def _mask_int(value: int | str | None) -> str:
@@ -570,6 +578,44 @@ async def deliver_daily_briefs(ctx: dict[str, Any]) -> None:
         await bot.session.close()
 
 
+async def remind_helpdesk_tickets(ctx: dict[str, Any]) -> None:
+    settings = get_settings()
+    bot = Bot(token=settings.telegram_bot_token)
+    try:
+        redis = ctx.get("redis") if isinstance(ctx, dict) else None
+        await record_worker_heartbeat(redis)
+        async with SessionLocal() as session:
+            repository = HelpdeskTicketWorkItemRepository(session)
+            now = utcnow()
+            due_items = await repository.due_reminders(now, limit=50)
+            for item in due_items:
+                if not await _claim_helpdesk_ticket_reminder(redis, item_id=item.id):
+                    continue
+                try:
+                    await bot.send_message(
+                        chat_id=item.telegram_chat_id,
+                        text=format_helpdesk_ticket_reminder_html(item),
+                        parse_mode="HTML",
+                        reply_markup=(
+                            build_waiting_ack_keyboard(item.id)
+                            if item.status == WAITING_ACK
+                            else build_in_work_keyboard(item.id)
+                        ),
+                    )
+                except Exception as exc:
+                    rollback = getattr(session, "rollback", None)
+                    if rollback is not None:
+                        await rollback()
+                    logger.warning(
+                        "helpdesk_ticket_reminder_send_failed",
+                        extra={"error_type": type(exc).__name__, "status": item.status},
+                    )
+                    continue
+                await repository.mark_reminded(item.id, now=now)
+    finally:
+        await bot.session.close()
+
+
 async def check_helpdesk_imap_mailbox(ctx: dict[str, Any]) -> None:
     settings = get_settings()
     redis = ctx.get("redis") if isinstance(ctx, dict) else None
@@ -598,10 +644,31 @@ async def check_helpdesk_imap_mailbox(ctx: dict[str, Any]) -> None:
                 client=HelpdeskImapClient(config),
                 notifier=TelegramHelpdeskNotifier(bot),
                 redis=redis,
+                ticket_work_repository=HelpdeskTicketWorkItemRepository(session),
             )
             await service.run_once()
     finally:
         await bot.session.close()
+
+
+async def _claim_helpdesk_ticket_reminder(redis: Any, *, item_id: str) -> bool:
+    if redis is None:
+        return True
+    key = f"helpdesk_ticket:reminder:{item_id}"
+    try:
+        claimed = await redis.set(
+            key,
+            "1",
+            ex=HELPDESK_TICKET_REMINDER_CLAIM_TTL_SECONDS,
+            nx=True,
+        )
+    except Exception as exc:
+        logger.warning(
+            "helpdesk_ticket_reminder_claim_unavailable",
+            extra={"error_type": type(exc).__name__},
+        )
+        return True
+    return bool(claimed)
 
 
 async def _claim_daily_brief_send(
