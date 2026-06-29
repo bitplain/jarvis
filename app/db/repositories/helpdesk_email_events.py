@@ -35,6 +35,33 @@ class HelpdeskEmailEventRepository:
         )
         return result.scalar_one_or_none() is not None
 
+    async def failed_notification_event_id(
+        self,
+        *,
+        folder: str,
+        imap_uid: str | None,
+        message_id: str | None,
+    ) -> str | None:
+        conditions = []
+        if message_id:
+            conditions.append(HelpdeskEmailEvent.message_id == message_id)
+        if imap_uid:
+            conditions.append(
+                (HelpdeskEmailEvent.folder == folder) & (HelpdeskEmailEvent.imap_uid == imap_uid)
+            )
+        if not conditions:
+            return None
+        result = await self.session.execute(
+            select(HelpdeskEmailEvent.id)
+            .where(
+                HelpdeskEmailEvent.notify_status == "failed",
+                or_(*conditions),
+            )
+            .limit(1)
+        )
+        event_id = result.scalar_one_or_none()
+        return str(event_id) if event_id is not None else None
+
     async def create_event(self, **values: object) -> str | None:
         event = HelpdeskEmailEvent(**values)
         self.session.add(event)

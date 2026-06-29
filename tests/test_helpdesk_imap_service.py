@@ -87,9 +87,37 @@ class FakeHelpdeskRepository:
         telegram_message_id: int,
     ) -> None:
         self.notified.append((event_id, telegram_chat_id, telegram_message_id))
+        for event in self.events:
+            if event["id"] == event_id:
+                event["notify_status"] = "sent"
+                event["telegram_chat_id"] = telegram_chat_id
+                event["telegram_message_id"] = telegram_message_id
+                event["error_code"] = None
+                return
 
     async def mark_notify_failed(self, event_id: str, *, error_code: str) -> None:
         self.failed.append((event_id, error_code))
+        for event in self.events:
+            if event["id"] == event_id:
+                event["notify_status"] = "failed"
+                event["error_code"] = error_code
+                return
+
+    async def failed_notification_event_id(
+        self,
+        *,
+        folder: str,
+        imap_uid: str | None,
+        message_id: str | None,
+    ) -> str | None:
+        for event in self.events:
+            if event.get("notify_status") != "failed":
+                continue
+            if message_id and event["message_id"] == message_id:
+                return str(event["id"])
+            if imap_uid and event["folder"] == folder and event["imap_uid"] == imap_uid:
+                return str(event["id"])
+        return None
 
 
 class FakeMailboxState:
@@ -405,6 +433,60 @@ async def test_helpdesk_service_telegram_failure_does_not_mark_seen() -> None:
     assert result.failed == 1
     assert client.marked_seen == []
     assert repository.failed == [("event-1", "telegram")]
+
+
+@pytest.mark.asyncio
+async def test_helpdesk_service_telegram_failure_keeps_uid_for_retry() -> None:
+    state_repository = _existing_state(last_seen_uid=100)
+    repository = FakeHelpdeskRepository()
+    client = FakeHelpdeskClient([_message(uid="101")], max_uid=101)
+    notifier = FakeNotifier(fail=True)
+    service = HelpdeskImapService(
+        config=_config(),
+        repository=repository,  # type: ignore[arg-type]
+        state_repository=state_repository,  # type: ignore[arg-type]
+        client=client,
+        notifier=notifier,
+    )
+
+    result = await service.run_once()
+
+    assert result.failed == 1
+    assert state_repository.state is not None
+    assert state_repository.state.last_seen_uid == 100
+    assert state_repository.saved[-1]["last_error_code"] == "telegram"
+
+
+@pytest.mark.asyncio
+async def test_helpdesk_service_retries_failed_telegram_notification_before_advancing() -> None:
+    state_repository = _existing_state(last_seen_uid=100)
+    repository = FakeHelpdeskRepository()
+    client = FakeHelpdeskClient([_message(uid="101")], max_uid=101)
+    failing_service = HelpdeskImapService(
+        config=_config(),
+        repository=repository,  # type: ignore[arg-type]
+        state_repository=state_repository,  # type: ignore[arg-type]
+        client=client,
+        notifier=FakeNotifier(fail=True),
+    )
+
+    await failing_service.run_once()
+
+    retry_notifier = FakeNotifier()
+    retry_service = HelpdeskImapService(
+        config=_config(),
+        repository=repository,  # type: ignore[arg-type]
+        state_repository=state_repository,  # type: ignore[arg-type]
+        client=client,
+        notifier=retry_notifier,
+    )
+    retry_result = await retry_service.run_once()
+
+    assert retry_result.processed == 1
+    assert len(retry_notifier.sent) == 1
+    assert repository.notified == [("event-1", -1001234567890, 9001)]
+    assert state_repository.state is not None
+    assert state_repository.state.last_seen_uid == 101
 
 
 @pytest.mark.asyncio
