@@ -182,6 +182,9 @@ async def run_readiness() -> HelpdeskImapReadinessResult:
         and "helpdesk_imap" in status
         and "last_seen_uid" in status
         and "baseline" in status
+        and "failed_notifications" in status
+        and "failed notifications" in status
+        and "failed notifications need retry" in status
         else "MISSING"
     )
     result.statuses["no_mark_seen_delete_added"] = (
@@ -216,6 +219,7 @@ async def run_readiness() -> HelpdeskImapReadinessResult:
                 "test_helpdesk_service_uidvalidity_change_resets_baseline_without_flood",
                 "test_helpdesk_baseline_now_admin_command_sets_baseline_without_notifications",
                 "test_helpdesk_worker_is_registered",
+                "test_status_render_warns_about_failed_helpdesk_notifications",
             ]
         )
         else "MISSING"

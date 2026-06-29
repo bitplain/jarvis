@@ -39,6 +39,9 @@ class FakeCountResult:
 
 
 class FakeStatusSession:
+    def __init__(self) -> None:
+        self._notification_counts = iter((1, 2))
+
     async def execute(self, statement: Any) -> FakeCountResult:
         rendered = str(statement)
         if "helpdesk_imap_mailbox_state" in rendered:
@@ -56,7 +59,7 @@ class FakeStatusSession:
                 {"one_or_none": lambda self: row},
             )()
         if "helpdesk_email_events" in rendered and "notify_status" in rendered:
-            return FakeCountResult(1)
+            return FakeCountResult(next(self._notification_counts))
         if "helpdesk_email_events" in rendered:
             return FakeCountResult(3)
         return FakeCountResult(0)
@@ -96,6 +99,7 @@ async def test_status_collects_helpdesk_imap_without_live_imap_connection() -> N
     assert snapshot["helpdesk_imap"]["mailbox_last_error"] == "none"
     assert snapshot["helpdesk_imap"]["processed_last_24h"] == 3
     assert snapshot["helpdesk_imap"]["pending_notifications"] == 1
+    assert snapshot["helpdesk_imap"]["failed_notifications"] == 2
     assert "real-password" not in str(snapshot)
     assert "support@example.ru" not in str(snapshot)
 
@@ -133,6 +137,7 @@ def test_status_render_includes_helpdesk_imap_section_without_password() -> None
                 "mailbox_last_error": "none",
                 "processed_last_24h": 0,
                 "pending_notifications": 0,
+                "failed_notifications": 0,
             },
         }
     )
@@ -150,6 +155,53 @@ def test_status_render_includes_helpdesk_imap_section_without_password() -> None
     assert "- mailbox last check: 2026-06-28T09:05:00+00:00" in rendered
     assert "- mailbox last success: 2026-06-28T09:06:00+00:00" in rendered
     assert "- mailbox last error: none" in rendered
+    assert "- pending notifications: 0" in rendered
+    assert "- failed notifications: 0" in rendered
+    assert "attention:" not in rendered
+    assert "password" not in rendered.lower()
+
+
+def test_status_render_warns_about_failed_helpdesk_notifications() -> None:
+    rendered = render_status_html(
+        {
+            "api": {"ok": True},
+            "postgres": {"ok": True, "latency_ms": 1},
+            "redis": {"ok": True, "latency_ms": 1},
+            "worker": {"ok": True, "age_seconds": 1},
+            "webhook": {"state": "configured"},
+            "reminders": {"ok": True, "due_count": 0},
+            "provider": {"label": "Auto"},
+            "draft_streaming": {"ok": False},
+            "prompt_profiles": {"ok": True},
+            "access_db": {"ok": True},
+            "helpdesk_imap": {
+                "enabled": True,
+                "configured": True,
+                "host": "configured",
+                "port": 993,
+                "ssl": True,
+                "username": "s***t@example.ru",
+                "folder": "INBOX",
+                "telegram_chat_id": "configured",
+                "missing": "none",
+                "last_check": "2026-06-28T09:05:00+00:00",
+                "last_success": "2026-06-28T09:06:00+00:00",
+                "last_error": "telegram",
+                "baseline": "set",
+                "last_seen_uid": 12345,
+                "mailbox_last_check": "2026-06-28T09:05:00+00:00",
+                "mailbox_last_success": "2026-06-28T09:06:00+00:00",
+                "mailbox_last_error": "none",
+                "processed_last_24h": 3,
+                "pending_notifications": 1,
+                "failed_notifications": 2,
+            },
+        }
+    )
+
+    assert "- pending notifications: 1" in rendered
+    assert "- failed notifications: 2" in rendered
+    assert "- attention: failed notifications need retry" in rendered
     assert "password" not in rendered.lower()
 
 
