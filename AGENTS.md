@@ -106,7 +106,10 @@
 - Production runtime использует webhook mode. Polling разрешён только для local/Mac smoke и не должен работать параллельно с production webhook runtime.
 - Polling readiness и polling runner не должны выполнять `deleteWebhook` при `APP_ENV=production`; production webhook можно менять только явным setup script/операторским действием.
 - Railway variables задаются через Railway UI/CLI; `.env`, Telegram token, LLM keys, `ADMIN_API_TOKEN`, Authorization headers и полные `ADMIN_TELEGRAM_IDS` не коммитятся и не печатаются.
-- Stage 4C автоматизирует миграции через `preDeployCommand = "alembic upgrade head"` в `railway.api.toml`; Stage 4D дополнительно запускает `alembic upgrade head` в API start command перед `uvicorn`, чтобы webhook runtime не стартовал со старой схемой.
+- Stage Ops-1 фиксирует текущую production deployment strategy: production deploys only from GitHub main; API healthcheck endpoint: /health; /ready is diagnostics/readiness для Postgres/Redis; Database migrations run via app startup migrations; Railway preDeploy migration command is intentionally not used; Worker does not run migrations.
+- Railway UI для `jarvis-api` должен быть синхронизирован вручную: Healthcheck path: /health; Start command: `uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}`; Pre-deploy command: empty; Deploy source: GitHub main.
+- Railway UI для `jarvis-worker` должен быть синхронизирован вручную: Start command: `arq app.workers.arq_settings.WorkerSettings`; Pre-deploy command: empty; Deploy source: GitHub main.
+- Если `/ready` используется как Railway healthcheck, deploy может падать при transient Postgres/Redis issues; поэтому `/health` предпочтителен для platform healthcheck, а `/ready` остаётся diagnostics/readiness endpoint.
 - Webhook на Railway устанавливается через sanitized script `scripts/setup_telegram_webhook.py` или совместимый `scripts/set_telegram_webhook.py`; scripts должны читать Railway process env и не печатать token/secret.
 - API startup при `APP_ENV=production` выполняет Telegram webhook self-healing setup после startup migrations, использует тот же sanitized setup logic и логирует только `telegram_webhook_setup_started`, `telegram_webhook_setup_completed`, `telegram_webhook_setup_failed`, `webhook_host`, `webhook_path`.
 - Webhook self-healing не запускается в worker, dev и test. Отсутствующий token/public URL/secret или временная ошибка Telegram API не должны валить API startup; нужно логировать sanitized failure без token/secret/header.
@@ -130,7 +133,7 @@
 - Кнопка `Настройки` может показываться в `/start`, но обработчик всё равно обязан проверять admin access.
 - Если выбранный provider не настроен или падает, пользователю показывается безопасная русская ошибка, а logs остаются sanitized без token/key/header/provider response body.
 - Railway Variables `YANDEX_*` и `OPENROUTER_*` остаются обязательными для worker, но реальные значения нельзя выводить в Telegram UI, docs, logs или PR.
-- API production start command должен автоматически выполнять `alembic upgrade head` перед стартом `uvicorn`; ручная миграция не должна быть обязательной для кнопки `Настройки`.
+- API production startup code должен автоматически выполнять `alembic upgrade head` через app startup migrations; Railway start command и preDeploy command миграции не запускают, а ручная миграция не должна быть обязательной для кнопки `Настройки`.
 - Production deploy Stage 4D происходит только после PR review, merge в `main`, CI и Railway production autodeploy; PR Environments выключены.
 
 ## Stage 4E Railway Migration And Settings Callback Fix

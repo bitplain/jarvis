@@ -13,7 +13,7 @@ class RailwayReadinessResult:
     verdict: str = "PARTIAL_RAILWAY_READINESS_NEEDS_FIX"
 
     def render_sanitized(self) -> str:
-        lines = ["Stage 4C Railway readiness sanitized result:"]
+        lines = ["Railway readiness sanitized result:"]
         for key in sorted(self.statuses):
             lines.append(f"{key}: {self.statuses[key]}")
         lines.append(f"verdict: {self.verdict}")
@@ -31,6 +31,14 @@ def _contains(path: str, expected: str) -> bool:
     return expected in _read(path)
 
 
+def _run_config_alignment_readiness() -> object:
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from scripts.smoke_railway_config_alignment_readiness import run_readiness
+
+    return run_readiness()
+
+
 def run_readiness() -> RailwayReadinessResult:
     result = RailwayReadinessResult()
     env_example = _read(".env.example")
@@ -39,6 +47,7 @@ def run_readiness() -> RailwayReadinessResult:
     worker_config = _read("railway.worker.toml")
     startup_migrations = _read("app/services/startup_migrations.py")
     arq_settings = _read("app/workers/arq_settings.py")
+    config_alignment = _run_config_alignment_readiness()
 
     required_env = [
         "APP_ENV=production",
@@ -76,12 +85,12 @@ def run_readiness() -> RailwayReadinessResult:
     result.statuses["worker_config_exists"] = "OK" if worker_config else "MISSING"
     result.statuses["api_start_command"] = (
         "OK"
-        if "python -m uvicorn app.main:app" in api_config and "${PORT:-8080}" in api_config
+        if "uvicorn app.main:app" in api_config and "${PORT:-8080}" in api_config
         else "MISSING"
     )
-    result.statuses["api_start_migration"] = (
+    result.statuses["api_plain_start_command"] = (
         "OK"
-        if "alembic upgrade head && python -m uvicorn app.main:app" in api_config
+        if "alembic upgrade head" not in api_config
         else "MISSING"
     )
     result.statuses["api_startup_migration_guard"] = (
@@ -92,8 +101,13 @@ def run_readiness() -> RailwayReadinessResult:
         and "head" in startup_migrations
         else "MISSING"
     )
-    result.statuses["api_predeploy_migration"] = (
-        "OK" if 'preDeployCommand = "alembic upgrade head"' in api_config else "MISSING"
+    result.statuses["api_predeploy_unused"] = (
+        "OK" if "preDeployCommand" not in api_config else "UNEXPECTED_PREDEPLOY"
+    )
+    result.statuses["railway_config_alignment"] = (
+        "OK"
+        if config_alignment.verdict == "PASS_RAILWAY_CONFIG_ALIGNMENT_READINESS"
+        else config_alignment.verdict
     )
     result.statuses["worker_start_command"] = (
         "OK" if "arq app.workers.arq_settings.WorkerSettings" in worker_config else "MISSING"
@@ -116,12 +130,13 @@ def run_readiness() -> RailwayReadinessResult:
         "$PORT is not a valid integer",
         "provider_not_configured",
         'relation "messages" does not exist',
-        "alembic upgrade head && python -m uvicorn app.main:app",
+        "Production deployment strategy",
+        "Railway preDeploy migration command is intentionally not used",
         "Railway UI Start Command",
         "startup migration guard",
     ]
     missing_doc_items = [item for item in required_doc_items if item not in deploy_doc]
-    result.statuses["railway_doc_stage_4c"] = (
+    result.statuses["railway_doc_strategy"] = (
         "OK" if not missing_doc_items else "MISSING " + ",".join(missing_doc_items)
     )
     result.statuses["webhook_script"] = (

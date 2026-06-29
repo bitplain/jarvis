@@ -1,6 +1,6 @@
 # Railway deploy Jarvis
 
-Stage 4C фиксирует повторяемый production deploy на Railway после ручного live bring-up.
+Stage Ops-1 фиксирует текущую production strategy после read-only Railway audit.
 Документ не создаёт Railway project, не меняет Railway Variables и не запускает deploy сам по себе.
 
 ## Railway services
@@ -11,6 +11,20 @@ Stage 4C фиксирует повторяемый production deploy на Railwa
 - Redis: Railway Redis service. `REDIS_URL` подключается к API и worker.
 
 Railway не запускает `docker-compose.yml` как единый production stack. Compose остаётся локальным development/smoke flow.
+
+## Production deployment strategy
+
+- Production deploys only from GitHub main.
+- API healthcheck endpoint: /health.
+- Railway healthcheck endpoint: /health.
+- /ready is diagnostics/readiness for Postgres/Redis.
+- Database migrations run via app startup migrations.
+- Railway preDeploy migration command is intentionally not used.
+- Worker does not run migrations.
+
+Repo config отражает intended settings после ручной синхронизации Railway UI. Если live Railway settings отличаются, это config drift: менять live Railway нужно вручную после merge в `main`, а не из этого PR.
+
+Railway service settings are managed in Railway UI, but repo config is the source of intended settings after manual sync.
 
 ## Config files
 
@@ -26,7 +40,7 @@ Railway не запускает `docker-compose.yml` как единый product
 API command из `railway.api.toml`:
 
 ```bash
-sh -c "alembic upgrade head && python -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}"
+uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}
 ```
 
 Worker command из `railway.worker.toml`:
@@ -35,32 +49,50 @@ Worker command из `railway.worker.toml`:
 arq app.workers.arq_settings.WorkerSettings
 ```
 
-Важно: API command должен идти через `sh -c`, чтобы `${PORT:-8080}` был раскрыт shell runtime, а не передан в uvicorn буквальной строкой. `alembic upgrade head` выполняется автоматически перед стартом webhook runtime, поэтому новая таблица должна появляться без ручного запуска миграции.
+Важно: API command не запускает Alembic. Production API применяет миграции внутри app startup path до приёма webhook requests, поэтому Railway start command остаётся plain app start.
 
 Railway UI Start Command может переопределить `railway.api.toml`. Поэтому Stage 4E добавляет code-level startup migration guard в API startup path: даже если UI запустит только `uvicorn app.main:app`, API при `APP_ENV=production` сначала выполнит Alembic и только потом начнёт принимать webhook requests.
 
 После startup migrations `jarvis-api` при `APP_ENV=production` запускает Telegram webhook self-healing setup: пробует установить webhook на `<PUBLIC_BASE_URL>/telegram/webhook` через ту же sanitized logic, что и ручной setup script. Worker этот setup не выполняет. Если token, secret, public URL отсутствуют или Telegram API временно недоступен, API startup не падает; в логах остаётся только sanitized `telegram_webhook_setup_failed` с `webhook_host` и `webhook_path`.
 
-## Pre-deploy migrations
+## Migration strategy
 
-API service запускает Alembic до старта новой версии:
+Единый механизм миграций в production — app startup migrations в API service. Startup guard логирует sanitized markers:
 
-```bash
-alembic upgrade head
+```text
+startup_migrations_started
+startup_migrations_completed
+startup_migrations_failed
 ```
 
-Это задано в `railway.api.toml`:
+`railway.api.toml` намеренно не содержит Railway preDeploy migration command:
 
 ```toml
 [deploy]
-preDeployCommand = "alembic upgrade head"
+startCommand = "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}"
+healthcheckPath = "/health"
 ```
 
-Кроме pre-deploy шага, API start command повторяет `alembic upgrade head` перед `uvicorn`. Повторный запуск идемпотентен: если схема уже обновлена, Alembic ничего не меняет.
+`preDeployCommand intentionally unused`: Railway preDeploy migration command is intentionally not used, чтобы не держать два конкурирующих механизма миграций.
 
-Worker service не запускает Alembic migrations. Это уменьшает риск гонки между API и worker deploy.
+Worker service не запускает Alembic migrations. Worker полагается на API startup migration path и стартует только arq worker.
 
-Если Railway pre-deploy command падает с non-zero exit code, deployment не должен переходить к старту приложения. Следующий push нужно проверять по логам `jarvis-api`: там должен быть виден успешный pre-deploy step.
+Если startup migration падает, API startup должен падать, чтобы Railway deploy не стал healthy со старой схемой.
+
+## Manual Railway UI checklist
+
+`jarvis-api`:
+
+- Healthcheck path: /health
+- Start command: uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}
+- Pre-deploy command: empty
+- Deploy source: GitHub main
+
+`jarvis-worker`:
+
+- Start command: arq app.workers.arq_settings.WorkerSettings
+- Pre-deploy command: empty
+- Deploy source: GitHub main
 
 ## Railway Variables UI rule
 
@@ -181,6 +213,8 @@ curl -fsS https://jarvis-production-786d.up.railway.app/ready
 
 `/health` должен проходить сразу после старта процесса. `/ready` вернёт degraded/503, если Railway PostgreSQL или Redis ещё не подключены, variables не привязаны, миграции не применены или сеть ещё не готова.
 
+Railway healthcheck должен смотреть на `/health`, а не на `/ready`. Если `/ready` используется как Railway healthcheck, deploy может падать во время кратковременных проблем Postgres/Redis; поэтому `/health` предпочтителен как platform healthcheck, а `/ready` остаётся ручной dependency diagnostics.
+
 ## LLM smoke
 
 В Railway worker console:
@@ -215,6 +249,7 @@ PYTHONPATH=/app python scripts/smoke_llm.py
 
 ```bash
 uv run --python 3.12 --extra dev python scripts/smoke_railway_readiness.py
+uv run --python 3.12 --extra dev python scripts/smoke_railway_config_alignment_readiness.py
 uv run --python 3.12 --extra dev python scripts/smoke_provider_settings_readiness.py
 ```
 
@@ -222,6 +257,7 @@ uv run --python 3.12 --extra dev python scripts/smoke_provider_settings_readines
 
 ```text
 PASS_RAILWAY_READINESS
+PASS_RAILWAY_CONFIG_ALIGNMENT_READINESS
 PASS_PROVIDER_SETTINGS_READINESS
 ```
 
@@ -229,12 +265,12 @@ PASS_PROVIDER_SETTINGS_READINESS
 
 | Симптом | Причина | Фикс |
 | --- | --- | --- |
-| `$PORT is not a valid integer` | Start Command передал `${PORT...}` в приложение буквально, без shell expansion. | Использовать `sh -c "python -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}"`. |
+| `$PORT is not a valid integer` | Start Command передал `${PORT...}` в приложение буквально или Railway UI command не раскрывает runtime port. | Использовать plain app start `uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}` и проверить фактический Railway UI Start Command. |
 | `TELEGRAM_BOT_TOKEN missing` | Token не задан в variables нужного service. | Добавить `TELEGRAM_BOT_TOKEN` в `jarvis-api` и `jarvis-worker`, значение не печатать. |
 | `TokenValidationError: Token is invalid` | В value field вставили `TELEGRAM_BOT_TOKEN=...`, пробелы или неправильный token. | В Railway Variables right field вводить только value. |
 | `secret token contains unallowed characters` | `TELEGRAM_WEBHOOK_SECRET` содержит запрещённые символы. | Использовать только `A-Z`, `a-z`, `0-9`, `_`, `-`. |
 | `Доступ запрещён` | Telegram user id не входит в `ADMIN_TELEGRAM_IDS` или задан numeric bot id вместо owner id. | Указать реальный Telegram user id администратора в `ADMIN_TELEGRAM_IDS`. |
-| `relation "messages" does not exist` или `relation "runtime_settings" does not exist` | PostgreSQL migrations не применились до обработки webhook/job. | Проверить `preDeployCommand = "alembic upgrade head"` и start command `alembic upgrade head && python -m uvicorn...` в `railway.api.toml`, затем логи API deploy/startup. |
+| `relation "messages" does not exist` или `relation "runtime_settings" does not exist` | PostgreSQL migrations не применились до обработки webhook/job. | Проверить API startup logs: `startup_migrations_started`, `startup_migrations_completed` или `startup_migrations_failed`; Railway preDeploy для миграций не используется. |
 | `provider_not_configured` | LLM provider variables не заданы в worker service. | Добавить Yandex/OpenRouter variables в `jarvis-worker`. |
 | `llm_failed` | Provider доступен, но запрос завершился ошибкой модели, сети или auth. | Проверить worker logs, provider status, model id и ключи без вывода секретов. |
 | Railway logs show `[err]`, but task has `●` | Railway может помечать stderr как `[err]`, хотя task ещё выполняется. | Смотреть verdict, traceback, exit code и последующие строки; не считать один marker `[err]` падением без контекста. App-controlled `DEBUG`/`INFO` logs должны идти в stdout после logging hygiene hotfix. |
@@ -243,7 +279,7 @@ PASS_PROVIDER_SETTINGS_READINESS
 
 В Railway смотреть отдельно:
 
-- API service logs: startup, pre-deploy migration, `/health`, `/ready`, Telegram webhook POST, sanitized errors.
+- API service logs: startup migrations, `/health`, `/ready`, Telegram webhook POST, sanitized errors.
 - Worker service logs: arq startup, `process_llm_message`, provider status без token/key/header.
 - PostgreSQL/Redis service status: connection errors и restarts.
 

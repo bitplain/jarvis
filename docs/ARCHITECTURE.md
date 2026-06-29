@@ -8,6 +8,16 @@
 - `redis` — очередь arq.
 - `llm` — общий интерфейс провайдеров и fallback Yandex -> OpenRouter.
 
+## Production deploy boundaries
+
+Railway production deploy идёт только из GitHub main. Repo `railway.api.toml` и `railway.worker.toml` описывают intended settings после ручной синхронизации Railway UI.
+
+API service использует `/health` как Railway platform healthcheck. `/ready` — dependency diagnostics/readiness endpoint для Postgres/Redis; если Postgres или Redis временно недоступны, `/ready` может вернуть degraded/503 и не должен использоваться как Railway healthcheck.
+
+Миграции выполняются одним механизмом: app startup migrations в API process при `APP_ENV=production` или `APP_ENV=railway`. Startup guard запускает Alembic до webhook setup и до приёма Telegram webhook requests, логируя только sanitized markers `startup_migrations_started`, `startup_migrations_completed` и `startup_migrations_failed`. Railway preDeploy migration command is intentionally not used.
+
+Worker service не запускает Alembic и не имеет HTTP healthcheck. Его start command запускает только `arq app.workers.arq_settings.WorkerSettings`; worker полагается на API startup migrations.
+
 ## Regular Assistant Mode
 
 Regular Assistant Mode — основной путь для обычного Telegram-аккаунта.
