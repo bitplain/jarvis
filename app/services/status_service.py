@@ -184,6 +184,7 @@ class StatusService:
         config = HelpdeskImapConfig.from_settings(self.settings)
         processed_last_24h: int | None = None
         pending_notifications: int | None = None
+        failed_notifications: int | None = None
         baseline = "not set"
         last_seen_uid: int | None = None
         mailbox_last_check = "unknown"
@@ -203,6 +204,12 @@ class StatusService:
                     )
                 )
                 pending_notifications = int(result.scalar_one())
+                result = await self.session.execute(
+                    select(func.count(HelpdeskEmailEvent.id)).where(
+                        HelpdeskEmailEvent.notify_status == "failed"
+                    )
+                )
+                failed_notifications = int(result.scalar_one())
                 result = await self.session.execute(
                     select(
                         HelpdeskImapMailboxState.folder,
@@ -224,6 +231,7 @@ class StatusService:
                 await self.session.rollback()
                 processed_last_24h = None
                 pending_notifications = None
+                failed_notifications = None
         return {
             "enabled": config.enabled,
             "configured": config.configured,
@@ -244,6 +252,7 @@ class StatusService:
             "mailbox_last_error": mailbox_last_error,
             "processed_last_24h": processed_last_24h,
             "pending_notifications": pending_notifications,
+            "failed_notifications": failed_notifications,
         }
 
     async def _redis_text(self, key: str, *, default: str = "unknown") -> str:
@@ -262,6 +271,10 @@ class StatusService:
 
 def render_status_html(snapshot: dict[str, Any]) -> str:
     helpdesk = snapshot.get("helpdesk_imap") or {}
+    failed_notifications = helpdesk.get("failed_notifications")
+    failed_attention = ""
+    if _positive_count(failed_notifications):
+        failed_attention = "- attention: failed notifications need retry\n"
     return (
         "<b>Jarvis status</b>\n\n"
         f"API: {_state(snapshot['api']['ok'])} ok\n"
@@ -296,7 +309,9 @@ def render_status_html(snapshot: dict[str, Any]) -> str:
         f"- mailbox last success: {helpdesk.get('mailbox_last_success', 'unknown')}\n"
         f"- mailbox last error: {helpdesk.get('mailbox_last_error', 'unknown')}\n"
         f"- processed last 24h: {_count(helpdesk.get('processed_last_24h'))}\n"
-        f"- pending notifications: {_count(helpdesk.get('pending_notifications'))}\n\n"
+        f"- pending notifications: {_count(helpdesk.get('pending_notifications'))}\n"
+        f"- failed notifications: {_count(failed_notifications)}\n"
+        f"{failed_attention}\n"
         "Last checks:\n"
         f"- DB latency: {_latency(snapshot['postgres'].get('latency_ms'))}\n"
         f"- Redis latency: {_latency(snapshot['redis'].get('latency_ms'))}\n"
@@ -352,6 +367,17 @@ def _count(value: object) -> str:
     if isinstance(value, int | float | str | bytes | bytearray):
         return str(int(value))
     return "unknown"
+
+
+def _positive_count(value: object) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, int | float | str | bytes | bytearray):
+        try:
+            return int(value) > 0
+        except (TypeError, ValueError):
+            return False
+    return False
 
 
 def _iso_or_unknown(value: object) -> str:
