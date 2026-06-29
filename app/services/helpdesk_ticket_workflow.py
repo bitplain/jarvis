@@ -98,6 +98,12 @@ class HelpdeskTicketWorkItemRepositoryProtocol(Protocol):
         now: datetime,
     ) -> StoredHelpdeskTicketWorkItem | None: ...
 
+    async def reschedule_active_reminders_after(
+        self,
+        *,
+        now: datetime,
+    ) -> int: ...
+
 
 class HelpdeskTicketWorkflowService:
     def __init__(
@@ -190,6 +196,15 @@ class HelpdeskTicketWorkflowService:
     ) -> StoredHelpdeskTicketWorkItem | None:
         return await self.repository.mark_reminded(
             item_id,
+            now=_to_utc(now or self.now_factory()),
+        )
+
+    async def reschedule_active_reminders_after_vacation(
+        self,
+        *,
+        now: datetime | None = None,
+    ) -> int:
+        return await self.repository.reschedule_active_reminders_after(
             now=_to_utc(now or self.now_factory()),
         )
 
@@ -344,6 +359,20 @@ class InMemoryHelpdeskTicketWorkItemRepository:
         item.next_reminder_at = now + timedelta(minutes=item.reminder_interval_minutes)
         item.updated_at = now
         return replace(item)
+
+    async def reschedule_active_reminders_after(
+        self,
+        *,
+        now: datetime,
+    ) -> int:
+        updated = 0
+        for item in self.items.values():
+            if item.status not in ACTIVE_STATUSES:
+                continue
+            item.next_reminder_at = now + timedelta(minutes=item.reminder_interval_minutes)
+            item.updated_at = now
+            updated += 1
+        return updated
 
     def _by_ticket_chat(
         self,

@@ -243,6 +243,27 @@ class FakeHelpdeskTicketRepository:
         self.reminded.append(item_id)
         return self.items[0]
 
+    async def reschedule_active_reminders_after(self, *, now: object) -> int:
+        self.rescheduled_at = now
+        return len(self.items)
+
+
+class FakeVacationRepository:
+    instances: list["FakeVacationRepository"] = []
+    enabled = False
+
+    def __init__(self, session: object) -> None:
+        del session
+        self.__class__.instances.append(self)
+
+
+class FakeVacationService:
+    def __init__(self, repository: object) -> None:
+        del repository
+
+    async def is_enabled(self) -> bool:
+        return FakeVacationRepository.enabled
+
 
 class FakeRuntimeSettingsService:
     def __init__(self, repository: object) -> None:
@@ -674,6 +695,35 @@ async def test_remind_helpdesk_tickets_send_failure_does_not_advance_reminder(
 
     repository = FakeHelpdeskTicketRepository.instances[0]
     assert repository.reminded == []
+
+
+@pytest.mark.asyncio
+async def test_remind_helpdesk_tickets_vacation_on_suppresses_and_reschedules(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    FakeBot.instances = []
+    FakeHelpdeskTicketRepository.instances = []
+    FakeVacationRepository.instances = []
+    FakeVacationRepository.enabled = True
+    monkeypatch.setattr(jobs, "Bot", FakeBot)
+    monkeypatch.setattr(
+        jobs,
+        "get_settings",
+        lambda: Settings(telegram_bot_token="123456:secret-token"),
+    )
+    monkeypatch.setattr(jobs, "SessionLocal", FakeSessionLocal())
+    monkeypatch.setattr(jobs, "HelpdeskTicketWorkItemRepository", FakeHelpdeskTicketRepository)
+    monkeypatch.setattr(jobs, "HelpdeskVacationRepository", FakeVacationRepository)
+    monkeypatch.setattr(jobs, "HelpdeskVacationService", FakeVacationService)
+    monkeypatch.setattr(jobs, "utcnow", lambda: datetime(2026, 6, 29, 9, 0, tzinfo=UTC))
+
+    await jobs.remind_helpdesk_tickets({"redis": FakeRedis()})
+
+    bot = FakeBot.instances[0]
+    repository = FakeHelpdeskTicketRepository.instances[0]
+    assert bot.sent_messages == []
+    assert repository.reminded == []
+    assert repository.rescheduled_at == datetime(2026, 6, 29, 9, 0, tzinfo=UTC)
 
 
 @pytest.mark.asyncio

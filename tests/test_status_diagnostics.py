@@ -106,3 +106,59 @@ def test_status_worker_freshness_boundary() -> None:
     now = datetime(2026, 6, 26, 12, 0, tzinfo=UTC)
     assert is_worker_heartbeat_fresh(now - timedelta(seconds=119), now=now)
     assert not is_worker_heartbeat_fresh(now - timedelta(minutes=6), now=now)
+
+
+@pytest.mark.asyncio
+async def test_status_command_shows_helpdesk_vacation_fields_without_ids() -> None:
+    message = FakeMessage()
+
+    await cmd_status(
+        message,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        status_snapshot={
+            "api": {"ok": True},
+            "postgres": {"ok": True, "latency_ms": 12},
+            "redis": {"ok": True, "latency_ms": 4},
+            "worker": {"ok": True, "age_seconds": 8},
+            "webhook": {"state": "configured"},
+            "reminders": {"ok": True, "due_count": 0},
+            "provider": {"label": "Auto"},
+            "draft_streaming": {"ok": False},
+            "prompt_profiles": {"ok": True},
+            "access_db": {"ok": True},
+            "helpdesk_imap": {
+                "enabled": True,
+                "configured": True,
+                "host": "configured",
+                "port": 993,
+                "ssl": True,
+                "username": "su***@example.ru",
+                "folder": "INBOX",
+                "telegram_chat_id": "configured",
+                "missing": "none",
+                "last_check": "unknown",
+                "last_success": "unknown",
+                "last_error": "none",
+                "baseline": "set",
+                "last_seen_uid": 101,
+                "mailbox_last_check": "unknown",
+                "mailbox_last_success": "unknown",
+                "mailbox_last_error": "none",
+                "processed_last_24h": 1,
+                "pending_notifications": 0,
+                "failed_notifications": 0,
+                "vacation_enabled": True,
+                "vacation_since": "2026-06-29T09:00:00+00:00",
+                "vacation_last_reviewed": "unknown",
+                "vacation_new_since_start": 2,
+                "vacation_new_since_last_review": 2,
+            },
+        },
+    )
+
+    rendered = message.answers[0]["text"]
+    assert "- vacation mode: enabled" in rendered
+    assert "- vacation since: 2026-06-29T09:00:00+00:00" in rendered
+    assert "- vacation new since start: 2" in rendered
+    assert "- vacation new since last review: 2" in rendered
+    assert "100500" not in rendered

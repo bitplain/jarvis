@@ -178,6 +178,23 @@ class HelpdeskTicketWorkItemRepository:
         await self.session.refresh(item)
         return _to_stored(item)
 
+    async def reschedule_active_reminders_after(
+        self,
+        *,
+        now: datetime,
+    ) -> int:
+        result = await self.session.execute(
+            select(HelpdeskTicketWorkItem)
+            .where(HelpdeskTicketWorkItem.status.in_(ACTIVE_STATUSES))
+            .with_for_update(skip_locked=True)
+        )
+        items = list(result.scalars().all())
+        for item in items:
+            item.next_reminder_at = now + timedelta(minutes=item.reminder_interval_minutes)
+            item.updated_at = now
+        await self.session.commit()
+        return len(items)
+
     async def _get_by_ticket_chat(
         self,
         glpi_ticket_id: str,

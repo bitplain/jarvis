@@ -271,6 +271,26 @@ class HelpdeskTicketWorkItem(Base):
     )
 
 
+class HelpdeskVacationState(Base):
+    __tablename__ = "helpdesk_vacation_state"
+    __table_args__ = (UniqueConstraint("scope", name="uq_helpdesk_vacation_state_scope"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    scope: Mapped[str] = mapped_column(Text, nullable=False, default="default")
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    enabled_by_user_id: Mapped[int | None] = mapped_column(BigInteger)
+    disabled_by_user_id: Mapped[int | None] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        onupdate=utcnow,
+    )
+
+
 class HelpdeskImapMailboxState(Base):
     __tablename__ = "helpdesk_imap_mailbox_state"
     __table_args__ = (UniqueConstraint("folder", name="uq_helpdesk_imap_mailbox_state_folder"),)
@@ -632,3 +652,4 @@ Index(
     HelpdeskTicketWorkItem.status,
 )
 Index("ix_helpdesk_imap_mailbox_state_updated_at", HelpdeskImapMailboxState.updated_at)
+Index("ix_helpdesk_vacation_state_updated_at", HelpdeskVacationState.updated_at)

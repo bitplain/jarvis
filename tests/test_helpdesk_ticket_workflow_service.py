@@ -95,6 +95,33 @@ async def test_take_list_snooze_done_and_due_reminder_intervals() -> None:
 
 
 @pytest.mark.asyncio
+async def test_reschedule_active_reminders_after_vacation_avoids_backlog_flood() -> None:
+    repository = InMemoryHelpdeskTicketWorkItemRepository()
+    service = HelpdeskTicketWorkflowService(repository, now_factory=lambda: NOW)
+    waiting = await service.create_or_update_waiting_ack(
+        glpi_ticket_id="0047513",
+        latest_event_id=None,
+        title="Выход нового сотрудника",
+        telegram_chat_id=-100123,
+    )
+    in_work = await service.create_or_update_waiting_ack(
+        glpi_ticket_id="0046692",
+        latest_event_id=None,
+        title="Наведение порядка",
+        telegram_chat_id=-100123,
+    )
+    await service.take(in_work.id, actor_user_id=100500, telegram_chat_id=-100123)
+    repository.items[waiting.id].next_reminder_at = NOW - timedelta(hours=2)
+    repository.items[in_work.id].next_reminder_at = NOW - timedelta(hours=1)
+
+    rescheduled = await service.reschedule_active_reminders_after_vacation(now=NOW)
+
+    assert rescheduled == 2
+    assert repository.items[waiting.id].next_reminder_at == NOW + timedelta(minutes=10)
+    assert repository.items[in_work.id].next_reminder_at == NOW + timedelta(minutes=30)
+
+
+@pytest.mark.asyncio
 async def test_helpdesk_ticket_reminder_html_escapes_title_and_uses_status_text() -> None:
     repository = InMemoryHelpdeskTicketWorkItemRepository()
     service = HelpdeskTicketWorkflowService(repository, now_factory=lambda: NOW)
