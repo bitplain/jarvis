@@ -36,6 +36,14 @@ class HelpdeskEventRepository(Protocol):
         message_id: str | None,
     ) -> bool: ...
 
+    async def failed_notification_event_id(
+        self,
+        *,
+        folder: str,
+        imap_uid: str | None,
+        message_id: str | None,
+    ) -> str | None: ...
+
     async def create_event(self, **values: object) -> str | None: ...
 
     async def mark_notified(
@@ -167,6 +175,7 @@ class HelpdeskImapService:
         failed = 0
         last_error = "none"
         current_last_seen_uid: int | None = None
+        halted_on_delivery_failure = False
         try:
             snapshot = await self.client.mailbox_snapshot()
             state = await self.state_repository.get_state(folder=self.config.folder)
@@ -209,6 +218,22 @@ class HelpdeskImapService:
                     skipped_filtered += 1
                     current_last_seen_uid = _max_uid(current_last_seen_uid, message_uid)
                     continue
+                failed_event_id = await self.repository.failed_notification_event_id(
+                    folder=message.folder,
+                    imap_uid=message.uid,
+                    message_id=message.message_id,
+                )
+                if failed_event_id is not None:
+                    result = await self._retry_failed_notification(message, failed_event_id)
+                    processed += result.processed
+                    failed += result.failed
+                    if result.error_code is not None:
+                        last_error = result.error_code
+                    if result.error_code == "telegram":
+                        halted_on_delivery_failure = True
+                        break
+                    current_last_seen_uid = _max_uid(current_last_seen_uid, message_uid)
+                    continue
                 if await self.repository.exists(
                     folder=message.folder,
                     imap_uid=message.uid,
@@ -222,8 +247,12 @@ class HelpdeskImapService:
                 failed += result.failed
                 if result.error_code is not None:
                     last_error = result.error_code
+                if result.error_code == "telegram":
+                    halted_on_delivery_failure = True
+                    break
                 current_last_seen_uid = _max_uid(current_last_seen_uid, message_uid)
-            current_last_seen_uid = _max_uid(current_last_seen_uid, snapshot.max_uid)
+            if not halted_on_delivery_failure:
+                current_last_seen_uid = _max_uid(current_last_seen_uid, snapshot.max_uid)
             await self.state_repository.upsert_state(
                 folder=self.config.folder,
                 uidvalidity=snapshot.uidvalidity,
@@ -338,6 +367,35 @@ class HelpdeskImapService:
                 failed=1,
                 error_code="parse",
             )
+        assert self.config.telegram_chat_id is not None
+        return await self._notify_ticket(event_id, message, ticket)
+
+    async def _retry_failed_notification(
+        self,
+        message: HelpdeskFetchedEmail,
+        event_id: str,
+    ) -> HelpdeskRunResult:
+        ticket = parse_glpi_email(
+            subject=message.subject,
+            body=message.body,
+            from_header=message.from_header,
+        )
+        if ticket.parse_status != "parsed":
+            await self.repository.mark_notify_failed(event_id, error_code="parse")
+            return HelpdeskRunResult(
+                status="parse_failed",
+                processed=1,
+                failed=1,
+                error_code="parse",
+            )
+        return await self._notify_ticket(event_id, message, ticket)
+
+    async def _notify_ticket(
+        self,
+        event_id: str,
+        message: HelpdeskFetchedEmail,
+        ticket: ParsedHelpdeskTicket,
+    ) -> HelpdeskRunResult:
         assert self.config.telegram_chat_id is not None
         try:
             message_id = await self.notifier.send_ticket(
