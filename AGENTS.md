@@ -348,6 +348,24 @@
 - `/status` показывает только sanitized vacation diagnostics: mode, since, last reviewed, new since start и new since last review; Telegram IDs, email body, full addresses и secrets не выводятся.
 - Stage 4L-3 не меняет Railway Variables, IMAP credentials, mailbox cleanup, mark-seen/delete поведение, email replies, Smart Watcher, RAG/OCR и multi-mailbox UI.
 
+## Stage 1A/2A Structured Rich Cards And Event Inbox
+
+- Event Center foundation хранит события в PostgreSQL `event_items`.
+- Поддерживаемые scope: `personal`, `household`, `work`, `system`.
+- Поддерживаемые statuses: `new`, `seen`, `done`, `snoozed`, `archived`, `failed`.
+- Поддерживаемые priorities: `low`, `normal`, `high`, `critical`.
+- Поддерживаемые event types: `reminder`, `note`, `shopping`, `helpdesk_ticket`, `whoop_sleep`, `system_alert`, `digest_item`.
+- `card_json` хранит Structured Rich Card с полями `type`, `title`, `severity`, `facts[]`, `summary`, `actions[]`.
+- Telegram renderer карточек обязан экранировать HTML и никогда не показывать пользователю raw JSON.
+- `/inbox` показывает только active события scope `personal` и `household`; `work` и `system` туда не попадают.
+- `/work` показывает только active события scope `work`; `personal`, `household` и `system` туда не попадают.
+- HelpDesk/tickets относятся к `work` events и не должны попадать в `/inbox`.
+- Сортировка выдачи: priority desc, `due_at` asc с nulls last, затем `created_at` desc; лимит MVP — 10 событий.
+- Callback data для карточек остаётся коротким и стабильным: `event:<action>:<event_id>`, без пользовательского текста, JSON, prompt, токенов или secrets.
+- Callback actions `done`, `snooze`, `details` должны быть отдельно access-gated, потому что message middleware не защищает callback queries.
+- Default digest timezone зафиксирован как `Europe/Moscow`.
+- Stage 1A/2A не реализует WHOOP OAuth/sync, AI-анализ сна, digest scheduling, production deploy, Railway config changes и HelpDesk migration в `event_items`.
+
 ## Logging Hygiene
 
 - Normal operational app logs уровня `DEBUG`/`INFO` должны писаться в stdout; реальные warning/error/exception остаются на stderr.
