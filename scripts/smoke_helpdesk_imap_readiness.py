@@ -168,6 +168,21 @@ async def run_readiness() -> HelpdeskImapReadinessResult:
         )
         else "MISSING"
     )
+    result.statuses["vacation_suppression_compatible"] = (
+        "OK"
+        if all(
+            token in service_source
+            for token in [
+                "vacation_service",
+                "mark_suppressed_vacation",
+                "helpdesk_notification_suppressed_vacation",
+            ]
+        )
+        and "suppressed_vacation" in service_source + _read(
+            "app/db/repositories/helpdesk_email_events.py"
+        )
+        else "MISSING"
+    )
     result.statuses["baseline_command"] = (
         "OK"
         if "cmd_helpdesk_baseline_now" in commands

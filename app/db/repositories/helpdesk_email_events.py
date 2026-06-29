@@ -8,6 +8,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import HelpdeskEmailEvent, utcnow
+from app.services.helpdesk_vacation import (
+    HELPDESK_VACATION_ERROR_CODE,
+    HELPDESK_VACATION_NOTIFY_STATUS,
+)
 
 
 class HelpdeskEmailEventRepository:
@@ -100,6 +104,18 @@ class HelpdeskEmailEventRepository:
             .values(
                 notify_status="failed",
                 error_code=error_code,
+                updated_at=utcnow(),
+            )
+        )
+        await self.session.commit()
+
+    async def mark_suppressed_vacation(self, event_id: str) -> None:
+        await self.session.execute(
+            update(HelpdeskEmailEvent)
+            .where(HelpdeskEmailEvent.id == _uuid(event_id))
+            .values(
+                notify_status=HELPDESK_VACATION_NOTIFY_STATUS,
+                error_code=HELPDESK_VACATION_ERROR_CODE,
                 updated_at=utcnow(),
             )
         )

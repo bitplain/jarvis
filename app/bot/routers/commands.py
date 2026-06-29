@@ -14,10 +14,13 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.middlewares.access import is_admin_user
+from app.core.config import Settings
 from app.db.models import BusinessConnection, BusinessConnectionStatus
 from app.db.repositories.daily_brief import DailyBriefSettingsRepository
 from app.db.repositories.helpdesk_email_events import HelpdeskEmailEventRepository
 from app.db.repositories.helpdesk_imap_mailbox_state import HelpdeskImapMailboxStateRepository
+from app.db.repositories.helpdesk_ticket_work_items import HelpdeskTicketWorkItemRepository
+from app.db.repositories.helpdesk_vacation import HelpdeskVacationRepository
 from app.db.repositories.household_memory import HouseholdMemoryRepository
 from app.db.repositories.messages import MessageRepository
 from app.db.repositories.reminders import ReminderRepository
@@ -37,6 +40,12 @@ from app.services.helpdesk_imap.client import HelpdeskImapClient
 from app.services.helpdesk_imap.config import HelpdeskImapConfig
 from app.services.helpdesk_imap.parser import ParsedHelpdeskTicket
 from app.services.helpdesk_imap.service import HelpdeskImapService
+from app.services.helpdesk_ticket_workflow import HelpdeskTicketWorkflowService
+from app.services.helpdesk_vacation import (
+    HelpdeskVacationService,
+    build_helpdesk_vacation_review_keyboard,
+    format_helpdesk_vacation_review_html,
+)
 from app.services.household_memory_service import HouseholdMemoryService
 from app.services.memory_service import MemoryService
 from app.services.reminder_service import ReminderService
@@ -83,6 +92,10 @@ SETTINGS_CALLBACK_WEB_SEARCH = "settings:web_search"
 SETTINGS_CALLBACK_WEB_SEARCH_TOGGLE = "settings:web_search:toggle"
 SETTINGS_CALLBACK_WEB_SEARCH_PROVIDER = "settings:web_search:provider"
 SETTINGS_CALLBACK_WEB_SEARCH_MAX_RESULTS = "settings:web_search:max_results"
+SETTINGS_CALLBACK_HELPDESK = "settings:helpdesk"
+SETTINGS_CALLBACK_HELPDESK_VACATION_ON = "settings:helpdesk:vacation:on"
+SETTINGS_CALLBACK_HELPDESK_VACATION_OFF = "settings:helpdesk:vacation:off"
+SETTINGS_CALLBACK_HELPDESK_VACATION_REVIEW = "settings:helpdesk:vacation:review"
 SETTINGS_CALLBACK_PROMPTS = "settings:prompts"
 SETTINGS_CALLBACK_PROMPTS_PRIVATE = "settings:prompts:private"
 SETTINGS_CALLBACK_PROMPTS_GROUP = "settings:prompts:group"
@@ -290,6 +303,12 @@ def build_settings_keyboard() -> InlineKeyboardMarkup:
                 )
             ],
             [
+                InlineKeyboardButton(
+                    text="HelpDesk",
+                    callback_data=SETTINGS_CALLBACK_HELPDESK,
+                )
+            ],
+            [
                 InlineKeyboardButton(text="Обновить", callback_data=SETTINGS_CALLBACK_REFRESH),
                 InlineKeyboardButton(text="Закрыть", callback_data=SETTINGS_CALLBACK_CLOSE),
             ],
@@ -385,6 +404,32 @@ def build_web_search_settings_keyboard(*, enabled: bool) -> InlineKeyboardMarkup
                     text="Максимум источников",
                     callback_data=SETTINGS_CALLBACK_WEB_SEARCH_MAX_RESULTS,
                 ),
+            ],
+            [
+                InlineKeyboardButton(text="Назад", callback_data=SETTINGS_CALLBACK_REFRESH),
+                InlineKeyboardButton(text="Закрыть", callback_data=SETTINGS_CALLBACK_CLOSE),
+            ],
+        ]
+    )
+
+
+def build_helpdesk_settings_keyboard(*, vacation_enabled: bool) -> InlineKeyboardMarkup:
+    toggle = InlineKeyboardButton(
+        text="Выключить отпуск" if vacation_enabled else "Включить отпуск",
+        callback_data=(
+            SETTINGS_CALLBACK_HELPDESK_VACATION_OFF
+            if vacation_enabled
+            else SETTINGS_CALLBACK_HELPDESK_VACATION_ON
+        ),
+    )
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [toggle],
+            [
+                InlineKeyboardButton(
+                    text="Показать новые за отпуск",
+                    callback_data=SETTINGS_CALLBACK_HELPDESK_VACATION_REVIEW,
+                )
             ],
             [
                 InlineKeyboardButton(text="Назад", callback_data=SETTINGS_CALLBACK_REFRESH),
@@ -612,7 +657,8 @@ def render_settings_home_text() -> str:
         "- Стиль ответа\n"
         "- Списки и напоминания\n"
         "- Сводка дня\n"
-        "- Интернет-поиск"
+        "- Интернет-поиск\n"
+        "- HelpDesk"
     )
 
 
@@ -664,6 +710,21 @@ def render_web_search_settings_text(
         "что нового по ...\n\n"
         "Действия:"
         f"{degraded}"
+    )
+
+
+def render_helpdesk_settings_text(
+    *,
+    imap_enabled: bool,
+    imap_configured: bool,
+    vacation_enabled: bool,
+) -> str:
+    return (
+        "HelpDesk\n\n"
+        f"IMAP: {'enabled' if imap_enabled else 'disabled'}/"
+        f"{'configured' if imap_configured else 'not configured'}\n"
+        f"Vacation mode: {'on' if vacation_enabled else 'off'}\n\n"
+        "Actions:"
     )
 
 
@@ -872,6 +933,21 @@ async def _render_web_search_settings(
     return text, build_web_search_settings_keyboard(enabled=web_settings.enabled)
 
 
+async def _render_helpdesk_settings(
+    session: object,
+    settings: Settings,
+) -> tuple[str, InlineKeyboardMarkup]:
+    config = HelpdeskImapConfig.from_settings(settings)
+    service = HelpdeskVacationService(HelpdeskVacationRepository(session))  # type: ignore[arg-type]
+    state = await service.get_state()
+    text = render_helpdesk_settings_text(
+        imap_enabled=config.enabled,
+        imap_configured=config.configured,
+        vacation_enabled=state.enabled,
+    )
+    return text, build_helpdesk_settings_keyboard(vacation_enabled=state.enabled)
+
+
 def _web_search_provider_key_available(settings: object, provider: WebSearchProviderName) -> bool:
     if provider is WebSearchProviderName.DISABLED:
         return True
@@ -880,6 +956,16 @@ def _web_search_provider_key_available(settings: object, provider: WebSearchProv
     if provider is WebSearchProviderName.BRAVE:
         return bool(str(getattr(settings, "brave_search_api_key", "")).strip())
     return False
+
+
+def _helpdesk_target_chat_id(settings: Settings, fallback_user_id: int) -> int:
+    raw = str(settings.helpdesk_telegram_chat_id or "").strip()
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    return fallback_user_id
 
 
 def _next_web_search_provider(provider: WebSearchProviderName) -> WebSearchProviderName:
@@ -1585,6 +1671,86 @@ async def handle_settings_callback(callback: CallbackQuery, **data: Any) -> None
         )
         if edited:
             await callback.answer("Лимит сохранён.", show_alert=False)
+        return
+    if callback_data == SETTINGS_CALLBACK_HELPDESK:
+        try:
+            text, keyboard = await _render_helpdesk_settings(session, settings)
+        except Exception as exc:
+            logger.warning(
+                "helpdesk_settings_open_failed",
+                extra={"error_type": type(exc).__name__},
+            )
+            await callback.answer("HelpDesk настройки временно недоступны.", show_alert=True)
+            return
+        edited = await _edit_settings_callback_message(
+            callback,
+            text=text,
+            reply_markup=keyboard,
+        )
+        if edited:
+            await callback.answer()
+        return
+    if callback_data in {
+        SETTINGS_CALLBACK_HELPDESK_VACATION_ON,
+        SETTINGS_CALLBACK_HELPDESK_VACATION_OFF,
+    }:
+        vacation = HelpdeskVacationService(
+            HelpdeskVacationRepository(session)  # type: ignore[arg-type]
+        )
+        try:
+            if callback_data == SETTINGS_CALLBACK_HELPDESK_VACATION_ON:
+                state = await vacation.enable(actor_user_id=user_id)
+                answer_text = "Режим отпуска включён."
+            else:
+                state = await vacation.disable(actor_user_id=user_id)
+                await HelpdeskTicketWorkflowService(
+                    HelpdeskTicketWorkItemRepository(session)  # type: ignore[arg-type]
+                ).reschedule_active_reminders_after_vacation()
+                answer_text = "Режим отпуска выключен."
+            text = render_helpdesk_settings_text(
+                imap_enabled=HelpdeskImapConfig.from_settings(settings).enabled,
+                imap_configured=HelpdeskImapConfig.from_settings(settings).configured,
+                vacation_enabled=state.enabled,
+            )
+        except Exception as exc:
+            logger.warning(
+                "helpdesk_vacation_settings_toggle_failed",
+                extra={"error_type": type(exc).__name__},
+            )
+            await callback.answer("Режим отпуска временно недоступен.", show_alert=True)
+            return
+        edited = await _edit_settings_callback_message(
+            callback,
+            text=text,
+            reply_markup=build_helpdesk_settings_keyboard(vacation_enabled=state.enabled),
+        )
+        if edited:
+            await callback.answer(answer_text, show_alert=False)
+        return
+    if callback_data == SETTINGS_CALLBACK_HELPDESK_VACATION_REVIEW:
+        if callback.message is None:
+            await callback.answer("Сообщение недоступно.", show_alert=True)
+            return
+        vacation = HelpdeskVacationService(
+            HelpdeskVacationRepository(session)  # type: ignore[arg-type]
+        )
+        target_chat_id = _helpdesk_target_chat_id(settings, user_id)
+        try:
+            items = await vacation.review_items(telegram_chat_id=target_chat_id)
+            await callback.message.answer(
+                format_helpdesk_vacation_review_html(items),
+                parse_mode="HTML",
+                reply_markup=build_helpdesk_vacation_review_keyboard(items),
+            )
+            await vacation.mark_reviewed()
+        except Exception as exc:
+            logger.warning(
+                "helpdesk_vacation_settings_review_failed",
+                extra={"error_type": type(exc).__name__},
+            )
+            await callback.answer("Не удалось показать отпускные заявки.", show_alert=True)
+            return
+        await callback.answer()
         return
     if callback_data == SETTINGS_CALLBACK_PROMPTS:
         edited = await _edit_settings_callback_message(

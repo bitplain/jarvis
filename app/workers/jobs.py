@@ -19,6 +19,7 @@ from app.db.repositories.daily_brief import DailyBriefSettingsRepository
 from app.db.repositories.helpdesk_email_events import HelpdeskEmailEventRepository
 from app.db.repositories.helpdesk_imap_mailbox_state import HelpdeskImapMailboxStateRepository
 from app.db.repositories.helpdesk_ticket_work_items import HelpdeskTicketWorkItemRepository
+from app.db.repositories.helpdesk_vacation import HelpdeskVacationRepository
 from app.db.repositories.household_memory import HouseholdMemoryRepository
 from app.db.repositories.messages import MessageRepository
 from app.db.repositories.reminders import ReminderRepository
@@ -42,6 +43,7 @@ from app.services.helpdesk_ticket_workflow import (
     build_waiting_ack_keyboard,
     format_helpdesk_ticket_reminder_html,
 )
+from app.services.helpdesk_vacation import HelpdeskVacationService
 from app.services.household_memory_service import HouseholdMemoryService
 from app.services.memory_service import MemoryService
 from app.services.reminder_service import ReminderService, ReminderView
@@ -587,6 +589,14 @@ async def remind_helpdesk_tickets(ctx: dict[str, Any]) -> None:
         async with SessionLocal() as session:
             repository = HelpdeskTicketWorkItemRepository(session)
             now = utcnow()
+            if await _helpdesk_vacation_enabled(session):
+                rescheduled = await repository.reschedule_active_reminders_after(now=now)
+                if rescheduled:
+                    logger.info(
+                        "helpdesk_ticket_reminders_suppressed_vacation",
+                        extra={"rescheduled_count": rescheduled},
+                    )
+                return
             due_items = await repository.due_reminders(now, limit=50)
             for item in due_items:
                 if not await _claim_helpdesk_ticket_reminder(redis, item_id=item.id):
@@ -645,6 +655,7 @@ async def check_helpdesk_imap_mailbox(ctx: dict[str, Any]) -> None:
                 notifier=TelegramHelpdeskNotifier(bot),
                 redis=redis,
                 ticket_work_repository=HelpdeskTicketWorkItemRepository(session),
+                vacation_service=HelpdeskVacationService(HelpdeskVacationRepository(session)),
             )
             await service.run_once()
     finally:
@@ -669,6 +680,22 @@ async def _claim_helpdesk_ticket_reminder(redis: Any, *, item_id: str) -> bool:
         )
         return True
     return bool(claimed)
+
+
+async def _helpdesk_vacation_enabled(session: object) -> bool:
+    try:
+        return await HelpdeskVacationService(
+            HelpdeskVacationRepository(session)  # type: ignore[arg-type]
+        ).is_enabled()
+    except Exception as exc:
+        logger.warning(
+            "helpdesk_vacation_state_check_failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        rollback = getattr(session, "rollback", None)
+        if rollback is not None:
+            await rollback()
+        return False
 
 
 async def _claim_daily_brief_send(

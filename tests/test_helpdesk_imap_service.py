@@ -60,6 +60,7 @@ class FakeHelpdeskRepository:
         self.events: list[dict[str, object]] = []
         self.notified: list[tuple[str, int, int]] = []
         self.failed: list[tuple[str, str]] = []
+        self.suppressed: list[tuple[str, str]] = []
 
     async def exists(self, *, folder: str, imap_uid: str | None, message_id: str | None) -> bool:
         return any(
@@ -101,6 +102,14 @@ class FakeHelpdeskRepository:
             if event["id"] == event_id:
                 event["notify_status"] = "failed"
                 event["error_code"] = error_code
+                return
+
+    async def mark_suppressed_vacation(self, event_id: str) -> None:
+        self.suppressed.append((event_id, "vacation"))
+        for event in self.events:
+            if event["id"] == event_id:
+                event["notify_status"] = "suppressed_vacation"
+                event["error_code"] = "vacation"
                 return
 
     async def failed_notification_event_id(
@@ -284,6 +293,16 @@ class FakeTicketWorkflowRepository:
         )()
 
 
+class FakeVacationService:
+    def __init__(self, *, enabled: bool) -> None:
+        self.enabled = enabled
+        self.calls = 0
+
+    async def is_enabled(self) -> bool:
+        self.calls += 1
+        return self.enabled
+
+
 class FakeRedis:
     def __init__(self) -> None:
         self.values: dict[str, str] = {}
@@ -386,6 +405,65 @@ async def test_helpdesk_service_creates_waiting_work_item_before_new_ticket_card
         }
     ]
     assert notifier.work_item_ids == ["ticket-work-1"]
+
+
+@pytest.mark.asyncio
+async def test_vacation_on_saves_ticket_without_card_and_advances_uid() -> None:
+    state_repository = _existing_state(last_seen_uid=100)
+    repository = FakeHelpdeskRepository()
+    workflow_repository = FakeTicketWorkflowRepository()
+    notifier = FakeNotifier()
+    service = HelpdeskImapService(
+        config=_config(),
+        repository=repository,  # type: ignore[arg-type]
+        state_repository=state_repository,  # type: ignore[arg-type]
+        client=FakeHelpdeskClient([_message(uid="101")], max_uid=101),
+        notifier=notifier,
+        ticket_work_repository=workflow_repository,  # type: ignore[arg-type]
+        vacation_service=FakeVacationService(enabled=True),
+    )
+
+    result = await service.run_once()
+
+    assert result.status == "ok"
+    assert result.processed == 1
+    assert result.failed == 0
+    assert notifier.sent == []
+    assert repository.events[0]["notify_status"] == "suppressed_vacation"
+    assert repository.events[0]["error_code"] == "vacation"
+    assert repository.suppressed == [("event-1", "vacation")]
+    assert workflow_repository.calls[0]["glpi_ticket_id"] == "0047513"
+    assert state_repository.state is not None
+    assert state_repository.state.last_seen_uid == 101
+
+
+@pytest.mark.asyncio
+async def test_helpdesk_service_vacation_on_saves_new_comment_for_manual_review() -> None:
+    state_repository = _existing_state(last_seen_uid=100)
+    repository = FakeHelpdeskRepository()
+    comment = replace(
+        _message(uid="101", message_id="<comment-101>"),
+        subject="[GLPI #0047513] Новый комментарий",
+        body=GLPI_BODY + "\nНовый комментарий:\nНужна проверка.",
+    )
+    notifier = FakeNotifier()
+    service = HelpdeskImapService(
+        config=_config(),
+        repository=repository,  # type: ignore[arg-type]
+        state_repository=state_repository,  # type: ignore[arg-type]
+        client=FakeHelpdeskClient([comment], max_uid=101),
+        notifier=notifier,
+        vacation_service=FakeVacationService(enabled=True),
+    )
+
+    result = await service.run_once()
+
+    assert result.processed == 1
+    assert notifier.sent == []
+    assert repository.events[0]["event_type"] == "comment"
+    assert repository.events[0]["notify_status"] == "suppressed_vacation"
+    assert state_repository.state is not None
+    assert state_repository.state.last_seen_uid == 101
 
 
 @pytest.mark.asyncio

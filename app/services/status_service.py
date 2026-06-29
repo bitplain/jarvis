@@ -11,6 +11,7 @@ from app.core.config import Settings
 from app.db.models import (
     HelpdeskEmailEvent,
     HelpdeskImapMailboxState,
+    HelpdeskVacationState,
     Reminder,
     RuntimeSetting,
     TelegramAccessEntry,
@@ -22,6 +23,7 @@ from app.services.helpdesk_imap.service import (
     HELPDESK_LAST_ERROR_KEY,
     HELPDESK_LAST_SUCCESS_KEY,
 )
+from app.services.helpdesk_vacation import HELPDESK_VACATION_NOTIFY_STATUS
 from app.services.runtime_settings_service import ActiveLLMProvider, RuntimeSettingsService
 
 WORKER_HEARTBEAT_KEY = "jarvis:worker:heartbeat"
@@ -185,6 +187,11 @@ class StatusService:
         processed_last_24h: int | None = None
         pending_notifications: int | None = None
         failed_notifications: int | None = None
+        vacation_enabled = False
+        vacation_since = "unknown"
+        vacation_last_reviewed = "unknown"
+        vacation_new_since_start: int | None = None
+        vacation_new_since_last_review: int | None = None
         baseline = "not set"
         last_seen_uid: int | None = None
         mailbox_last_check = "unknown"
@@ -232,6 +239,35 @@ class StatusService:
                 processed_last_24h = None
                 pending_notifications = None
                 failed_notifications = None
+            try:
+                vacation_result = await self.session.execute(
+                    select(
+                        HelpdeskVacationState.enabled,
+                        HelpdeskVacationState.enabled_at,
+                        HelpdeskVacationState.disabled_at,
+                        HelpdeskVacationState.last_reviewed_at,
+                    ).where(HelpdeskVacationState.scope == "default")
+                )
+                vacation_row = vacation_result.one_or_none()
+                if vacation_row is not None:
+                    vacation_enabled = bool(vacation_row[0])
+                    vacation_since = _iso_or_unknown(vacation_row[1])
+                    vacation_last_reviewed = _iso_or_unknown(vacation_row[3])
+                    vacation_until = None if vacation_enabled else vacation_row[2]
+                    vacation_new_since_start = await self._helpdesk_vacation_count(
+                        since=vacation_row[1],
+                        after=None,
+                        until=vacation_until,
+                        telegram_chat_id=config.telegram_chat_id,
+                    )
+                    vacation_new_since_last_review = await self._helpdesk_vacation_count(
+                        since=vacation_row[1],
+                        after=vacation_row[3],
+                        until=vacation_until,
+                        telegram_chat_id=config.telegram_chat_id,
+                    )
+            except Exception:
+                await self.session.rollback()
         return {
             "enabled": config.enabled,
             "configured": config.configured,
@@ -253,7 +289,36 @@ class StatusService:
             "processed_last_24h": processed_last_24h,
             "pending_notifications": pending_notifications,
             "failed_notifications": failed_notifications,
+            "vacation_enabled": vacation_enabled,
+            "vacation_since": vacation_since,
+            "vacation_last_reviewed": vacation_last_reviewed,
+            "vacation_new_since_start": vacation_new_since_start,
+            "vacation_new_since_last_review": vacation_new_since_last_review,
         }
+
+    async def _helpdesk_vacation_count(
+        self,
+        *,
+        since: datetime | None,
+        after: datetime | None,
+        until: datetime | None,
+        telegram_chat_id: int | None,
+    ) -> int:
+        if self.session is None or since is None or telegram_chat_id is None:
+            return 0
+        conditions = [
+            HelpdeskEmailEvent.notify_status == HELPDESK_VACATION_NOTIFY_STATUS,
+            HelpdeskEmailEvent.telegram_chat_id == telegram_chat_id,
+            HelpdeskEmailEvent.created_at >= since,
+        ]
+        if after is not None:
+            conditions.append(HelpdeskEmailEvent.created_at > after)
+        if until is not None:
+            conditions.append(HelpdeskEmailEvent.created_at <= until)
+        result = await self.session.execute(
+            select(func.count(HelpdeskEmailEvent.id)).where(*conditions)
+        )
+        return int(result.scalar_one())
 
     async def _redis_text(self, key: str, *, default: str = "unknown") -> str:
         if self.redis is None:
@@ -311,6 +376,12 @@ def render_status_html(snapshot: dict[str, Any]) -> str:
         f"- processed last 24h: {_count(helpdesk.get('processed_last_24h'))}\n"
         f"- pending notifications: {_count(helpdesk.get('pending_notifications'))}\n"
         f"- failed notifications: {_count(failed_notifications)}\n"
+        f"- vacation mode: {_enabled_disabled(helpdesk.get('vacation_enabled'))}\n"
+        f"- vacation since: {helpdesk.get('vacation_since', 'unknown')}\n"
+        f"- vacation new since start: {_count(helpdesk.get('vacation_new_since_start'))}\n"
+        f"- vacation new since last review: "
+        f"{_count(helpdesk.get('vacation_new_since_last_review'))}\n"
+        f"- vacation last reviewed: {helpdesk.get('vacation_last_reviewed', 'unknown')}\n"
         f"{failed_attention}\n"
         "Last checks:\n"
         f"- DB latency: {_latency(snapshot['postgres'].get('latency_ms'))}\n"
@@ -390,3 +461,7 @@ def _iso_or_unknown(value: object) -> str:
 
 def _yes_no(value: bool) -> str:
     return "yes" if value else "no"
+
+
+def _enabled_disabled(value: object) -> str:
+    return "enabled" if bool(value) else "disabled"

@@ -331,6 +331,20 @@
 - Все Telegram HTML тексты экранируют пользовательские/email-derived поля через `html.escape`; callback data не содержит email body, title, URL или secrets.
 - Stage 4L-2 не добавляет внутреннюю ticket URL button, Railway Variables changes, destructive Telegram/IMAP calls, Smart Watcher, RAG/OCR, multi-mailbox UI и чтение/ответы на письма.
 
+## Stage 4L-3 HelpDesk Vacation Mode
+
+- Vacation Mode не отключает HelpDesk IMAP polling: worker продолжает читать новые письма через `BODY.PEEK[]`, сохранять events/work items, дедуплицировать и двигать `last_seen_uid`.
+- Когда отпуск включён, автоматические Telegram карточки по новым HelpDesk событиям не отправляются; event фиксируется как `notify_status=suppressed_vacation`, `error_code=vacation`, и это не считается failed notification.
+- Когда отпуск включён, `waiting_ack` reminders каждые 10 минут и `in_work` reminders каждые 30 минут не отправляются.
+- Reminder suppression не должен создавать backlog flood: while vacation enabled active reminders переносятся на будущий normal interval, а при выключении отпуска active reminders ставятся на `now + reminder_interval_minutes`.
+- При выключении отпуска старые накопленные vacation events остаются только для ручного просмотра; автоматическая отправка задним числом запрещена.
+- Ручной review `Показать новые за отпуск` показывает первый раз всё с `enabled_at`, затем только events после `last_reviewed_at`; cursor обновляется только после успешной отправки review message.
+- Если review send падает, `last_reviewed_at` не меняется, чтобы следующий review не потерял события.
+- `/helpdesk_vacation`, `/helpdesk_vacation_on`, `/helpdesk_vacation_off` и `/settings -> HelpDesk` доступны только admin или тем же allowed users/groups, что HelpDesk ticket controls.
+- Unknown group users не могут включать/выключать отпуск или запускать review.
+- `/status` показывает только sanitized vacation diagnostics: mode, since, last reviewed, new since start и new since last review; Telegram IDs, email body, full addresses и secrets не выводятся.
+- Stage 4L-3 не меняет Railway Variables, IMAP credentials, mailbox cleanup, mark-seen/delete поведение, email replies, Smart Watcher, RAG/OCR и multi-mailbox UI.
+
 ## Logging Hygiene
 
 - Normal operational app logs уровня `DEBUG`/`INFO` должны писаться в stdout; реальные warning/error/exception остаются на stderr.

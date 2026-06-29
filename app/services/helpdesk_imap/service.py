@@ -19,6 +19,7 @@ from app.services.helpdesk_imap.config import HelpdeskImapConfig
 from app.services.helpdesk_imap.formatter import build_helpdesk_ticket_card
 from app.services.helpdesk_imap.parser import ParsedHelpdeskTicket, parse_glpi_email
 from app.services.helpdesk_ticket_workflow import WAITING_ACK, StoredHelpdeskTicketWorkItem
+from app.services.helpdesk_vacation import HELPDESK_VACATION_ERROR_CODE
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,8 @@ class HelpdeskEventRepository(Protocol):
     ) -> None: ...
 
     async def mark_notify_failed(self, event_id: str, *, error_code: str) -> None: ...
+
+    async def mark_suppressed_vacation(self, event_id: str) -> None: ...
 
 
 class HelpdeskMailboxState(Protocol):
@@ -111,6 +114,10 @@ class HelpdeskTicketWorkRepository(Protocol):
         telegram_chat_id: int,
         now: datetime,
     ) -> StoredHelpdeskTicketWorkItem: ...
+
+
+class HelpdeskVacationServiceProtocol(Protocol):
+    async def is_enabled(self) -> bool: ...
 
 
 class RedisLike(Protocol):
@@ -169,6 +176,7 @@ class HelpdeskImapService:
         notifier: HelpdeskNotifier,
         redis: RedisLike | None = None,
         ticket_work_repository: HelpdeskTicketWorkRepository | None = None,
+        vacation_service: HelpdeskVacationServiceProtocol | None = None,
     ) -> None:
         self.config = config
         self.repository = repository
@@ -177,6 +185,7 @@ class HelpdeskImapService:
         self.notifier = notifier
         self.redis = redis
         self.ticket_work_repository = ticket_work_repository
+        self.vacation_service = vacation_service
 
     async def run_once(self) -> HelpdeskRunResult:
         if not self.config.enabled:
@@ -426,6 +435,16 @@ class HelpdeskImapService:
     ) -> HelpdeskRunResult:
         assert self.config.telegram_chat_id is not None
         work_item_id = await self._ensure_work_item_id(event_id, message, ticket)
+        if await self._vacation_enabled():
+            await self.repository.mark_suppressed_vacation(event_id)
+            logger.info(
+                "helpdesk_notification_suppressed_vacation",
+                extra={"event_type": ticket.event_type or "unknown"},
+            )
+            return HelpdeskRunResult(
+                status=HELPDESK_VACATION_ERROR_CODE,
+                processed=1,
+            )
         try:
             message_id = await self.notifier.send_ticket(
                 chat_id=self.config.telegram_chat_id,
@@ -458,6 +477,18 @@ class HelpdeskImapService:
                     extra={"error_type": type(exc).__name__},
                 )
         return HelpdeskRunResult(status="sent", processed=1)
+
+    async def _vacation_enabled(self) -> bool:
+        if self.vacation_service is None:
+            return False
+        try:
+            return await self.vacation_service.is_enabled()
+        except Exception as exc:
+            logger.warning(
+                "helpdesk_vacation_state_check_failed",
+                extra={"error_type": type(exc).__name__},
+            )
+            return False
 
     async def _ensure_work_item_id(
         self,

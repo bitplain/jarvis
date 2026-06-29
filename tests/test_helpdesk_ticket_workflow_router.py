@@ -39,8 +39,12 @@ class FakeMessage:
         self.chat = FakeChat(chat_id, chat_type)
         self.answers: list[dict[str, Any]] = []
         self.edits: list[dict[str, Any]] = []
+        self.fail_next_answer = False
 
     async def answer(self, text: str, **kwargs: Any) -> None:
+        if self.fail_next_answer:
+            self.fail_next_answer = False
+            raise RuntimeError("telegram unavailable")
         self.answers.append({"text": text, **kwargs})
 
     async def edit_text(self, text: str, **kwargs: Any) -> None:
@@ -67,6 +71,52 @@ class FakeCallbackQuery:
 
     async def answer(self, text: str | None = None, **kwargs: Any) -> None:
         self.answers.append({"text": text, **kwargs})
+
+
+class FakeVacationService:
+    def __init__(self) -> None:
+        self.enabled = False
+        self.review_marked = 0
+        self.items: list[Any] = []
+
+    async def enable(self, *, actor_user_id: int) -> object:
+        self.enabled = True
+        return type(
+            "VacationState",
+            (),
+            {"enabled": True, "enabled_at": NOW, "last_reviewed_at": None},
+        )()
+
+    async def disable(self, *, actor_user_id: int) -> object:
+        self.enabled = False
+        return type(
+            "VacationState",
+            (),
+            {"enabled": False, "enabled_at": NOW, "disabled_at": NOW},
+        )()
+
+    async def summary(self, *, telegram_chat_id: int) -> object:
+        del telegram_chat_id
+        return type(
+            "VacationSummary",
+            (),
+            {
+                "enabled": self.enabled,
+                "enabled_at": NOW if self.enabled else None,
+                "disabled_at": None if self.enabled else NOW,
+                "last_reviewed_at": None,
+                "events_since_start": len(self.items),
+                "events_since_last_review": len(self.items),
+            },
+        )()
+
+    async def review_items(self, *, telegram_chat_id: int) -> list[Any]:
+        del telegram_chat_id
+        return list(self.items)
+
+    async def mark_reviewed(self) -> object:
+        self.review_marked += 1
+        return object()
 
 
 @pytest.mark.asyncio
@@ -218,5 +268,125 @@ async def test_private_admin_ticket_callback_uses_configured_helpdesk_chat() -> 
     assert "взята в работу" in callback.message.edits[0]["text"]
 
 
-def test_router_registers_only_ticket_command() -> None:
-    assert helpdesk_tickets.HELPDESK_TICKET_COMMANDS == ("ticket",)
+def test_router_registers_helpdesk_ticket_and_vacation_commands() -> None:
+    assert helpdesk_tickets.HELPDESK_TICKET_COMMANDS == (
+        "ticket",
+        "helpdesk_vacation",
+        "helpdesk_vacation_on",
+        "helpdesk_vacation_off",
+    )
+
+
+@pytest.mark.asyncio
+async def test_helpdesk_vacation_commands_are_access_gated() -> None:
+    service = FakeVacationService()
+    message = FakeMessage("/helpdesk_vacation_on", user_id=7)
+
+    await helpdesk_tickets.cmd_helpdesk_vacation_on(
+        message,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        helpdesk_vacation_service=service,
+    )
+
+    assert message.answers == [{"text": "Доступ запрещён."}]
+    assert service.enabled is False
+
+
+@pytest.mark.asyncio
+async def test_helpdesk_vacation_on_off_and_status_commands() -> None:
+    service = FakeVacationService()
+    settings = Settings(
+        admin_telegram_ids="100500",
+        helpdesk_telegram_chat_id="-100123",
+        helpdesk_imap_enabled=True,
+        helpdesk_imap_host="imap.example.ru",
+        helpdesk_imap_username="support@example.ru",
+        helpdesk_imap_password="real-password",
+    )
+    on_message = FakeMessage("/helpdesk_vacation_on", chat_id=100500)
+    status_message = FakeMessage("/helpdesk_vacation", chat_id=100500)
+    off_message = FakeMessage("/helpdesk_vacation_off", chat_id=100500)
+
+    await helpdesk_tickets.cmd_helpdesk_vacation_on(
+        on_message,  # type: ignore[arg-type]
+        settings=settings,
+        helpdesk_vacation_service=service,
+    )
+    await helpdesk_tickets.cmd_helpdesk_vacation(
+        status_message,  # type: ignore[arg-type]
+        settings=settings,
+        helpdesk_vacation_service=service,
+    )
+    await helpdesk_tickets.cmd_helpdesk_vacation_off(
+        off_message,  # type: ignore[arg-type]
+        settings=settings,
+        helpdesk_vacation_service=service,
+        helpdesk_ticket_service=HelpdeskTicketWorkflowService(
+            InMemoryHelpdeskTicketWorkItemRepository(),
+            now_factory=lambda: NOW,
+        ),
+    )
+
+    assert "Режим отпуска включён." in on_message.answers[0]["text"]
+    assert "Vacation mode: on" in status_message.answers[0]["text"]
+    assert "Показать новые за отпуск" in [
+        button.text
+        for row in status_message.answers[0]["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert "Режим отпуска выключен." in off_message.answers[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_helpdesk_vacation_review_updates_cursor_only_after_successful_send() -> None:
+    service = FakeVacationService()
+    service.enabled = True
+    repository = InMemoryHelpdeskTicketWorkItemRepository()
+    workflow = HelpdeskTicketWorkflowService(repository, now_factory=lambda: NOW)
+    item = await workflow.create_or_update_waiting_ack(
+        glpi_ticket_id="0047513",
+        latest_event_id=None,
+        title="Выход <нового> сотрудника",
+        telegram_chat_id=-100123,
+    )
+    service.items = [
+        type(
+            "VacationReviewItem",
+            (),
+            {
+                "glpi_ticket_id": "0047513",
+                "title": "Выход <нового> сотрудника",
+                "event_type": "new_ticket",
+                "events_count": 1,
+                "work_item_id": item.id,
+                "work_item_status": "waiting_ack",
+            },
+        )()
+    ]
+    failing_message = FakeMessage("/helpdesk_vacation", chat_id=100500)
+    failing_message.fail_next_answer = True
+
+    with pytest.raises(RuntimeError):
+        await helpdesk_tickets.show_helpdesk_vacation_review(
+            failing_message,  # type: ignore[arg-type]
+            settings=Settings(
+                admin_telegram_ids="100500",
+                helpdesk_telegram_chat_id="-100123",
+            ),
+            helpdesk_vacation_service=service,
+        )
+    assert service.review_marked == 0
+
+    ok_message = FakeMessage("/helpdesk_vacation", chat_id=100500)
+    await helpdesk_tickets.show_helpdesk_vacation_review(
+        ok_message,  # type: ignore[arg-type]
+        settings=Settings(
+            admin_telegram_ids="100500",
+            helpdesk_telegram_chat_id="-100123",
+        ),
+        helpdesk_vacation_service=service,
+    )
+
+    assert service.review_marked == 1
+    assert "Новые заявки за отпуск" in ok_message.answers[0]["text"]
+    assert "Выход &lt;нового&gt; сотрудника" in ok_message.answers[0]["text"]

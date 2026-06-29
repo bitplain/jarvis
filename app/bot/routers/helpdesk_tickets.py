@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.bot.middlewares.access import GROUP_CHAT_TYPES, is_admin_user
 from app.core.config import Settings
 from app.db.repositories.helpdesk_ticket_work_items import HelpdeskTicketWorkItemRepository
+from app.db.repositories.helpdesk_vacation import HelpdeskVacationRepository
 from app.db.repositories.telegram_access import TelegramAccessRepository
 from app.services.helpdesk_ticket_workflow import (
     DONE,
@@ -21,10 +22,22 @@ from app.services.helpdesk_ticket_workflow import (
     build_ticket_list_keyboard,
     format_helpdesk_in_work_list_html,
 )
+from app.services.helpdesk_vacation import (
+    HelpdeskVacationService,
+    build_helpdesk_vacation_keyboard,
+    build_helpdesk_vacation_review_keyboard,
+    format_helpdesk_vacation_review_html,
+    format_helpdesk_vacation_summary_text,
+)
 from app.services.telegram_access_service import TelegramAccessService
 
 logger = logging.getLogger(__name__)
-HELPDESK_TICKET_COMMANDS = ("ticket",)
+HELPDESK_TICKET_COMMANDS = (
+    "ticket",
+    "helpdesk_vacation",
+    "helpdesk_vacation_on",
+    "helpdesk_vacation_off",
+)
 
 
 async def cmd_ticket(message: Message, **data: Any) -> None:
@@ -51,6 +64,67 @@ async def cmd_ticket(message: Message, **data: Any) -> None:
         parse_mode="HTML",
         reply_markup=reply_markup,
     )
+
+
+async def cmd_helpdesk_vacation(message: Message, **data: Any) -> None:
+    if not await _is_helpdesk_command_allowed(message, data):
+        return
+    service = await _vacation_service(data)
+    if service is None:
+        await message.answer("База данных временно недоступна.")
+        return
+    settings = cast(Settings, data["settings"])
+    target_chat_id = _target_helpdesk_chat_id(message, settings)
+    summary = await service.summary(telegram_chat_id=target_chat_id)
+    await message.answer(
+        format_helpdesk_vacation_summary_text(summary),
+        reply_markup=build_helpdesk_vacation_keyboard(enabled=summary.enabled),
+    )
+
+
+async def cmd_helpdesk_vacation_on(message: Message, **data: Any) -> None:
+    if not await _is_helpdesk_command_allowed(message, data):
+        return
+    service = await _vacation_service(data)
+    if service is None:
+        await message.answer("База данных временно недоступна.")
+        return
+    actor_user_id = message.from_user.id if message.from_user else None
+    await service.enable(actor_user_id=actor_user_id)
+    await message.answer("Режим отпуска включён.")
+
+
+async def cmd_helpdesk_vacation_off(message: Message, **data: Any) -> None:
+    if not await _is_helpdesk_command_allowed(message, data):
+        return
+    service = await _vacation_service(data)
+    if service is None:
+        await message.answer("База данных временно недоступна.")
+        return
+    actor_user_id = message.from_user.id if message.from_user else None
+    await service.disable(actor_user_id=actor_user_id)
+    workflow = await _workflow_service(data)
+    if workflow is not None:
+        await workflow.reschedule_active_reminders_after_vacation()
+    await message.answer("Режим отпуска выключен.")
+
+
+async def show_helpdesk_vacation_review(message: Message, **data: Any) -> None:
+    if not await _is_helpdesk_command_allowed(message, data):
+        return
+    service = await _vacation_service(data)
+    if service is None:
+        await message.answer("База данных временно недоступна.")
+        return
+    settings = cast(Settings, data["settings"])
+    target_chat_id = _target_helpdesk_chat_id(message, settings)
+    items = await service.review_items(telegram_chat_id=target_chat_id)
+    await message.answer(
+        format_helpdesk_vacation_review_html(items),
+        parse_mode="HTML",
+        reply_markup=build_helpdesk_vacation_review_keyboard(items),
+    )
+    await service.mark_reviewed()
 
 
 async def handle_helpdesk_ticket_callback(callback: CallbackQuery, **data: Any) -> None:
@@ -119,6 +193,46 @@ async def handle_helpdesk_ticket_callback(callback: CallbackQuery, **data: Any) 
     await callback.answer("Неизвестная кнопка.", show_alert=True)
 
 
+async def handle_helpdesk_vacation_callback(callback: CallbackQuery, **data: Any) -> None:
+    if not await _is_callback_allowed(callback, data):
+        await callback.answer("Доступ запрещён.", show_alert=True)
+        return
+    service = await _vacation_service(data)
+    if service is None:
+        await callback.answer("База данных временно недоступна.", show_alert=True)
+        return
+    action = (callback.data or "").split(":")[-1]
+    actor_user_id = callback.from_user.id if callback.from_user else None
+    if action == "on":
+        await service.enable(actor_user_id=actor_user_id)
+        await callback.answer("Режим отпуска включён.", show_alert=False)
+        await _refresh_vacation_callback_message(callback, data)
+        return
+    if action == "off":
+        await service.disable(actor_user_id=actor_user_id)
+        workflow = await _workflow_service(data)
+        if workflow is not None:
+            await workflow.reschedule_active_reminders_after_vacation()
+        await callback.answer("Режим отпуска выключен.", show_alert=False)
+        await _refresh_vacation_callback_message(callback, data)
+        return
+    if action == "review":
+        if callback.message is None:
+            await callback.answer("Сообщение недоступно.", show_alert=True)
+            return
+        target_chat_id = _callback_chat_id(callback, data)
+        items = await service.review_items(telegram_chat_id=target_chat_id)
+        await callback.message.answer(
+            format_helpdesk_vacation_review_html(items),
+            parse_mode="HTML",
+            reply_markup=build_helpdesk_vacation_review_keyboard(items),
+        )
+        await service.mark_reviewed()
+        await callback.answer()
+        return
+    await callback.answer("Неизвестная кнопка.", show_alert=True)
+
+
 async def _workflow_service(data: dict[str, Any]) -> HelpdeskTicketWorkflowService | None:
     injected = data.get("helpdesk_ticket_service")
     if isinstance(injected, HelpdeskTicketWorkflowService):
@@ -127,6 +241,28 @@ async def _workflow_service(data: dict[str, Any]) -> HelpdeskTicketWorkflowServi
     if not isinstance(session, AsyncSession):
         return None
     return HelpdeskTicketWorkflowService(HelpdeskTicketWorkItemRepository(session))
+
+
+async def _vacation_service(data: dict[str, Any]) -> Any:
+    injected = data.get("helpdesk_vacation_service")
+    if injected is not None:
+        return injected
+    session = data.get("db_session")
+    if not isinstance(session, AsyncSession):
+        return None
+    return HelpdeskVacationService(HelpdeskVacationRepository(session))
+
+
+async def _is_helpdesk_command_allowed(message: Message, data: dict[str, Any]) -> bool:
+    settings = cast(Settings, data["settings"])
+    bot_username = await _resolve_bot_username(data, settings.telegram_bot_username)
+    if _is_command_for_other_bot(message, bot_username):
+        return False
+    if await _is_message_allowed(message, data):
+        return True
+    if getattr(message.chat, "type", "private") == "private":
+        await message.answer("Доступ запрещён.")
+    return False
 
 
 async def _is_message_allowed(message: Message, data: dict[str, Any]) -> bool:
@@ -225,6 +361,32 @@ async def _edit_callback_message(
     await callback.answer()
 
 
+async def _refresh_vacation_callback_message(callback: CallbackQuery, data: dict[str, Any]) -> None:
+    if callback.message is None or not hasattr(callback.message, "edit_text"):
+        return
+    service = await _vacation_service(data)
+    if service is None:
+        return
+    summary = await service.summary(telegram_chat_id=_callback_chat_id(callback, data))
+    try:
+        await callback.message.edit_text(
+            format_helpdesk_vacation_summary_text(summary),
+            reply_markup=build_helpdesk_vacation_keyboard(enabled=summary.enabled),
+        )
+    except TelegramBadRequest as exc:
+        if "message is not modified" in str(exc).lower():
+            return
+        logger.warning(
+            "helpdesk_vacation_callback_edit_bad_request",
+            extra={"error_type": type(exc).__name__},
+        )
+    except Exception as exc:
+        logger.warning(
+            "helpdesk_vacation_callback_edit_failed",
+            extra={"error_type": type(exc).__name__},
+        )
+
+
 def _target_helpdesk_chat_id(message: Message, settings: Settings) -> int:
     if getattr(message.chat, "type", "private") == "private":
         configured = _configured_helpdesk_chat_id(settings)
@@ -298,8 +460,12 @@ def _is_command_for_other_bot(message: Message, bot_username: str) -> bool:
 
 def build_router() -> Router:
     router = Router(name="helpdesk_tickets")
-    router.message(Command(*HELPDESK_TICKET_COMMANDS))(cmd_ticket)
+    router.message(Command("ticket"))(cmd_ticket)
+    router.message(Command("helpdesk_vacation"))(cmd_helpdesk_vacation)
+    router.message(Command("helpdesk_vacation_on"))(cmd_helpdesk_vacation_on)
+    router.message(Command("helpdesk_vacation_off"))(cmd_helpdesk_vacation_off)
     router.callback_query(F.data.startswith("hd_ticket:"))(handle_helpdesk_ticket_callback)
+    router.callback_query(F.data.startswith("hd_vacation:"))(handle_helpdesk_vacation_callback)
     return router
 
 

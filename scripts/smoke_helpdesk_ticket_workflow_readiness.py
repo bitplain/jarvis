@@ -164,7 +164,9 @@ async def run_readiness() -> HelpdeskTicketWorkflowReadinessResult:
         if all(
             token in router + dispatcher
             for token in [
-                'HELPDESK_TICKET_COMMANDS = ("ticket",)',
+                "HELPDESK_TICKET_COMMANDS = (",
+                '"ticket"',
+                '"helpdesk_vacation"',
                 'action == "take"',
                 'action == "done"',
                 'action == "snooze"',
@@ -249,7 +251,7 @@ async def run_readiness() -> HelpdeskTicketWorkflowReadinessResult:
             ]
         )
         and "Railway Variables не меняются" in docs
-        and "другие алиасы не добавляются" in docs.lower()
+        and "/ticket" in docs
         else "MISSING"
     )
     result.statuses["no_email_destructive_actions"] = (
