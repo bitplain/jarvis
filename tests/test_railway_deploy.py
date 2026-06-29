@@ -64,21 +64,25 @@ def test_railway_configs_and_documented_start_commands_exist() -> None:
 
     assert (ROOT / "railway.api.toml").exists()
     assert (ROOT / "railway.worker.toml").exists()
-    assert "python -m uvicorn app.main:app" in api_config
+    assert "uvicorn app.main:app" in api_config
     assert "--port ${PORT:-8080}" in api_config
-    assert 'preDeployCommand = "alembic upgrade head"' in api_config
+    assert "alembic upgrade head" not in api_config
+    assert "preDeployCommand" not in api_config
     assert 'healthcheckPath = "/health"' in api_config
     assert "arq app.workers.arq_settings.WorkerSettings" in worker_config
     assert "alembic" not in worker_config.lower()
     assert "railway.api.toml" in deploy_doc
     assert "railway.worker.toml" in deploy_doc
-    assert "alembic upgrade head" in deploy_doc
+    assert "preDeployCommand intentionally unused" in deploy_doc
 
 
-def test_api_start_command_runs_migrations_before_serving_webhooks() -> None:
+def test_api_start_command_delegates_migrations_to_startup_guard() -> None:
     api_config = read("railway.api.toml")
+    startup_migrations = read("app/services/startup_migrations.py")
 
-    assert "alembic upgrade head && python -m uvicorn app.main:app" in api_config
+    assert "alembic upgrade head" not in api_config
+    assert "startup_migrations_started" in startup_migrations
+    assert "startup_migrations_completed" in startup_migrations
 
 
 def test_docs_explain_code_level_startup_guard_for_ui_override() -> None:
@@ -86,6 +90,31 @@ def test_docs_explain_code_level_startup_guard_for_ui_override() -> None:
 
     assert "Railway UI Start Command" in deploy_doc
     assert "startup migration guard" in deploy_doc
+
+
+def test_docs_describe_single_startup_migration_strategy() -> None:
+    deploy_doc = read("docs/RAILWAY_DEPLOY.md")
+    readme = read("README.md")
+    architecture = read("docs/ARCHITECTURE.md")
+
+    required_doc_items = [
+        "Production deployment strategy",
+        "API healthcheck endpoint: /health",
+        "/ready is diagnostics/readiness",
+        "Database migrations run via app startup migrations",
+        "Railway preDeploy migration command is intentionally not used",
+        "Worker does not run migrations",
+        "Deploy source: GitHub main",
+        "Healthcheck path: /health",
+        "Pre-deploy command: empty",
+    ]
+    for item in required_doc_items:
+        assert item in deploy_doc
+
+    assert "Production deployment strategy" in readme
+    assert "Railway healthcheck endpoint: /health" in readme
+    assert "/ready is dependency diagnostics" in readme
+    assert "startup migrations" in architecture
 
 
 def test_railway_doc_captures_live_deploy_rules_and_failures() -> None:
@@ -109,6 +138,7 @@ def test_railway_doc_captures_live_deploy_rules_and_failures() -> None:
 
 def test_railway_smoke_and_webhook_scripts_exist() -> None:
     assert (ROOT / "scripts" / "smoke_railway_readiness.py").exists()
+    assert (ROOT / "scripts" / "smoke_railway_config_alignment_readiness.py").exists()
     assert (ROOT / "scripts" / "setup_telegram_webhook.py").exists()
 
 
