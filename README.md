@@ -178,6 +178,30 @@ Business-переменные optional и нужны только для Telegra
 - `POST /telegram/webhook` — вход Telegram updates.
 - `GET /admin/models` — диагностика моделей Yandex/OpenRouter, требует Bearer token из `ADMIN_API_TOKEN`.
 
+## Event Inbox и Structured Rich Cards
+
+Stage 1A/2A закладывает foundation Event Center без WHOOP sync и без расписания digest-ов.
+
+События хранятся в PostgreSQL таблице `event_items` и делятся по scope:
+
+- `personal` — личный контур;
+- `household` — домашний/семейный контур;
+- `work` — рабочий контур, включая будущие HelpDesk/tickets events;
+- `system` — системные события, скрытые из обычной выдачи.
+
+`card_json` хранит Structured Rich Card: `type`, `title`, `severity`, `facts[]`, `summary`, `actions[]`.
+Telegram renderer экранирует HTML и не показывает пользователю raw JSON даже при повреждённой карточке.
+
+Команды:
+
+- `/inbox` — показывает active `personal` + `household` события, не показывает `work` и `system`;
+- `/work` — показывает active `work` события, не показывает `personal`, `household` и `system`.
+
+MVP выдачи сортирует события по priority desc, `due_at` asc с nulls last, затем `created_at` desc и показывает до 10 элементов.
+Callback buttons используют короткий формат `event:<action>:<event_id>` для `done`, `snooze`, `details`; пользовательский текст, JSON и secrets в callback data не попадают.
+
+Default digest timezone зафиксирован как `Europe/Moscow`, но digest scheduling в Stage 1A/2A не реализован.
+
 ## `/status` и ручная память
 
 Stage 4I заменяет старый `/status` на admin-only диагностику Telegram-бота.

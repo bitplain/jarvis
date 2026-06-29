@@ -252,6 +252,8 @@ async def cmd_help(message: Message) -> None:
         "/reset — очистить память\n"
         "/models — модели\n"
         "/status — статус\n"
+        "/inbox — личные и домашние события\n"
+        "/work — рабочие события\n"
         "/helpdesk_baseline_now — обновить HelpDesk IMAP baseline\n"
         "/ticket — заявки HelpDesk в работе\n"
         "/settings — настройки\n"

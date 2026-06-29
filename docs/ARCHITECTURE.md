@@ -81,6 +81,33 @@ Group fallback finalization защищена `final_delivered`: повторны
 Сообщения от неразрешённых пользователей в group/supergroup молча отсекаются middleware; в private chat middleware по-прежнему отвечает `Доступ запрещён.`
 Если privacy mode Telegram ограничивает updates или Telegram присылает `guest_message` вместо обычного `message`, Jarvis не обещает чтение всей истории группы, а такой вызов не считается Group Assistant.
 
+## Event Center foundation
+
+Stage 1A/2A добавляет базу Event Center без WHOOP OAuth/sync, AI sleep analysis и digest scheduling.
+
+Данные хранятся в `event_items`:
+
+- `scope`: `personal`, `household`, `work`, `system`;
+- `status`: `new`, `seen`, `done`, `snoozed`, `archived`, `failed`;
+- `priority`: `low`, `normal`, `high`, `critical`;
+- `event_type`: `reminder`, `note`, `shopping`, `helpdesk_ticket`, `whoop_sleep`, `system_alert`, `digest_item`;
+- `payload_json` — source-specific metadata;
+- `card_json` — Structured Rich Card для Telegram/UI renderer.
+
+Основные seams:
+
+- `app/db/models.py` — SQLAlchemy model/enums `EventItem`, `EventScope`, `EventStatus`, `EventPriority`, `EventType`;
+- `app/db/repositories/event_items.py` — PostgreSQL repository с active filtering и сортировкой выдачи;
+- `app/services/event_items.py` — service, in-memory test repository, scope helpers и `DEFAULT_DIGEST_TIMEZONE = "Europe/Moscow"`;
+- `app/services/event_cards.py` — tolerant Structured Card parser, Telegram HTML renderer и safe callback data builder;
+- `app/bot/routers/event_inbox.py` — команды `/inbox`, `/work` и callbacks `event:*`.
+
+`/inbox` показывает только active `personal` + `household` events. `work` и `system` туда не попадают; поэтому HelpDesk/tickets не должны появляться в личном inbox.
+`/work` показывает только active `work` events. `system` скрыт по умолчанию и предназначен для будущих diagnostics/admin surfaces.
+
+Сортировка MVP: priority desc, `due_at` asc/nulls last, затем `created_at` desc, лимит 10 событий.
+Callback actions `done`, `snooze`, `details` имеют отдельную access check, потому что message middleware не защищает callback queries. Callback data не содержит пользовательский текст, prompts, JSON, URLs, tokens или env secrets.
+
 ## Списки покупок и напоминания
 
 Stage 4G добавляет только явные команды пользователя. Router `app/bot/routers/lists_reminders.py` подключён до generic private/group LLM handlers, поэтому clear intent не создаёт `process_llm_message`, а обычный разговор продолжает идти в LLM.

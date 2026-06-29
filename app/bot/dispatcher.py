@@ -6,6 +6,7 @@ from app.bot.routers import (
     business,
     commands,
     daily_brief,
+    event_inbox,
     groups,
     guest,
     helpdesk_tickets,
@@ -24,6 +25,7 @@ def build_dispatcher(settings: Settings) -> Dispatcher:
     dispatcher.include_router(guest.build_router())
     dispatcher.include_router(business.build_router())
     dispatcher.include_router(daily_brief.build_router())
+    dispatcher.include_router(event_inbox.build_router())
     dispatcher.include_router(helpdesk_tickets.build_router())
     dispatcher.include_router(lists_reminders.build_router())
     dispatcher.include_router(household_memory.build_router())

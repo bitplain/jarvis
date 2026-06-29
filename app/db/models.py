@@ -100,6 +100,39 @@ class ReminderStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class EventScope(StrEnum):
+    PERSONAL = "personal"
+    HOUSEHOLD = "household"
+    WORK = "work"
+    SYSTEM = "system"
+
+
+class EventStatus(StrEnum):
+    NEW = "new"
+    SEEN = "seen"
+    DONE = "done"
+    SNOOZED = "snoozed"
+    ARCHIVED = "archived"
+    FAILED = "failed"
+
+
+class EventPriority(StrEnum):
+    LOW = "low"
+    NORMAL = "normal"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class EventType(StrEnum):
+    REMINDER = "reminder"
+    NOTE = "note"
+    SHOPPING = "shopping"
+    HELPDESK_TICKET = "helpdesk_ticket"
+    WHOOP_SLEEP = "whoop_sleep"
+    SYSTEM_ALERT = "system_alert"
+    DIGEST_ITEM = "digest_item"
+
+
 class HouseholdMemoryStatus(StrEnum):
     ACTIVE = "active"
     DELETED = "deleted"
@@ -187,6 +220,51 @@ class RuntimeSetting(Base):
         onupdate=utcnow,
     )
     updated_by_telegram_id: Mapped[int | None] = mapped_column(BigInteger)
+
+
+class EventItem(Base):
+    __tablename__ = "event_items"
+    __table_args__ = (
+        CheckConstraint(
+            "scope IN ('personal', 'household', 'work', 'system')",
+            name="ck_event_items_scope",
+        ),
+        CheckConstraint(
+            "status IN ('new', 'seen', 'done', 'snoozed', 'archived', 'failed')",
+            name="ck_event_items_status",
+        ),
+        CheckConstraint(
+            "priority IN ('low', 'normal', 'high', 'critical')",
+            name="ck_event_items_priority",
+        ),
+        CheckConstraint(
+            (
+                "event_type IN ('reminder', 'note', 'shopping', 'helpdesk_ticket', "
+                "'whoop_sleep', 'system_alert', 'digest_item')"
+            ),
+            name="ck_event_items_event_type",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    user_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
+    chat_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
+    scope: Mapped[str] = mapped_column(String(32), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    priority: Mapped[str] = mapped_column(String(16), nullable=False, default=EventPriority.NORMAL)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default=EventStatus.NEW)
+    source: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    card_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        onupdate=utcnow,
+    )
 
 
 class WebSearchCache(Base):
@@ -609,6 +687,16 @@ Index(
     HouseholdMemoryEntry.created_by_user_id,
     HouseholdMemoryEntry.status,
 )
+Index(
+    "ix_event_items_scope_status_priority_due",
+    EventItem.scope,
+    EventItem.status,
+    EventItem.priority,
+    EventItem.due_at,
+)
+Index("ix_event_items_user_scope_status", EventItem.user_id, EventItem.scope, EventItem.status)
+Index("ix_event_items_chat_scope_status", EventItem.chat_id, EventItem.scope, EventItem.status)
+Index("ix_event_items_created_at", EventItem.created_at)
 Index(
     "uq_daily_brief_settings_private_scope",
     DailyBriefSettings.scope_type,
