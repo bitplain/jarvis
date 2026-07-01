@@ -52,6 +52,27 @@ async def test_status_command_admin_renders_html_diagnostics_without_secrets() -
             "draft_streaming": {"ok": True},
             "prompt_profiles": {"ok": True},
             "access_db": {"ok": True},
+            "digests": {
+                "ok": True,
+                "policies": [
+                    {
+                        "key": "personal_morning",
+                        "enabled": True,
+                        "send_time": "06:50",
+                        "timezone": "Europe/Moscow",
+                        "chat": "configured",
+                        "last_sent": "never",
+                    },
+                    {
+                        "key": "work_start",
+                        "enabled": True,
+                        "send_time": "09:00",
+                        "timezone": "Europe/Moscow",
+                        "chat": "missing",
+                        "last_sent": "2026-07-01T06:00:00+00:00",
+                    },
+                ],
+            },
         },
     )
 
@@ -68,6 +89,15 @@ async def test_status_command_admin_renders_html_diagnostics_without_secrets() -
     assert "DB latency: 12 ms" in rendered
     assert "Redis latency: 4 ms" in rendered
     assert "Due reminders: 0" in rendered
+    assert "Digests:" in rendered
+    assert (
+        "- personal_morning: enabled, 06:50 Europe/Moscow, chat configured, "
+        "last sent never"
+    ) in rendered
+    assert (
+        "- work_start: enabled, 09:00 Europe/Moscow, chat missing, "
+        "last sent 2026-07-01T06:00:00+00:00"
+    ) in rendered
     assert "secret-token" not in rendered
     assert "ya-secret" not in rendered
     assert "or-secret" not in rendered

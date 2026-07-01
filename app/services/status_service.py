@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.db.models import (
+    DigestPolicy,
     HelpdeskEmailEvent,
     HelpdeskImapMailboxState,
     HelpdeskVacationState,
@@ -77,6 +78,7 @@ class StatusService:
             "draft_streaming": {"ok": self._draft_streaming_enabled()},
             "prompt_profiles": await self._prompt_profiles(postgres["ok"]),
             "access_db": await self._access_db(postgres["ok"]),
+            "digests": await self._digests(postgres["ok"]),
             "helpdesk_imap": await self._helpdesk_imap(postgres["ok"]),
         }
 
@@ -181,6 +183,31 @@ class StatusService:
             await self.session.rollback()
             return {"ok": False}
         return {"ok": True}
+
+    async def _digests(self, postgres_ok: bool) -> dict[str, Any]:
+        if self.session is None or not postgres_ok:
+            return {"ok": False, "policies": []}
+        try:
+            result = await self.session.execute(select(DigestPolicy).order_by(DigestPolicy.key))
+            order = {"personal_morning": 0, "work_start": 1}
+            policies = sorted(result.scalars().all(), key=lambda policy: order.get(policy.key, 99))
+        except Exception:
+            await self.session.rollback()
+            return {"ok": False, "policies": []}
+        return {
+            "ok": True,
+            "policies": [
+                {
+                    "key": policy.key,
+                    "enabled": bool(policy.enabled),
+                    "send_time": policy.send_time,
+                    "timezone": policy.timezone,
+                    "chat": "configured" if policy.target_chat_id is not None else "missing",
+                    "last_sent": _iso_or_never(policy.last_sent_at),
+                }
+                for policy in policies
+            ],
+        }
 
     async def _helpdesk_imap(self, postgres_ok: bool) -> dict[str, Any]:
         config = HelpdeskImapConfig.from_settings(self.settings)
@@ -336,6 +363,7 @@ class StatusService:
 
 def render_status_html(snapshot: dict[str, Any]) -> str:
     helpdesk = snapshot.get("helpdesk_imap") or {}
+    digests = snapshot.get("digests") or {}
     failed_notifications = helpdesk.get("failed_notifications")
     failed_attention = ""
     if _positive_count(failed_notifications):
@@ -383,6 +411,7 @@ def render_status_html(snapshot: dict[str, Any]) -> str:
         f"{_count(helpdesk.get('vacation_new_since_last_review'))}\n"
         f"- vacation last reviewed: {helpdesk.get('vacation_last_reviewed', 'unknown')}\n"
         f"{failed_attention}\n"
+        f"{_render_digests_status(digests)}\n"
         "Last checks:\n"
         f"- DB latency: {_latency(snapshot['postgres'].get('latency_ms'))}\n"
         f"- Redis latency: {_latency(snapshot['redis'].get('latency_ms'))}\n"
@@ -457,6 +486,34 @@ def _iso_or_unknown(value: object) -> str:
     if isinstance(value, datetime):
         return value.isoformat()
     return str(value)
+
+
+def _iso_or_never(value: object) -> str:
+    if value is None:
+        return "never"
+    return _iso_or_unknown(value)
+
+
+def _render_digests_status(digests: dict[str, Any]) -> str:
+    lines = ["Digests:"]
+    policies = digests.get("policies")
+    if not isinstance(policies, list) or not policies:
+        lines.append("- unavailable")
+        return "\n".join(lines)
+    for policy in policies:
+        if not isinstance(policy, dict):
+            continue
+        enabled = "enabled" if policy.get("enabled") else "disabled"
+        key = str(policy.get("key", "unknown"))
+        send_time = str(policy.get("send_time", "unknown"))
+        timezone = str(policy.get("timezone", "unknown"))
+        chat = str(policy.get("chat", "missing"))
+        last_sent = str(policy.get("last_sent", "never"))
+        lines.append(
+            f"- {key}: {enabled}, {send_time} {timezone}, chat {chat}, "
+            f"last sent {last_sent}"
+        )
+    return "\n".join(lines)
 
 
 def _yes_no(value: bool) -> str:

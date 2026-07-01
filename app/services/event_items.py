@@ -17,6 +17,7 @@ ACTIVE_EVENT_STATUSES = {
     EventStatus.SEEN.value,
     EventStatus.SNOOZED.value,
 }
+DIGEST_EVENT_STATUSES = {EventStatus.NEW.value, EventStatus.SNOOZED.value}
 EVENT_PRIORITY_RANK = {
     EventPriority.LOW.value: 0,
     EventPriority.NORMAL.value: 1,
@@ -43,6 +44,22 @@ class EventItemCreate:
     payload_json: dict[str, Any] | None = None
     card_json: dict[str, Any] | None = None
     due_at: datetime | None = None
+
+
+def create_personal_event(**kwargs: Any) -> EventItemCreate:
+    return EventItemCreate(scope=EventScope.PERSONAL, **kwargs)
+
+
+def create_household_event(**kwargs: Any) -> EventItemCreate:
+    return EventItemCreate(scope=EventScope.HOUSEHOLD, **kwargs)
+
+
+def create_work_event(**kwargs: Any) -> EventItemCreate:
+    return EventItemCreate(scope=EventScope.WORK, **kwargs)
+
+
+def create_system_event(**kwargs: Any) -> EventItemCreate:
+    return EventItemCreate(scope=EventScope.SYSTEM, **kwargs)
 
 
 @dataclass
@@ -74,6 +91,15 @@ class EventItemRepositoryProtocol(Protocol):
         user_id: int,
         chat_id: int,
         scopes: set[str],
+        limit: int,
+    ) -> list[StoredEventItem]:
+        raise NotImplementedError
+
+    async def list_for_digest(
+        self,
+        *,
+        scopes: set[str],
+        now: datetime,
         limit: int,
     ) -> list[StoredEventItem]:
         raise NotImplementedError
@@ -162,6 +188,23 @@ class EventItemService:
             limit=limit,
         )
 
+    async def list_for_digest(
+        self,
+        *,
+        scopes: set[str],
+        now: datetime,
+        limit: int = 15,
+    ) -> list[StoredEventItem]:
+        normalized_scopes = {
+            _normalize_value(scope, VALID_EVENT_SCOPES, "invalid_event_scope")
+            for scope in scopes
+        }
+        return await self.repository.list_for_digest(
+            scopes=normalized_scopes,
+            now=_to_utc(now),
+            limit=limit,
+        )
+
     async def get_event(self, event_id: str) -> StoredEventItem | None:
         return await self.repository.get(event_id)
 
@@ -219,6 +262,28 @@ class InMemoryEventItemRepository:
             if event.scope in scopes
             and event.status in ACTIVE_EVENT_STATUSES
             and (event.user_id == user_id or event.chat_id == chat_id)
+        ]
+        return sorted(events, key=_event_sort_key)[:limit]
+
+    async def list_for_digest(
+        self,
+        *,
+        scopes: set[str],
+        now: datetime,
+        limit: int,
+    ) -> list[StoredEventItem]:
+        events = [
+            event
+            for event in self.items.values()
+            if event.scope in scopes
+            and (
+                event.status == EventStatus.NEW.value
+                or (
+                    event.status == EventStatus.SNOOZED.value
+                    and event.due_at is not None
+                    and event.due_at <= now
+                )
+            )
         ]
         return sorted(events, key=_event_sort_key)[:limit]
 

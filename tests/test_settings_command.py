@@ -1,3 +1,5 @@
+from datetime import datetime
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -104,6 +106,19 @@ def test_settings_home_contains_daily_brief_section() -> None:
     )
 
 
+def test_settings_home_contains_event_digests_section() -> None:
+    text = commands.render_settings_home_text()
+    keyboard = commands.build_settings_keyboard()
+
+    assert "Дайджесты" in text
+    assert any(
+        button.text == "Дайджесты"
+        and button.callback_data == commands.SETTINGS_CALLBACK_DIGESTS
+        for row in keyboard.inline_keyboard
+        for button in row
+    )
+
+
 def test_settings_home_contains_web_search_section() -> None:
     text = commands.render_settings_home_text()
     keyboard = commands.build_settings_keyboard()
@@ -168,6 +183,46 @@ def test_render_daily_brief_settings_text() -> None:
     assert "Время: 09:00" in text
     assert "Часовой пояс: Europe/Moscow" in text
     assert "Куда: личка" in text
+
+
+def test_render_digest_settings_text_shows_scope_separation_and_missing_chat() -> None:
+    FakeDigestPolicyRepository.reset()
+    policies = list(FakeDigestPolicyRepository.policies.values())
+
+    text = commands.render_digest_settings_text(policies)
+    keyboard = commands.build_digest_settings_keyboard()
+
+    assert "Дайджесты" in text
+    assert "Личный утренний:" in text
+    assert "- статус: включён" in text
+    assert "- scopes: personal, household" in text
+    assert "- chat: missing" in text
+    assert "Рабочий:" in text
+    assert "- scopes: work" in text
+    assert any(
+        button.callback_data == commands.SETTINGS_CALLBACK_DIGESTS_PERSONAL_NOW
+        for row in keyboard.inline_keyboard
+        for button in row
+    )
+
+
+def test_render_digest_policy_text_shows_configured_chat() -> None:
+    FakeDigestPolicyRepository.reset()
+    policy = FakeDigestPolicyRepository.policies["work_start"]
+    policy.target_chat_id = 100500
+
+    text = commands.render_digest_policy_text(policy)
+    keyboard = commands.build_digest_policy_keyboard(policy)
+
+    assert "Рабочий дайджест" in text
+    assert "Статус: включён" in text
+    assert "Scopes: work" in text
+    assert "Chat: configured" in text
+    assert any(
+        button.callback_data == "settings:digests:work_start:chat"
+        for row in keyboard.inline_keyboard
+        for button in row
+    )
 
 
 class FakeRuntimeSettingsService:
@@ -254,6 +309,102 @@ class FakeRuntimeSettingsService:
                 "timezone": self.__class__.brief_timezone,
             },
         )()
+
+
+class FakeDigestPolicyRepository:
+    instances: list["FakeDigestPolicyRepository"] = []
+    policies: dict[str, Any] = {}
+
+    def __init__(self, session: object) -> None:
+        del session
+        self.__class__.instances.append(self)
+
+    @classmethod
+    def reset(cls) -> None:
+        cls.instances = []
+        cls.policies = {
+            "personal_morning": SimpleNamespace(
+                id="personal-id",
+                key="personal_morning",
+                title="Личный утренний дайджест",
+                enabled=True,
+                scope_filter_json={"scopes": ["personal", "household"]},
+                send_time="06:50",
+                timezone="Europe/Moscow",
+                target_chat_id=None,
+                last_sent_date=None,
+                last_sent_at=None,
+                created_at=datetime(2026, 7, 1),
+                updated_at=datetime(2026, 7, 1),
+            ),
+            "work_start": SimpleNamespace(
+                id="work-id",
+                key="work_start",
+                title="Рабочий дайджест",
+                enabled=True,
+                scope_filter_json={"scopes": ["work"]},
+                send_time="09:00",
+                timezone="Europe/Moscow",
+                target_chat_id=None,
+                last_sent_date=None,
+                last_sent_at=None,
+                created_at=datetime(2026, 7, 1),
+                updated_at=datetime(2026, 7, 1),
+            ),
+        }
+
+    async def ensure_default_policies(self) -> list[Any]:
+        return await self.list_policies()
+
+    async def list_policies(self) -> list[Any]:
+        return [self.__class__.policies["personal_morning"], self.__class__.policies["work_start"]]
+
+    async def get_by_key(self, key: str) -> Any | None:
+        return self.__class__.policies.get(key)
+
+    async def update_enabled(self, key: str, enabled: bool) -> Any | None:
+        policy = self.__class__.policies.get(key)
+        if policy is not None:
+            policy.enabled = enabled
+        return policy
+
+    async def update_schedule(
+        self,
+        key: str,
+        *,
+        send_time: str | None,
+        timezone: str | None,
+    ) -> Any | None:
+        policy = self.__class__.policies.get(key)
+        if policy is None:
+            return None
+        if send_time is not None:
+            if send_time == "25:99":
+                raise ValueError("invalid_digest_send_time")
+            policy.send_time = send_time
+        if timezone is not None:
+            if timezone == "Europe/NoSuchCity":
+                raise ValueError("invalid_digest_timezone")
+            policy.timezone = timezone
+        return policy
+
+    async def set_target_chat_id(self, key: str, target_chat_id: int) -> Any | None:
+        policy = self.__class__.policies.get(key)
+        if policy is not None:
+            policy.target_chat_id = target_chat_id
+        return policy
+
+
+class FakeDigestService:
+    def __init__(self, **kwargs: object) -> None:
+        del kwargs
+
+    async def build_digest(self, policy_key: str, *, now: datetime) -> object:
+        return SimpleNamespace(
+            policy=FakeDigestPolicyRepository.policies[policy_key],
+            now=now,
+            items=[],
+        )
 
 
 class FakeTelegramAccessService:
@@ -377,6 +528,7 @@ def patch_settings_service(monkeypatch: pytest.MonkeyPatch) -> None:
         PromptProfileScope.WATCHER: PromptProfile.BALANCED,
     }
     FakeRuntimeSettingsService.prompts = {}
+    FakeDigestPolicyRepository.reset()
     FakeTelegramAccessService.instances = []
     FakeTelegramAccessService.users = []
     FakeTelegramAccessService.groups = []
@@ -386,6 +538,10 @@ def patch_settings_service(monkeypatch: pytest.MonkeyPatch) -> None:
     FakeTelegramAccessService.removed_groups = []
     monkeypatch.setattr(commands, "RuntimeSettingRepository", lambda session: object())
     monkeypatch.setattr(commands, "RuntimeSettingsService", FakeRuntimeSettingsService)
+    monkeypatch.setattr(commands, "DigestPolicyRepository", FakeDigestPolicyRepository)
+    monkeypatch.setattr(commands, "DigestService", FakeDigestService)
+    monkeypatch.setattr(commands, "EventItemRepository", lambda session: object())
+    monkeypatch.setattr(commands, "render_digest", lambda result: f"digest:{result.policy.key}")
     monkeypatch.setattr(commands, "TelegramAccessRepository", lambda session: object())
     monkeypatch.setattr(commands, "TelegramAccessService", FakeTelegramAccessService)
 
@@ -427,6 +583,36 @@ async def test_settings_command_admin_can_open_menu() -> None:
         "settings:prompts",
         "settings:profiles",
     ]
+
+
+@pytest.mark.asyncio
+async def test_digest_command_admin_shows_status_and_buttons() -> None:
+    message = FakeMessage("/digest", user_id=100500)
+
+    await commands.cmd_digest(
+        message,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    answer = message.answers[0]
+    assert "Дайджесты" in answer["text"]
+    assert "Личный утренний:" in answer["text"]
+    keyboard = answer["reply_markup"].inline_keyboard
+    assert [button.text for button in keyboard[0]] == ["Показать личный", "Показать рабочий"]
+
+
+@pytest.mark.asyncio
+async def test_digest_command_non_admin_is_denied() -> None:
+    message = FakeMessage("/digest", user_id=7)
+
+    await commands.cmd_digest(
+        message,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    assert message.answers == [{"text": "Доступ запрещён."}]
 
 
 @pytest.mark.asyncio
@@ -504,6 +690,177 @@ async def test_access_section_visible_to_admin() -> None:
     assert "Разрешённые пользователи: 0" in edit["text"]
     assert "Разрешённые группы: 0" in edit["text"]
     assert [button.text for button in keyboard[0]] == ["Пользователи", "Группы"]
+
+
+@pytest.mark.asyncio
+async def test_digest_settings_section_visible_to_admin() -> None:
+    callback = FakeCallbackQuery("settings:digests", user_id=100500)
+
+    await commands.handle_settings_callback(
+        callback,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    edit = callback.message.edits[0]
+    assert "Дайджесты" in edit["text"]
+    assert "Личный утренний:" in edit["text"]
+    assert "Рабочий:" in edit["text"]
+
+
+@pytest.mark.asyncio
+async def test_digest_policy_screen_and_toggle_work() -> None:
+    callback = FakeCallbackQuery("settings:digests:personal_morning", user_id=100500)
+
+    await commands.handle_settings_callback(
+        callback,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    assert "Личный утренний дайджест" in callback.message.edits[0]["text"]
+
+    toggle = FakeCallbackQuery(
+        "settings:digests:personal_morning:toggle",
+        user_id=100500,
+        message=callback.message,
+    )
+    await commands.handle_settings_callback(
+        toggle,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    assert FakeDigestPolicyRepository.policies["personal_morning"].enabled is False
+    assert "Статус: выключен" in toggle.message.edits[-1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_digest_use_current_private_chat_sets_target_chat_id() -> None:
+    callback = FakeCallbackQuery("settings:digests:work_start:chat", user_id=100500)
+    callback.message.chat.id = 100500
+    callback.message.chat.type = "private"
+
+    await commands.handle_settings_callback(
+        callback,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    assert FakeDigestPolicyRepository.policies["work_start"].target_chat_id == 100500
+    assert "Chat: configured" in callback.message.edits[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_digest_use_current_chat_rejects_group_chat() -> None:
+    callback = FakeCallbackQuery("settings:digests:work_start:chat", user_id=100500)
+    callback.message.chat.id = -100123
+    callback.message.chat.type = "group"
+
+    await commands.handle_settings_callback(
+        callback,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    assert FakeDigestPolicyRepository.policies["work_start"].target_chat_id is None
+    assert callback.answers == [{"text": "Настройте дайджест из личного чата.", "show_alert": True}]
+
+
+@pytest.mark.asyncio
+async def test_digest_show_now_sends_rendered_digest_without_target_chat() -> None:
+    callback = FakeCallbackQuery("settings:digests:personal_morning:show", user_id=100500)
+
+    await commands.handle_settings_callback(
+        callback,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    assert callback.message.answers == [{"text": "digest:personal_morning", "parse_mode": "HTML"}]
+    assert callback.answers == [{"text": None}]
+
+
+@pytest.mark.asyncio
+async def test_digest_time_edit_valid_invalid_and_cancel() -> None:
+    state = FakeState(commands.DigestSettingsInput.time.state)
+    state.data = {"digest_policy_key": "personal_morning"}
+    message = FakeMessage("07:05", user_id=100500)
+
+    await commands.handle_digest_time_input_message(
+        message,  # type: ignore[arg-type]
+        state=state,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    assert FakeDigestPolicyRepository.policies["personal_morning"].send_time == "07:05"
+    assert state.cleared is True
+    assert "Время дайджеста сохранено." in message.answers[0]["text"]
+
+    state = FakeState(commands.DigestSettingsInput.time.state)
+    state.data = {"digest_policy_key": "personal_morning"}
+    invalid = FakeMessage("25:99", user_id=100500)
+    await commands.handle_digest_time_input_message(
+        invalid,  # type: ignore[arg-type]
+        state=state,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+    assert "Не понял время." in invalid.answers[0]["text"]
+
+    state = FakeState(commands.DigestSettingsInput.time.state)
+    state.data = {"digest_policy_key": "personal_morning"}
+    cancel = FakeMessage("/cancel", user_id=100500)
+    await commands.handle_digest_time_input_message(
+        cancel,  # type: ignore[arg-type]
+        state=state,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+    assert state.cleared is True
+    assert cancel.answers == [{"text": "Изменение времени дайджеста отменено."}]
+
+
+@pytest.mark.asyncio
+async def test_digest_timezone_edit_valid_invalid_and_cancel() -> None:
+    state = FakeState(commands.DigestSettingsInput.timezone.state)
+    state.data = {"digest_policy_key": "work_start"}
+    message = FakeMessage("Asia/Dubai", user_id=100500)
+
+    await commands.handle_digest_timezone_input_message(
+        message,  # type: ignore[arg-type]
+        state=state,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+
+    assert FakeDigestPolicyRepository.policies["work_start"].timezone == "Asia/Dubai"
+    assert state.cleared is True
+    assert "Часовой пояс дайджеста сохранён." in message.answers[0]["text"]
+
+    state = FakeState(commands.DigestSettingsInput.timezone.state)
+    state.data = {"digest_policy_key": "work_start"}
+    invalid = FakeMessage("Europe/NoSuchCity", user_id=100500)
+    await commands.handle_digest_timezone_input_message(
+        invalid,  # type: ignore[arg-type]
+        state=state,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+    assert "Не знаю такой часовой пояс." in invalid.answers[0]["text"]
+
+    state = FakeState(commands.DigestSettingsInput.timezone.state)
+    state.data = {"digest_policy_key": "work_start"}
+    cancel = FakeMessage("/cancel", user_id=100500)
+    await commands.handle_digest_timezone_input_message(
+        cancel,  # type: ignore[arg-type]
+        state=state,  # type: ignore[arg-type]
+        settings=Settings(admin_telegram_ids="100500"),
+        db_session=object(),
+    )
+    assert state.cleared is True
+    assert cancel.answers == [{"text": "Изменение часового пояса дайджеста отменено."}]
 
 
 @pytest.mark.asyncio

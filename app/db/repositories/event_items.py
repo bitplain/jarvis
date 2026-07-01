@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import case, or_
+from sqlalchemy import and_, case, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import select
 
@@ -64,6 +64,41 @@ class EventItemRepository:
                 EventItem.scope.in_(scopes),
                 EventItem.status.in_(ACTIVE_EVENT_STATUSES),
                 or_(EventItem.user_id == user_id, EventItem.chat_id == chat_id),
+            )
+            .order_by(
+                priority_rank.desc(),
+                due_is_null,
+                EventItem.due_at,
+                EventItem.created_at.desc(),
+            )
+            .limit(limit)
+        )
+        result = await self.session.execute(statement)
+        return [_to_stored(item) for item in result.scalars().all()]
+
+    async def list_for_digest(
+        self,
+        *,
+        scopes: set[str],
+        now: datetime,
+        limit: int,
+    ) -> list[StoredEventItem]:
+        priority_rank = case(
+            *[
+                (EventItem.priority == priority, rank)
+                for priority, rank in EVENT_PRIORITY_RANK.items()
+            ],
+            else_=EVENT_PRIORITY_RANK["normal"],
+        )
+        due_is_null = case((EventItem.due_at.is_(None), 1), else_=0)
+        statement = (
+            select(EventItem)
+            .where(
+                EventItem.scope.in_(scopes),
+                or_(
+                    EventItem.status == "new",
+                    and_(EventItem.status == "snoozed", EventItem.due_at <= now),
+                ),
             )
             .order_by(
                 priority_rank.desc(),

@@ -42,6 +42,15 @@ def test_daily_brief_worker_is_registered() -> None:
     )
 
 
+def test_event_digest_worker_is_registered() -> None:
+    assert jobs.send_due_digests in WorkerSettings.functions
+    assert any(
+        getattr(cron_job, "coroutine", None) is jobs.send_due_digests
+        or getattr(cron_job, "name", "") == "cron:send_due_digests"
+        for cron_job in WorkerSettings.cron_jobs
+    )
+
+
 def test_helpdesk_ticket_reminder_worker_is_registered() -> None:
     assert jobs.remind_helpdesk_tickets in WorkerSettings.functions
     assert any(
@@ -329,6 +338,59 @@ class FakeDailyBriefService:
 
     async def build_brief(self, **kwargs: object) -> object:
         return kwargs
+
+
+class FakeDigestPolicyRepository:
+    instances: list["FakeDigestPolicyRepository"] = []
+    policies: list[SimpleNamespace] = [
+        SimpleNamespace(
+            key="personal_morning",
+            title="Личный утренний дайджест",
+            enabled=True,
+            scope_filter_json={"scopes": ["personal", "household"]},
+            send_time="06:50",
+            timezone="Europe/Moscow",
+            target_chat_id=100500,
+            last_sent_date=None,
+            last_sent_at=None,
+        )
+    ]
+
+    def __init__(self, session: object) -> None:
+        del session
+        self.marked: list[tuple[str, object, object]] = []
+        self.__class__.instances.append(self)
+
+    async def ensure_default_policies(self) -> list[object]:
+        return self.__class__.policies
+
+    async def due_for_delivery(self, now: object) -> list[SimpleNamespace]:
+        del now
+        return list(self.__class__.policies)
+
+    async def get_by_key(self, key: str) -> SimpleNamespace | None:
+        for policy in self.__class__.policies:
+            if policy.key == key:
+                return policy
+        return None
+
+    async def mark_sent_if_due(
+        self,
+        key: str,
+        local_date: object,
+        *,
+        sent_at: object,
+    ) -> bool:
+        self.marked.append((key, local_date, sent_at))
+        return True
+
+
+class FakeDigestService:
+    def __init__(self, **kwargs: object) -> None:
+        del kwargs
+
+    async def build_digest(self, policy_key: str, *, now: object) -> object:
+        return SimpleNamespace(policy=SimpleNamespace(key=policy_key), now=now, items=[])
 
 
 class FakeRedis:
@@ -756,6 +818,146 @@ async def test_deliver_daily_briefs_skips_duplicate_redis_claim(
         ("daily_brief:send:brief-settings-1:2026-06-27", 129600, True)
     ]
     assert bot.closed is True
+
+
+@pytest.mark.asyncio
+async def test_send_due_digests_sends_and_marks_after_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    FakeBot.instances = []
+    FakeDigestPolicyRepository.instances = []
+    FakeDigestPolicyRepository.policies = [
+        SimpleNamespace(
+            key="personal_morning",
+            title="Личный утренний дайджест",
+            enabled=True,
+            scope_filter_json={"scopes": ["personal", "household"]},
+            send_time="06:50",
+            timezone="Europe/Moscow",
+            target_chat_id=100500,
+            last_sent_date=None,
+            last_sent_at=None,
+        )
+    ]
+    redis = FakeRedis()
+    monkeypatch.setattr(jobs, "Bot", FakeBot)
+    monkeypatch.setattr(
+        jobs,
+        "get_settings",
+        lambda: Settings(telegram_bot_token="123456:secret-token"),
+    )
+    monkeypatch.setattr(jobs, "SessionLocal", FakeSessionLocal())
+    monkeypatch.setattr(jobs, "DigestPolicyRepository", FakeDigestPolicyRepository)
+    monkeypatch.setattr(jobs, "DigestService", FakeDigestService)
+    monkeypatch.setattr(jobs, "EventItemRepository", lambda session: object())
+    monkeypatch.setattr(jobs, "render_digest", lambda result: f"digest:{result.policy.key}")
+    monkeypatch.setattr(jobs, "utcnow", lambda: datetime(2026, 7, 1, 3, 50, tzinfo=UTC))
+
+    await jobs.send_due_digests({"redis": redis})
+
+    bot = FakeBot.instances[0]
+    repository = FakeDigestPolicyRepository.instances[0]
+    assert bot.sent_messages == [(100500, "digest:personal_morning")]
+    assert bot.send_message_kwargs == {"parse_mode": "HTML"}
+    assert repository.marked == [
+        (
+            "personal_morning",
+            datetime(2026, 7, 1, 3, 50, tzinfo=UTC).date(),
+            datetime(2026, 7, 1, 3, 50, tzinfo=UTC),
+        )
+    ]
+    assert redis.set_calls == [("digest:send:personal_morning:2026-07-01", 129600, True)]
+
+
+@pytest.mark.asyncio
+async def test_send_due_digests_skips_duplicate_redis_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    FakeBot.instances = []
+    FakeDigestPolicyRepository.instances = []
+    redis = FakeRedis()
+    redis.values["digest:send:personal_morning:2026-07-01"] = "1"
+    monkeypatch.setattr(jobs, "Bot", FakeBot)
+    monkeypatch.setattr(
+        jobs,
+        "get_settings",
+        lambda: Settings(telegram_bot_token="123456:secret-token"),
+    )
+    monkeypatch.setattr(jobs, "SessionLocal", FakeSessionLocal())
+    monkeypatch.setattr(jobs, "DigestPolicyRepository", FakeDigestPolicyRepository)
+    monkeypatch.setattr(jobs, "DigestService", FakeDigestService)
+    monkeypatch.setattr(jobs, "EventItemRepository", lambda session: object())
+    monkeypatch.setattr(jobs, "render_digest", lambda result: f"digest:{result.policy.key}")
+    monkeypatch.setattr(jobs, "utcnow", lambda: datetime(2026, 7, 1, 3, 50, tzinfo=UTC))
+
+    await jobs.send_due_digests({"redis": redis})
+
+    assert FakeBot.instances[0].sent_messages == []
+    assert FakeDigestPolicyRepository.instances[0].marked == []
+
+
+@pytest.mark.asyncio
+async def test_send_due_digests_send_failure_does_not_mark_sent_and_releases_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    FakeBot.instances = []
+    FakeDigestPolicyRepository.instances = []
+    redis = FakeRedis()
+    monkeypatch.setattr(jobs, "Bot", FailingSendBot)
+    monkeypatch.setattr(
+        jobs,
+        "get_settings",
+        lambda: Settings(telegram_bot_token="123456:secret-token"),
+    )
+    monkeypatch.setattr(jobs, "SessionLocal", FakeSessionLocal())
+    monkeypatch.setattr(jobs, "DigestPolicyRepository", FakeDigestPolicyRepository)
+    monkeypatch.setattr(jobs, "DigestService", FakeDigestService)
+    monkeypatch.setattr(jobs, "EventItemRepository", lambda session: object())
+    monkeypatch.setattr(jobs, "render_digest", lambda result: f"digest:{result.policy.key}")
+    monkeypatch.setattr(jobs, "utcnow", lambda: datetime(2026, 7, 1, 3, 50, tzinfo=UTC))
+
+    await jobs.send_due_digests({"redis": redis})
+
+    assert FakeDigestPolicyRepository.instances[0].marked == []
+    assert redis.deleted == ["digest:send:personal_morning:2026-07-01"]
+
+
+@pytest.mark.asyncio
+async def test_send_due_digests_missing_target_chat_skips_safely(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    FakeBot.instances = []
+    FakeDigestPolicyRepository.instances = []
+    FakeDigestPolicyRepository.policies = [
+        SimpleNamespace(
+            key="personal_morning",
+            title="Личный утренний дайджест",
+            enabled=True,
+            scope_filter_json={"scopes": ["personal", "household"]},
+            send_time="06:50",
+            timezone="Europe/Moscow",
+            target_chat_id=None,
+            last_sent_date=None,
+            last_sent_at=None,
+        )
+    ]
+    redis = FakeRedis()
+    monkeypatch.setattr(jobs, "Bot", FakeBot)
+    monkeypatch.setattr(
+        jobs,
+        "get_settings",
+        lambda: Settings(telegram_bot_token="123456:secret-token"),
+    )
+    monkeypatch.setattr(jobs, "SessionLocal", FakeSessionLocal())
+    monkeypatch.setattr(jobs, "DigestPolicyRepository", FakeDigestPolicyRepository)
+    monkeypatch.setattr(jobs, "DigestService", FakeDigestService)
+    monkeypatch.setattr(jobs, "EventItemRepository", lambda session: object())
+
+    await jobs.send_due_digests({"redis": redis})
+
+    assert FakeBot.instances[0].sent_messages == []
+    assert FakeDigestPolicyRepository.instances[0].marked == []
+    assert redis.set_calls == []
 
 
 @pytest.mark.asyncio

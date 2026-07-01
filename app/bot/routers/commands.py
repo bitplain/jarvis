@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -17,6 +17,8 @@ from app.bot.middlewares.access import is_admin_user
 from app.core.config import Settings
 from app.db.models import BusinessConnection, BusinessConnectionStatus
 from app.db.repositories.daily_brief import DailyBriefSettingsRepository
+from app.db.repositories.digests import DigestPolicyRepository
+from app.db.repositories.event_items import EventItemRepository
 from app.db.repositories.helpdesk_email_events import HelpdeskEmailEventRepository
 from app.db.repositories.helpdesk_imap_mailbox_state import HelpdeskImapMailboxStateRepository
 from app.db.repositories.helpdesk_ticket_work_items import HelpdeskTicketWorkItemRepository
@@ -35,6 +37,11 @@ from app.services.daily_brief_service import (
 )
 from app.services.daily_brief_service import (
     DailyBriefSettingsInput as DailyBriefSettingsValue,
+)
+from app.services.digests import (
+    DigestService,
+    StoredDigestPolicy,
+    render_digest,
 )
 from app.services.helpdesk_imap.client import HelpdeskImapClient
 from app.services.helpdesk_imap.config import HelpdeskImapConfig
@@ -88,6 +95,11 @@ SETTINGS_CALLBACK_DAILY_BRIEF_TOGGLE = "settings:daily_brief:toggle"
 SETTINGS_CALLBACK_DAILY_BRIEF_TIME = "settings:daily_brief:time"
 SETTINGS_CALLBACK_DAILY_BRIEF_TIMEZONE = "settings:daily_brief:timezone"
 SETTINGS_CALLBACK_DAILY_BRIEF_SHOW = "settings:daily_brief:show"
+SETTINGS_CALLBACK_DIGESTS = "settings:digests"
+SETTINGS_CALLBACK_DIGESTS_PERSONAL = "settings:digests:personal_morning"
+SETTINGS_CALLBACK_DIGESTS_WORK = "settings:digests:work_start"
+SETTINGS_CALLBACK_DIGESTS_PERSONAL_NOW = "settings:digests:personal_morning:show"
+SETTINGS_CALLBACK_DIGESTS_WORK_NOW = "settings:digests:work_start:show"
 SETTINGS_CALLBACK_WEB_SEARCH = "settings:web_search"
 SETTINGS_CALLBACK_WEB_SEARCH_TOGGLE = "settings:web_search:toggle"
 SETTINGS_CALLBACK_WEB_SEARCH_PROVIDER = "settings:web_search:provider"
@@ -180,6 +192,11 @@ class DailyBriefSettingsInput(StatesGroup):
     timezone = State()
 
 
+class DigestSettingsInput(StatesGroup):
+    time = State()
+    timezone = State()
+
+
 class _BaselineNoopNotifier:
     async def send_ticket(
         self,
@@ -254,6 +271,7 @@ async def cmd_help(message: Message) -> None:
         "/status — статус\n"
         "/inbox — личные и домашние события\n"
         "/work — рабочие события\n"
+        "/digest — дайджесты Event Inbox\n"
         "/helpdesk_baseline_now — обновить HelpDesk IMAP baseline\n"
         "/ticket — заявки HelpDesk в работе\n"
         "/settings — настройки\n"
@@ -296,6 +314,12 @@ def build_settings_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text="Сводка дня",
                     callback_data=SETTINGS_CALLBACK_DAILY_BRIEF,
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Дайджесты",
+                    callback_data=SETTINGS_CALLBACK_DIGESTS,
                 )
             ],
             [
@@ -382,6 +406,99 @@ def build_daily_brief_settings_keyboard(*, enabled: bool) -> InlineKeyboardMarku
             [
                 InlineKeyboardButton(text="Назад", callback_data=SETTINGS_CALLBACK_REFRESH),
                 InlineKeyboardButton(text="Закрыть", callback_data=SETTINGS_CALLBACK_CLOSE),
+            ],
+        ]
+    )
+
+
+def build_digest_settings_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Личный",
+                    callback_data=SETTINGS_CALLBACK_DIGESTS_PERSONAL,
+                ),
+                InlineKeyboardButton(text="Рабочий", callback_data=SETTINGS_CALLBACK_DIGESTS_WORK),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Показать личный сейчас",
+                    callback_data=SETTINGS_CALLBACK_DIGESTS_PERSONAL_NOW,
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Показать рабочий сейчас",
+                    callback_data=SETTINGS_CALLBACK_DIGESTS_WORK_NOW,
+                )
+            ],
+            [
+                InlineKeyboardButton(text="Назад", callback_data=SETTINGS_CALLBACK_REFRESH),
+                InlineKeyboardButton(text="Закрыть", callback_data=SETTINGS_CALLBACK_CLOSE),
+            ],
+        ]
+    )
+
+
+def build_digest_policy_keyboard(policy: StoredDigestPolicy) -> InlineKeyboardMarkup:
+    toggle_text = "Выключить" if policy.enabled else "Включить"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=toggle_text,
+                    callback_data=f"settings:digests:{policy.key}:toggle",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Время",
+                    callback_data=f"settings:digests:{policy.key}:time",
+                ),
+                InlineKeyboardButton(
+                    text="Timezone",
+                    callback_data=f"settings:digests:{policy.key}:timezone",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Использовать этот чат",
+                    callback_data=f"settings:digests:{policy.key}:chat",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Показать сейчас",
+                    callback_data=f"settings:digests:{policy.key}:show",
+                )
+            ],
+            [
+                InlineKeyboardButton(text="Назад", callback_data=SETTINGS_CALLBACK_DIGESTS),
+                InlineKeyboardButton(text="Закрыть", callback_data=SETTINGS_CALLBACK_CLOSE),
+            ],
+        ]
+    )
+
+
+def build_digest_command_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Показать личный",
+                    callback_data="digest:show:personal_morning",
+                ),
+                InlineKeyboardButton(
+                    text="Показать рабочий",
+                    callback_data="digest:show:work_start",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Настройки",
+                    callback_data=SETTINGS_CALLBACK_DIGESTS,
+                )
             ],
         ]
     )
@@ -659,6 +776,7 @@ def render_settings_home_text() -> str:
         "- Стиль ответа\n"
         "- Списки и напоминания\n"
         "- Сводка дня\n"
+        "- Дайджесты\n"
         "- Интернет-поиск\n"
         "- HelpDesk"
     )
@@ -681,6 +799,78 @@ def render_daily_brief_settings_text(
         "Сейчас группа поддерживает только команду \"сводка\".\n\n"
         "Действия:"
     )
+
+
+def render_digest_settings_text(policies: list[StoredDigestPolicy]) -> str:
+    by_key = {policy.key: policy for policy in policies}
+    personal = by_key.get("personal_morning")
+    work = by_key.get("work_start")
+    lines = ["Дайджесты", ""]
+    if personal is not None:
+        lines.extend(_digest_policy_overview_lines("Личный утренний", personal))
+    if work is not None:
+        if len(lines) > 2:
+            lines.append("")
+        lines.extend(_digest_policy_overview_lines("Рабочий", work))
+    lines.extend(["", "Действия:"])
+    return "\n".join(lines)
+
+
+def render_digest_policy_text(policy: StoredDigestPolicy) -> str:
+    status = "включён" if policy.enabled else "выключен"
+    chat = "configured" if policy.target_chat_id is not None else "missing"
+    scopes = ", ".join(_policy_scopes(policy))
+    last_sent = policy.last_sent_at.isoformat() if policy.last_sent_at is not None else "never"
+    return (
+        f"{policy.title}\n\n"
+        f"Статус: {status}\n"
+        f"Время: {policy.send_time}\n"
+        f"Timezone: {policy.timezone}\n"
+        f"Scopes: {scopes}\n"
+        f"Chat: {chat}\n"
+        f"Last sent: {last_sent}\n\n"
+        "Действия:"
+    )
+
+
+def render_digest_time_prompt_text() -> str:
+    return (
+        "Отправьте время дайджеста в формате HH:MM.\n"
+        "Например: 06:50\n\n"
+        "Для отмены отправьте /cancel."
+    )
+
+
+def render_digest_timezone_prompt_text() -> str:
+    return (
+        "Отправьте IANA timezone для дайджеста, например:\n"
+        "Europe/Moscow\n"
+        "Europe/Amsterdam\n"
+        "Asia/Dubai\n\n"
+        "Для отмены отправьте /cancel."
+    )
+
+
+def _digest_policy_overview_lines(label: str, policy: StoredDigestPolicy) -> list[str]:
+    status = "включён" if policy.enabled else "выключен"
+    chat = "configured" if policy.target_chat_id is not None else "missing"
+    last_sent = policy.last_sent_at.isoformat() if policy.last_sent_at is not None else "never"
+    return [
+        f"{label}:",
+        f"- статус: {status}",
+        f"- время: {policy.send_time}",
+        f"- timezone: {policy.timezone}",
+        f"- scopes: {', '.join(_policy_scopes(policy))}",
+        f"- chat: {chat}",
+        f"- last sent: {last_sent}",
+    ]
+
+
+def _policy_scopes(policy: StoredDigestPolicy) -> list[str]:
+    raw_scopes = policy.scope_filter_json.get("scopes", [])
+    if not isinstance(raw_scopes, list):
+        return []
+    return [str(scope) for scope in raw_scopes]
 
 
 def render_web_search_settings_text(
@@ -893,6 +1083,17 @@ def _daily_brief_settings_repository(session: object) -> DailyBriefSettingsRepos
     return DailyBriefSettingsRepository(session)  # type: ignore[arg-type]
 
 
+def _digest_policy_repository(session: object) -> DigestPolicyRepository:
+    return DigestPolicyRepository(session)  # type: ignore[arg-type]
+
+
+def _digest_service(session: object) -> DigestService:
+    return DigestService(
+        policy_repository=_digest_policy_repository(session),
+        event_repository=EventItemRepository(session),  # type: ignore[arg-type]
+    )
+
+
 async def _get_private_daily_brief_settings(
     session: object,
     user_id: int,
@@ -902,6 +1103,24 @@ async def _get_private_daily_brief_settings(
         chat_id=user_id,
         user_id=user_id,
     )
+
+
+async def _render_digest_settings(session: object) -> tuple[str, InlineKeyboardMarkup]:
+    repository = _digest_policy_repository(session)
+    policies = await repository.ensure_default_policies()
+    return render_digest_settings_text(policies), build_digest_settings_keyboard()
+
+
+async def _render_digest_policy_settings(
+    session: object,
+    policy_key: str,
+) -> tuple[str, InlineKeyboardMarkup] | None:
+    repository = _digest_policy_repository(session)
+    await repository.ensure_default_policies()
+    policy = await repository.get_by_key(policy_key)
+    if policy is None:
+        return None
+    return render_digest_policy_text(policy), build_digest_policy_keyboard(policy)
 
 
 async def _render_private_daily_brief_settings(
@@ -917,6 +1136,16 @@ async def _render_private_daily_brief_settings(
     return text, build_daily_brief_settings_keyboard(
         enabled=bool(getattr(settings, "enabled", False))
     )
+
+
+async def _send_digest_now(
+    target: object,
+    session: object,
+    policy_key: str,
+) -> None:
+    digest = await _digest_service(session).build_digest(policy_key, now=datetime.now(UTC))
+    if hasattr(target, "answer"):
+        await cast(Message, target).answer(render_digest(digest), parse_mode="HTML")
 
 
 async def _render_web_search_settings(
@@ -1288,6 +1517,55 @@ async def cmd_settings(message: Message, **data: Any) -> None:
     await message.answer(render_settings_home_text(), reply_markup=build_settings_keyboard())
 
 
+async def cmd_digest(message: Message, **data: Any) -> None:
+    settings = data["settings"]
+    if not is_admin_user(_message_user_id(message), settings.admin_ids):
+        await message.answer("Доступ запрещён.")
+        return
+    session = data.get("db_session")
+    if session is None:
+        await message.answer("Дайджесты доступны только в runtime с БД.")
+        return
+    try:
+        text, _keyboard = await _render_digest_settings(session)
+    except Exception as exc:
+        logger.warning("digest_command_failed", extra={"error_type": type(exc).__name__})
+        await message.answer("Дайджесты временно недоступны.")
+        return
+    await message.answer(text, reply_markup=build_digest_command_keyboard())
+
+
+async def handle_digest_callback(callback: CallbackQuery, **data: Any) -> None:
+    settings = data["settings"]
+    user_id = _callback_user_id(callback)
+    if not is_admin_user(user_id, settings.admin_ids):
+        await callback.answer("Доступ запрещён.", show_alert=True)
+        return
+    session = data.get("db_session")
+    if session is None:
+        await callback.answer("Дайджесты доступны только в runtime с БД.", show_alert=True)
+        return
+    callback_data = callback.data or ""
+    parts = callback_data.split(":")
+    if len(parts) != 3 or parts[:2] != ["digest", "show"]:
+        await callback.answer("Неизвестный дайджест.", show_alert=True)
+        return
+    if callback.message is None:
+        await callback.answer("Сообщение недоступно.", show_alert=True)
+        return
+    policy_key = parts[2]
+    try:
+        await _send_digest_now(callback.message, session, policy_key)
+    except Exception as exc:
+        logger.warning(
+            "digest_command_show_failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        await callback.answer("Дайджест временно недоступен.", show_alert=True)
+        return
+    await callback.answer()
+
+
 async def handle_settings_callback(callback: CallbackQuery, **data: Any) -> None:
     settings = data["settings"]
     user_id = _callback_user_id(callback)
@@ -1590,6 +1868,125 @@ async def handle_settings_callback(callback: CallbackQuery, **data: Any) -> None
             await callback.answer("Сводка дня временно недоступна.", show_alert=True)
             return
         await callback.answer()
+        return
+    if callback_data == SETTINGS_CALLBACK_DIGESTS:
+        try:
+            text, keyboard = await _render_digest_settings(session)
+        except Exception as exc:
+            logger.warning(
+                "digest_settings_open_failed",
+                extra={"error_type": type(exc).__name__},
+            )
+            await callback.answer("Дайджесты временно недоступны.", show_alert=True)
+            return
+        edited = await _edit_settings_callback_message(
+            callback,
+            text=text,
+            reply_markup=keyboard,
+        )
+        if edited:
+            await callback.answer()
+        return
+    if callback_data.startswith("settings:digests:"):
+        parts = callback_data.split(":")
+        if len(parts) not in {3, 4}:
+            await callback.answer("Неизвестный дайджест.", show_alert=True)
+            return
+        policy_key = parts[2]
+        action = parts[3] if len(parts) == 4 else "open"
+        repository = _digest_policy_repository(session)
+        try:
+            await repository.ensure_default_policies()
+            policy = await repository.get_by_key(policy_key)
+        except Exception as exc:
+            logger.warning(
+                "digest_policy_callback_failed",
+                extra={"error_type": type(exc).__name__, "action": action},
+            )
+            await callback.answer("Дайджест временно недоступен.", show_alert=True)
+            return
+        if policy is None:
+            await callback.answer("Неизвестный дайджест.", show_alert=True)
+            return
+        if action == "open":
+            edited = await _edit_settings_callback_message(
+                callback,
+                text=render_digest_policy_text(policy),
+                reply_markup=build_digest_policy_keyboard(policy),
+            )
+            if edited:
+                await callback.answer()
+            return
+        if action == "toggle":
+            digest_policy = await repository.update_enabled(policy.key, not policy.enabled)
+            if digest_policy is None:
+                await callback.answer("Неизвестный дайджест.", show_alert=True)
+                return
+            edited = await _edit_settings_callback_message(
+                callback,
+                text=render_digest_policy_text(digest_policy),
+                reply_markup=build_digest_policy_keyboard(digest_policy),
+            )
+            if edited:
+                await callback.answer("Настройки сохранены.", show_alert=False)
+            return
+        if action in {"time", "timezone"}:
+            state = cast(Any, data.get("state"))
+            if state is None or not all(
+                hasattr(state, attr) for attr in ("set_state", "clear", "update_data")
+            ):
+                await callback.answer("FSM временно недоступен.", show_alert=True)
+                return
+            await state.update_data(digest_policy_key=policy.key)
+            if action == "time":
+                await state.set_state(DigestSettingsInput.time)
+                prompt_text = render_digest_time_prompt_text()
+            else:
+                await state.set_state(DigestSettingsInput.timezone)
+                prompt_text = render_digest_timezone_prompt_text()
+            edited = await _edit_settings_callback_message(
+                callback,
+                text=prompt_text,
+                reply_markup=None,
+            )
+            if edited:
+                await callback.answer()
+            return
+        if action == "chat":
+            if callback.message is None or callback.message.chat.type != "private":
+                await callback.answer("Настройте дайджест из личного чата.", show_alert=True)
+                return
+            digest_policy = await repository.set_target_chat_id(
+                policy.key,
+                callback.message.chat.id,
+            )
+            if digest_policy is None:
+                await callback.answer("Неизвестный дайджест.", show_alert=True)
+                return
+            edited = await _edit_settings_callback_message(
+                callback,
+                text=render_digest_policy_text(digest_policy),
+                reply_markup=build_digest_policy_keyboard(digest_policy),
+            )
+            if edited:
+                await callback.answer("Chat сохранён.", show_alert=False)
+            return
+        if action == "show":
+            if callback.message is None:
+                await callback.answer("Сообщение недоступно.", show_alert=True)
+                return
+            try:
+                await _send_digest_now(callback.message, session, policy.key)
+            except Exception as exc:
+                logger.warning(
+                    "digest_show_now_failed",
+                    extra={"error_type": type(exc).__name__},
+                )
+                await callback.answer("Дайджест временно недоступен.", show_alert=True)
+                return
+            await callback.answer()
+            return
+        await callback.answer("Неизвестный дайджест.", show_alert=True)
         return
     if callback_data == SETTINGS_CALLBACK_WEB_SEARCH:
         try:
@@ -2490,6 +2887,97 @@ async def handle_daily_brief_timezone_input_message(
     )
 
 
+async def handle_digest_time_input_message(
+    message: Message,
+    state: FSMContext,
+    **data: Any,
+) -> None:
+    settings = data["settings"]
+    user_id = _message_user_id(message)
+    if not is_admin_user(user_id, settings.admin_ids):
+        await message.answer("Доступ запрещён.")
+        return
+    text = (message.text or message.caption or "").strip()
+    if text.lower() == "/cancel":
+        await state.clear()
+        await message.answer("Изменение времени дайджеста отменено.")
+        return
+    session = data.get("db_session")
+    if session is None:
+        await message.answer("Настройки доступны только в runtime с БД.")
+        return
+    state_data = await state.get_data()
+    policy_key = str(state_data.get("digest_policy_key") or "")
+    try:
+        updated = await _digest_policy_repository(session).update_schedule(
+            policy_key,
+            send_time=text,
+            timezone=None,
+        )
+    except ValueError:
+        await message.answer(f"Не понял время.\n\n{render_digest_time_prompt_text()}")
+        return
+    except Exception as exc:
+        logger.warning("digest_time_save_failed", extra={"error_type": type(exc).__name__})
+        await message.answer("Дайджест временно недоступен.")
+        return
+    if updated is None:
+        await message.answer("Неизвестный дайджест.")
+        return
+    await state.clear()
+    await message.answer(
+        "Время дайджеста сохранено.\n\n" + render_digest_policy_text(updated),
+        reply_markup=build_digest_policy_keyboard(updated),
+    )
+
+
+async def handle_digest_timezone_input_message(
+    message: Message,
+    state: FSMContext,
+    **data: Any,
+) -> None:
+    settings = data["settings"]
+    user_id = _message_user_id(message)
+    if not is_admin_user(user_id, settings.admin_ids):
+        await message.answer("Доступ запрещён.")
+        return
+    text = (message.text or message.caption or "").strip()
+    if text.lower() == "/cancel":
+        await state.clear()
+        await message.answer("Изменение часового пояса дайджеста отменено.")
+        return
+    session = data.get("db_session")
+    if session is None:
+        await message.answer("Настройки доступны только в runtime с БД.")
+        return
+    state_data = await state.get_data()
+    policy_key = str(state_data.get("digest_policy_key") or "")
+    try:
+        ZoneInfo(text)
+        updated = await _digest_policy_repository(session).update_schedule(
+            policy_key,
+            send_time=None,
+            timezone=text,
+        )
+    except (ValueError, ZoneInfoNotFoundError):
+        await message.answer(
+            "Не знаю такой часовой пояс.\n\n" f"{render_digest_timezone_prompt_text()}"
+        )
+        return
+    except Exception as exc:
+        logger.warning("digest_timezone_save_failed", extra={"error_type": type(exc).__name__})
+        await message.answer("Дайджест временно недоступен.")
+        return
+    if updated is None:
+        await message.answer("Неизвестный дайджест.")
+        return
+    await state.clear()
+    await message.answer(
+        "Часовой пояс дайджеста сохранён.\n\n" + render_digest_policy_text(updated),
+        reply_markup=build_digest_policy_keyboard(updated),
+    )
+
+
 async def handle_cancel_message(
     message: Message,
     state: FSMContext,
@@ -2507,6 +2995,12 @@ async def handle_cancel_message(
         return
     if current_state == DailyBriefSettingsInput.timezone.state:
         await handle_daily_brief_timezone_input_message(message, state, **data)
+        return
+    if current_state == DigestSettingsInput.time.state:
+        await handle_digest_time_input_message(message, state, **data)
+        return
+    if current_state == DigestSettingsInput.timezone.state:
+        await handle_digest_timezone_input_message(message, state, **data)
         return
     if current_state and (
         current_state.startswith("ShoppingListInput:")
@@ -2564,6 +3058,7 @@ def build_router() -> Router:
     router.message(Command("help"))(cmd_help)
     router.message(Command("whoami"))(cmd_whoami)
     router.message(Command("settings"))(cmd_settings)
+    router.message(Command("digest"))(cmd_digest)
     router.message(Command("status"))(cmd_status)
     router.message(Command("helpdesk_baseline_now"))(cmd_helpdesk_baseline_now)
     router.message(Command("models"))(cmd_models)
@@ -2583,11 +3078,14 @@ def build_router() -> Router:
     router.message(StateFilter(DailyBriefSettingsInput.timezone))(
         handle_daily_brief_timezone_input_message
     )
+    router.message(StateFilter(DigestSettingsInput.time))(handle_digest_time_input_message)
+    router.message(StateFilter(DigestSettingsInput.timezone))(handle_digest_timezone_input_message)
     router.message(StateFilter(TelegramAccessInput.add_user))(handle_access_input_message)
     router.message(StateFilter(TelegramAccessInput.remove_user))(handle_access_input_message)
     router.message(StateFilter(TelegramAccessInput.add_group))(handle_access_input_message)
     router.message(StateFilter(TelegramAccessInput.remove_group))(handle_access_input_message)
     router.callback_query(F.data.startswith("settings:"))(handle_settings_callback)
+    router.callback_query(F.data.startswith("digest:"))(handle_digest_callback)
     return router
 
 
