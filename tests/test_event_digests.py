@@ -1,3 +1,4 @@
+import re
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -23,6 +24,16 @@ from app.services.telegram_formatting import TELEGRAM_HTML_LIMIT
 
 MSK = ZoneInfo("Europe/Moscow")
 NOW = datetime(2026, 7, 1, 6, 50, tzinfo=MSK)
+UNFINISHED_ENTITY_TAILS = ("&", "&q", "&qu", "&#", "&#x")
+
+
+def _assert_safe_digest_html(html: str) -> None:
+    assert len(html) <= TELEGRAM_HTML_LIMIT
+    assert html.count("<b>") == html.count("</b>")
+    assert not re.search(r"<[^>]*$", html)
+    assert not re.search(r"&(?:#[0-9]*|#x[0-9a-fA-F]*|[a-zA-Z][a-zA-Z0-9]*)?$", html)
+    assert not re.search(r"&(?:#[0-9]*|#x[0-9a-fA-F]*|[a-zA-Z][a-zA-Z0-9]*)?…$", html)
+    assert not html.endswith(UNFINISHED_ENTITY_TAILS)
 
 
 def test_digest_policy_model_exposes_required_columns() -> None:
@@ -272,6 +283,94 @@ async def test_digest_rendering_escapes_html_hides_json_and_respects_limit() -> 
     assert "must-not-render" not in html
     assert '{"raw"' not in html
     assert len(html) <= TELEGRAM_HTML_LIMIT
+
+
+@pytest.mark.parametrize(
+    ("case_name", "payload", "escaped_marker", "raw_marker"),
+    [
+        ("double_quote", '"quote" ', "&quot;quote&quot;", '"quote"'),
+        ("single_quote", "'quote' ", "&#x27;quote&#x27;", "'quote'"),
+        ("script", "<script>alert(1)</script> ", "&lt;script&gt;", "<script>"),
+        ("ampersand", "&value& ", "&amp;value&amp;", "&value&"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_digest_long_title_truncates_without_cutting_html_entities(
+    case_name: str,
+    payload: str,
+    escaped_marker: str,
+    raw_marker: str,
+) -> None:
+    del case_name
+    policies = InMemoryDigestPolicyRepository()
+    await policies.ensure_default_policies()
+    events = EventItemService.in_memory(now_factory=lambda: NOW)
+    service = DigestService(policy_repository=policies, event_repository=events.repository)
+    await events.create_event(
+        EventItemCreate(
+            user_id=100500,
+            chat_id=100500,
+            scope=EventScope.PERSONAL,
+            event_type=EventType.NOTE,
+            title=payload * 700,
+            body="Короткое тело",
+            source="manual",
+            payload_json={"raw": "must-not-render"},
+            card_json={"type": "note", "title": "raw json must not render"},
+        )
+    )
+
+    html = render_digest(await service.build_digest("personal_morning", now=NOW))
+
+    _assert_safe_digest_html(html)
+    assert escaped_marker in html
+    assert raw_marker not in html
+    assert "must-not-render" not in html
+    assert "raw json must not render" not in html
+
+
+@pytest.mark.parametrize(
+    ("case_name", "payload", "escaped_marker", "raw_marker"),
+    [
+        ("double_quote", '"quote" ', "&quot;quote&quot;", '"quote"'),
+        ("single_quote", "'quote' ", "&#x27;quote&#x27;", "'quote'"),
+        ("script", "<script>alert(1)</script> ", "&lt;script&gt;", "<script>"),
+        ("ampersand", "&value& ", "&amp;value&amp;", "&value&"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_digest_long_body_truncates_without_cutting_html_entities(
+    case_name: str,
+    payload: str,
+    escaped_marker: str,
+    raw_marker: str,
+) -> None:
+    del case_name
+    policies = InMemoryDigestPolicyRepository()
+    await policies.ensure_default_policies()
+    events = EventItemService.in_memory(now_factory=lambda: NOW)
+    service = DigestService(policy_repository=policies, event_repository=events.repository)
+    await events.create_event(
+        EventItemCreate(
+            user_id=100500,
+            chat_id=100500,
+            scope=EventScope.PERSONAL,
+            event_type=EventType.NOTE,
+            title="Короткий заголовок",
+            body=payload * 700,
+            source="manual",
+            payload_json={"raw": "must-not-render"},
+            card_json={"type": "note", "title": "raw json must not render"},
+        )
+    )
+
+    html = render_digest(await service.build_digest("personal_morning", now=NOW))
+
+    _assert_safe_digest_html(html)
+    assert escaped_marker in html
+    assert raw_marker not in html
+    assert "must-not-render" not in html
+    assert "raw json must not render" not in html
 
 
 @pytest.mark.asyncio

@@ -18,6 +18,10 @@ DIGEST_ITEM_LIMIT = 15
 PERSONAL_MORNING_DIGEST_KEY = "personal_morning"
 WORK_START_DIGEST_KEY = "work_start"
 _ELLIPSIS = "…"
+_BOLD_OPEN = "<b>"
+_BOLD_CLOSE = "</b>"
+_ITALIC_OPEN = "<i>"
+_ITALIC_CLOSE = "</i>"
 
 
 @dataclass(frozen=True)
@@ -242,21 +246,29 @@ class InMemoryDigestPolicyRepository:
 
 
 def render_digest(result: DigestResult) -> str:
-    lines = [_digest_title(result), ""]
+    builder = _DigestHtmlBuilder(TELEGRAM_HTML_LIMIT)
+    if not builder.add_text(_digest_title_text(result), bold=True):
+        return builder.render()
+    if not builder.add_separator("\n\n"):
+        return builder.render()
     if not result.items:
-        lines.append("Новых событий нет.")
-        return _truncate_html("\n".join(lines))
+        builder.add_text("Новых событий нет.")
+        return builder.render()
 
     grouped = _group_digest_items(result)
     for group_index, (header, items) in enumerate(grouped):
-        if group_index:
-            lines.append("")
-        lines.append(f"<b>{escape(header)}</b>")
+        if group_index and not builder.add_separator("\n\n"):
+            return builder.render()
+        if not builder.add_text(header, bold=True):
+            return builder.render()
         for index, item in enumerate(items, start=1):
-            lines.append(f"{index}. {_format_digest_item(item, result.timezone)}")
-    lines.append("")
-    lines.append(_open_command_hint(result.policy.key))
-    return _truncate_html("\n".join(lines))
+            if not builder.add_separator("\n"):
+                return builder.render()
+            if not builder.add_text(_format_digest_item_text(index, item, result.timezone)):
+                return builder.render()
+    if builder.add_separator("\n\n"):
+        builder.add_text(_open_command_hint_text(result.policy.key), italic=True)
+    return builder.render()
 
 
 def _default_policy_inputs() -> list[DigestPolicyInput]:
@@ -354,12 +366,12 @@ def _normalize_key(value: str) -> str:
     return value.strip().lower()
 
 
-def _digest_title(result: DigestResult) -> str:
+def _digest_title_text(result: DigestResult) -> str:
     if result.policy.key == PERSONAL_MORNING_DIGEST_KEY:
-        return "<b>🌅 Личный утренний дайджест</b>"
+        return "🌅 Личный утренний дайджест"
     if result.policy.key == WORK_START_DIGEST_KEY:
-        return "<b>💼 Рабочий дайджест</b>"
-    return f"<b>{escape(result.policy.title)}</b>"
+        return "💼 Рабочий дайджест"
+    return result.policy.title
 
 
 def _group_digest_items(result: DigestResult) -> list[tuple[str, list[StoredEventItem]]]:
@@ -388,34 +400,84 @@ def _group_title(item: StoredEventItem, policy_key: str) -> str:
     return "📌 Другое"
 
 
-def _format_digest_item(item: StoredEventItem, timezone: ZoneInfo) -> str:
-    title = _safe_text(item.title)
-    body = _safe_body(item.body)
+def _format_digest_item_text(index: int, item: StoredEventItem, timezone: ZoneInfo) -> str:
+    title = _clean_text(item.title)
+    body = _clean_body(item.body)
     prefix = ""
     if item.due_at is not None:
-        prefix = f"{escape(item.due_at.astimezone(timezone).strftime('%H:%M'))} — "
+        prefix = f"{item.due_at.astimezone(timezone).strftime('%H:%M')} — "
     suffix = f" — {body}" if body else ""
-    return f"{prefix}{title}{suffix}"
+    return f"{index}. {prefix}{title}{suffix}"
 
 
-def _safe_text(value: str) -> str:
-    return escape(" ".join(value.strip().split()), quote=True)
+def _clean_text(value: str) -> str:
+    return " ".join(value.strip().split())
 
 
-def _safe_body(value: str) -> str:
+def _clean_body(value: str) -> str:
     cleaned = " ".join(value.strip().split())
     if not cleaned or cleaned.startswith("{") or cleaned.startswith("["):
         return ""
-    return escape(cleaned, quote=True)
+    return cleaned
 
 
-def _open_command_hint(policy_key: str) -> str:
+def _open_command_hint_text(policy_key: str) -> str:
     if policy_key == WORK_START_DIGEST_KEY:
-        return "<i>Открыть: /work</i>"
-    return "<i>Открыть: /inbox</i>"
+        return "Открыть: /work"
+    return "Открыть: /inbox"
 
 
-def _truncate_html(text: str) -> str:
-    if len(text) <= TELEGRAM_HTML_LIMIT:
-        return text
-    return text[: TELEGRAM_HTML_LIMIT - len(_ELLIPSIS)] + _ELLIPSIS
+class _DigestHtmlBuilder:
+    def __init__(self, limit: int) -> None:
+        self._remaining = limit
+        self._parts: list[str] = []
+
+    def add_separator(self, separator: str) -> bool:
+        if len(separator) > self._remaining:
+            return False
+        self._parts.append(separator)
+        self._remaining -= len(separator)
+        return True
+
+    def add_text(self, value: str, *, bold: bool = False, italic: bool = False) -> bool:
+        if not value:
+            return True
+        prefix = _BOLD_OPEN if bold else _ITALIC_OPEN if italic else ""
+        suffix = _BOLD_CLOSE if bold else _ITALIC_CLOSE if italic else ""
+        overhead = len(prefix) + len(suffix)
+        if self._remaining <= overhead:
+            return False
+        budget = self._remaining - overhead
+        escaped = _escape_text(value)
+        completed = len(escaped) <= budget
+        rendered_text = escaped if completed else _escape_text_to_budget(value, budget)
+        self._parts.append(f"{prefix}{rendered_text}{suffix}")
+        self._remaining -= overhead + len(rendered_text)
+        return completed
+
+    def render(self) -> str:
+        return "".join(self._parts)
+
+
+def _escape_text(value: str) -> str:
+    return escape(value, quote=True)
+
+
+def _escape_text_to_budget(value: str, budget: int) -> str:
+    if budget <= 0:
+        return ""
+    escaped = _escape_text(value)
+    if len(escaped) <= budget:
+        return escaped
+    if budget <= len(_ELLIPSIS):
+        return _ELLIPSIS[:budget]
+    escaped_budget = budget - len(_ELLIPSIS)
+    low = 0
+    high = len(value)
+    while low < high:
+        midpoint = (low + high + 1) // 2
+        if len(_escape_text(value[:midpoint])) <= escaped_budget:
+            low = midpoint
+        else:
+            high = midpoint - 1
+    return f"{_escape_text(value[:low])}{_ELLIPSIS}"
