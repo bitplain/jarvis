@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from typing import Any, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -256,4 +257,16 @@ def _aware_utc(value: object) -> datetime | None:
 def _optional_int(value: object) -> int | None:
     if value is None:
         return None
-    return int(str(value))
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        try:
+            numeric = Decimal(text)
+        except (InvalidOperation, ValueError):
+            return None
+        if not numeric.is_finite() or numeric != numeric.to_integral_value():
+            return None
+        return int(numeric)
