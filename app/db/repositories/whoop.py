@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import UUID
 
@@ -308,10 +308,31 @@ def _parse_datetime(value: object) -> datetime:
 def _optional_int(value: object) -> int | None:
     if value is None:
         return None
-    return int(str(value))
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        try:
+            numeric = Decimal(text)
+        except (InvalidOperation, ValueError):
+            return None
+        if not numeric.is_finite() or numeric != numeric.to_integral_value():
+            return None
+        return int(numeric)
 
 
 def _optional_decimal(value: object) -> Decimal | None:
     if value is None:
         return None
-    return Decimal(str(value))
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        numeric = Decimal(text)
+    except (InvalidOperation, ValueError):
+        return None
+    if not numeric.is_finite():
+        return None
+    return numeric

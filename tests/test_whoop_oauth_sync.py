@@ -142,6 +142,16 @@ def test_secret_cipher_round_trips_without_plaintext_storage() -> None:
     assert cipher.decrypt(encrypted) == "whoop-access-token"
 
 
+def test_whoop_repository_optional_numeric_parsers_tolerate_loose_values() -> None:
+    from app.db.repositories import whoop as whoop_repository
+
+    assert whoop_repository._optional_int("") is None
+    assert whoop_repository._optional_int("77.0") == 77
+    assert whoop_repository._optional_int(61.0) == 61
+    assert whoop_repository._optional_decimal("") is None
+    assert whoop_repository._optional_decimal("33.5") is not None
+
+
 def test_whoop_settings_ui_shows_not_configured_without_secrets() -> None:
     text = commands.render_whoop_settings_text(
         enabled=True,
@@ -632,6 +642,27 @@ class FakeWhoopClient:
         ]
 
 
+class LooseNumericWhoopClient(FakeWhoopClient):
+    async def get_profile(self, **kwargs: Any) -> dict[str, Any]:
+        assert kwargs["access_token"] == "access-2"
+        return {"user_id": "", "email": "private@example.com"}
+
+    async def get_recovery_collection(self, **kwargs: Any) -> list[dict[str, Any]]:
+        assert kwargs["access_token"] == "access-2"
+        return [
+            {
+                "cycle_id": 101,
+                "user_id": 42,
+                "score_state": "SCORED",
+                "score": {
+                    "recovery_score": "77.0",
+                    "hrv_rmssd_milli": "33.5",
+                    "resting_heart_rate": "",
+                },
+            }
+        ]
+
+
 class UnauthorizedThenSuccessWhoopClient:
     def __init__(self) -> None:
         self.refresh_calls = 0
@@ -706,6 +737,24 @@ async def test_whoop_sync_refreshes_rotated_tokens_and_upserts_pending_raw_recor
     assert repository.recovery_records[0]["score"]["recovery_score"] == 77
     assert repository.cycle_records[0]["score_state"] == "SCORED"
     assert repository.successes == [NOW, NOW]
+    assert repository.errors == []
+
+
+@pytest.mark.asyncio
+async def test_whoop_sync_tolerates_loose_optional_numeric_fields() -> None:
+    cipher = SecretCipher(SecretCipher.generate_key())
+    repository = FakeWhoopRepository(cipher)
+    service = WhoopSyncService(
+        repository=repository,
+        cipher=cipher,
+        client=LooseNumericWhoopClient(),
+    )
+
+    result = await service.sync_whoop_user("integration-1", now=NOW)
+
+    assert result.status == "synced"
+    assert repository.profile == {"user_id": "", "email": "private@example.com"}
+    assert repository.successes == [NOW]
     assert repository.errors == []
 
 
