@@ -750,7 +750,12 @@ async def sync_whoop_integrations(
         else:
             integrations = await repository.list_connected()
         client = WhoopClient(settings)
-        service = WhoopSyncService(repository=repository, cipher=cipher, client=client)
+        service = WhoopSyncService(
+            repository=repository,
+            event_repository=EventItemRepository(session),
+            cipher=cipher,
+            client=client,
+        )
         for integration in integrations:
             current_id = str(integration.id)
             if not force and not await _claim_whoop_sync(redis, integration_id=current_id):

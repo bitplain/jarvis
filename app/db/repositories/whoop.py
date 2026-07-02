@@ -268,6 +268,40 @@ class WhoopIntegrationRepository:
                 setattr(cycle, key, value)
         await self.session.commit()
 
+    async def list_recent_sleep_records(
+        self,
+        integration_id: str,
+        *,
+        since: datetime,
+        limit: int,
+    ) -> list[WhoopSleepRecord]:
+        result = await self.session.execute(
+            select(WhoopSleepRecord)
+            .where(
+                WhoopSleepRecord.integration_id == _uuid(integration_id),
+                WhoopSleepRecord.start_at >= since,
+            )
+            .order_by(WhoopSleepRecord.start_at.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def get_recovery_by_cycle_id(
+        self,
+        integration_id: str,
+        *,
+        cycle_id: int,
+    ) -> WhoopRecoveryRecord | None:
+        result = await self.session.execute(
+            select(WhoopRecoveryRecord)
+            .where(
+                WhoopRecoveryRecord.integration_id == _uuid(integration_id),
+                WhoopRecoveryRecord.cycle_id == cycle_id,
+            )
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def status_snapshot(self) -> dict[str, Any]:
         connected = await self.session.execute(
             select(func.count(WhoopIntegration.id)).where(

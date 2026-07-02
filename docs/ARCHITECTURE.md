@@ -132,14 +132,16 @@ Grace window — 30 минут: если worker был выключен доль
 
 ## WHOOP OAuth + raw sync foundation
 
-Stage 4 WHOOP добавляет только безопасное подключение, encrypted token storage и raw sync sleep/recovery/cycle через официальный WHOOP Developer API.
-Этот слой намеренно не создаёт `event_items`, не строит digest card и не вызывает LLM/AI-анализ сна.
+Stage 4 WHOOP добавляет безопасное подключение, encrypted token storage и raw sync sleep/recovery/cycle через официальный WHOOP Developer API.
+Stage 5 добавляет personal-only WHOOP card поверх уже сохранённых raw records.
+Этот слой не вызывает LLM/AI-анализ сна и не даёт medical advice.
 
 Кодовые границы:
 
 - `app/api/routes_whoop.py` — FastAPI OAuth start/callback routes.
 - `app/services/whoop_client.py` — официальный WHOOP OAuth/token/profile/sleep/recovery/cycle client.
-- `app/services/whoop_sync.py` — refresh-if-needed, 48h raw sync и controlled failure handling.
+- `app/services/whoop_sync.py` — refresh-if-needed, 48h raw sync, Stage 5 hook в Event Inbox и controlled failure handling.
+- `app/services/whoop_cards.py` — выбор последнего non-nap sleep, сборка technical sleep/recovery card и idempotent upsert personal `whoop_sleep`.
 - `app/services/secret_cipher.py` — Fernet wrapper для encrypted token storage.
 - `app/db/repositories/whoop.py` — integration/raw record persistence.
 - `whoop_integrations`, `whoop_sleep_records`, `whoop_recovery_records`, `whoop_cycle_records` — PostgreSQL storage.
@@ -175,7 +177,37 @@ Worker safety:
 
 `/status` показывает только compact sanitized block: enabled/configured, connected integrations, last sync, last error count. Он не делает live WHOOP calls.
 
-Stage 5 сможет читать raw tables и строить личную digest card отдельным PR, но Stage 4 не меняет scheduled digest renderer и не добавляет WHOOP в утреннюю сводку.
+## Stage 5: WHOOP card в personal inbox и digest
+
+Stage 5 читает только уже синхронизированные таблицы `whoop_sleep_records` и
+`whoop_recovery_records`; live WHOOP OAuth/API при построении карточки не
+вызывается. После successful raw sync `WhoopSyncService` вызывает
+`upsert_latest_whoop_sleep_event(...)`.
+
+Контракт события:
+
+- `scope=personal`;
+- `event_type=whoop_sleep`;
+- `source=whoop`;
+- idempotency key: `whoop_sleep:<integration_id>:<sleep_id>` в `payload_json.identity_key`;
+- `card_json.type=whoop_sleep`, title `WHOOP: сон`, facts для сна/recovery/HRV/RHR/Score и actions `details`/`done`.
+
+Выбор sleep record:
+
+- берётся последний non-nap sleep за последние 72 часа;
+- `SCORED` имеет приоритет над `PENDING_SCORE`;
+- если есть только `PENDING_SCORE`, создаётся pending card;
+- `UNSCORABLE` отображается как безопасная техническая карточка, не как ошибка.
+
+Event upsert не resurrect-ит пользовательский `done`: при обновлении pending ->
+scored сохраняется существующий status, меняются только title/body/payload/card.
+Карточка попадает в `/inbox` и personal morning digest через обычный
+`event_items` scope filter. `/work` и work digest её не видят, потому что
+`work_start` включает только `scope=work`.
+
+Raw WHOOP JSON не рендерится пользователю и не копируется в `card_json`. Stage 5
+не содержит AI analysis, диагнозов, лечения или рекомендаций сна. Stage 6 может
+добавить optional AI sleep insight отдельным PR.
 
 ## Списки покупок и напоминания
 

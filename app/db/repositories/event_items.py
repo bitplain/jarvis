@@ -115,6 +115,58 @@ class EventItemRepository:
         item = await self._get_model(event_id)
         return _to_stored(item) if item is not None else None
 
+    async def get_by_payload_identity(
+        self,
+        *,
+        source: str,
+        event_type: str,
+        user_id: int | None,
+        identity_key: str,
+    ) -> StoredEventItem | None:
+        identity_expr = EventItem.payload_json.op("->>")("identity_key")
+        statement = (
+            select(EventItem)
+            .where(
+                EventItem.source == source,
+                EventItem.event_type == event_type,
+                EventItem.user_id == user_id,
+                identity_expr == identity_key,
+            )
+            .order_by(EventItem.updated_at.desc())
+            .limit(1)
+        )
+        result = await self.session.execute(statement)
+        item = result.scalar_one_or_none()
+        return _to_stored(item) if item is not None else None
+
+    async def update_from_event(
+        self,
+        event_id: str,
+        event: EventItemCreate,
+        *,
+        now: datetime,
+        status: str | None = None,
+    ) -> StoredEventItem | None:
+        item = await self._get_model(event_id)
+        if item is None:
+            return None
+        item.user_id = event.user_id
+        item.chat_id = event.chat_id
+        item.scope = str(event.scope)
+        item.event_type = str(event.event_type)
+        item.title = event.title
+        item.body = event.body
+        item.priority = str(event.priority)
+        item.status = status if status is not None else str(event.status)
+        item.source = event.source
+        item.payload_json = dict(event.payload_json or {})
+        item.card_json = dict(event.card_json) if event.card_json is not None else None
+        item.due_at = event.due_at
+        item.updated_at = now
+        await self.session.commit()
+        await self.session.refresh(item)
+        return _to_stored(item)
+
     async def set_status(
         self,
         event_id: str,
