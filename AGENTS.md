@@ -417,7 +417,23 @@
 - Worker должен ставить Redis lock `whoop:sync:{integration_id}`, чтобы не было concurrent sync и refresh-token rotation race.
 - 429 WHOOP API не ретраится штормом; 5xx обрабатывается как controlled error. Tokens, response body и Authorization headers не логируются.
 - `/status` показывает только sanitized WHOOP block: enabled/configured, connected integrations, last sync, last error count.
-- Stage 4 WHOOP не создаёт `event_items`, не добавляет WHOOP card в личный утренний дайджест, не отправляет WHOOP digest, не делает AI-анализ сна и не мигрирует HelpDesk.
+- Stage 4 foundation сам по себе не делал AI-анализ сна, отдельный WHOOP digest, private/reverse-engineered API или HelpDesk migration; Stage 5 ниже добавляет только personal Event Inbox card поверх уже синхронизированных raw records.
+
+## Stage 5 WHOOP Card In Personal Inbox And Digest
+
+- Stage 5 строит только структурную техническую карточку по уже синхронизированным raw WHOOP records; live WHOOP OAuth/API при построении карточки не вызывается.
+- После успешного raw sync создаётся или обновляется Event Inbox событие `scope=personal`, `event_type=whoop_sleep`, `source=whoop`.
+- WHOOP card должна показываться в `/inbox` и personal morning digest через обычный `event_items` pipeline.
+- WHOOP card не должна попадать в `/work`, work digest, HelpDesk/tickets или `scope=work`.
+- Idempotency key хранится в `payload_json.identity_key` как `whoop_sleep:<integration_id>:<whoop_sleep_id>`; повторный sync не должен создавать дубликаты.
+- При pending -> scored обновляется тот же event/card. Если пользователь уже нажал `done`, card/body можно обновить, но status нельзя возвращать в `new`.
+- Выбор sleep record: последний non-nap sleep за последние 48-72 часа, приоритет `SCORED`, затем `PENDING_SCORE`, затем безопасный `UNSCORABLE`.
+- Recovery связывается по `cycle_id`, если recovery record уже синхронизирован; отсутствие recovery/HRV/RHR/score не должно валить sync и отображается как `нет данных`.
+- `card_json` не должен содержать raw WHOOP JSON, token, Authorization headers, profile email или secrets.
+- Telegram rendering обязан идти через существующий Structured Rich Card renderer с HTML escaping и Telegram limit safety.
+- Stage 5 не делает AI-анализ сна, диагнозы, лечение, медицинские выводы или персональные рекомендации здоровья.
+- Stage 5 не меняет Railway Variables, не читает secrets, не делает deploy/redeploy/restart, не вызывает private/reverse-engineered WHOOP API и не мигрирует HelpDesk.
+- Stage 6 может добавить optional AI sleep insight только отдельным PR и отдельным safety review.
 
 ## Logging Hygiene
 

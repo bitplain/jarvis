@@ -182,11 +182,10 @@ async def run_readiness() -> WhoopOAuthSyncReadinessResult:
         )
         else "BROKEN"
     )
-    result.statuses["no_whoop_digest_card"] = (
+    result.statuses["whoop_digest_card_stage5_boundary"] = (
         "OK"
-        if "whoop_sleep" not in sync + worker + commands
-        and "WHOOP card" not in whoop_runtime
-        and "WHOOP digest" not in whoop_runtime
+        if "upsert_latest_whoop_sleep_event" in sync + worker
+        and "build_whoop_sleep_card" not in routes + commands
         else "BROKEN"
     )
     result.statuses["official_api_only"] = (

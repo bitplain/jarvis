@@ -8,9 +8,11 @@ from typing import Any, cast
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
+from app.db.repositories.event_items import EventItemRepository
 from app.db.repositories.whoop import WhoopIntegrationRepository
 from app.db.session import SessionLocal
 from app.services.secret_cipher import SecretCipher
+from app.services.whoop_cards import upsert_latest_whoop_sleep_event
 from app.services.whoop_client import (
     WhoopClient,
     WhoopClientError,
@@ -50,10 +52,12 @@ class WhoopSyncService:
         self,
         *,
         repository: Any,
+        event_repository: Any | None = None,
         cipher: SecretCipher,
         client: Any,
     ) -> None:
         self.repository = repository
+        self.event_repository = event_repository
         self.cipher = cipher
         self.client = client
 
@@ -126,6 +130,13 @@ class WhoopSyncService:
                     record,
                     error_code="whoop_sync_cycle_record_invalid",
                     upsert=self.repository.upsert_cycle_record,
+                )
+            if self.event_repository is not None:
+                await upsert_latest_whoop_sleep_event(
+                    whoop_repository=self.repository,
+                    event_repository=self.event_repository,
+                    integration_id=integration_id,
+                    now=resolved_now,
                 )
             await self.repository.mark_sync_success(integration_id, synced_at=resolved_now)
         except WhoopClientError as exc:
@@ -223,6 +234,7 @@ async def sync_whoop_user(
     if session is not None:
         service = WhoopSyncService(
             repository=WhoopIntegrationRepository(session),
+            event_repository=EventItemRepository(session),
             cipher=cipher,
             client=client,
         )
@@ -230,6 +242,7 @@ async def sync_whoop_user(
     async with SessionLocal() as created_session:
         service = WhoopSyncService(
             repository=WhoopIntegrationRepository(created_session),
+            event_repository=EventItemRepository(created_session),
             cipher=cipher,
             client=client,
         )
@@ -250,6 +263,7 @@ async def sync_recent_whoop_data(
     if session is not None:
         service = WhoopSyncService(
             repository=WhoopIntegrationRepository(session),
+            event_repository=EventItemRepository(session),
             cipher=cipher,
             client=client,
         )
@@ -261,6 +275,7 @@ async def sync_recent_whoop_data(
     async with SessionLocal() as created_session:
         service = WhoopSyncService(
             repository=WhoopIntegrationRepository(created_session),
+            event_repository=EventItemRepository(created_session),
             cipher=cipher,
             client=client,
         )

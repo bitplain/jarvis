@@ -564,6 +564,58 @@ class FakeWhoopRepository:
         ]
         self.cycle_records.append(record)
 
+    async def list_recent_sleep_records(
+        self,
+        integration_id: str,
+        *,
+        since: datetime,
+        limit: int,
+    ) -> list[object]:
+        del limit
+        assert integration_id == "integration-1"
+        sleeps: list[object] = []
+        for record in self.sleep_records:
+            start = datetime.fromisoformat(str(record["start"]).replace("Z", "+00:00"))
+            end = datetime.fromisoformat(str(record["end"]).replace("Z", "+00:00"))
+            if start >= since:
+                sleeps.append(
+                    SimpleNamespace(
+                        integration_id="integration-1",
+                        user_id=100500,
+                        whoop_sleep_id=str(record["id"]),
+                        cycle_id=int(record["cycle_id"]),
+                        start_at=start,
+                        end_at=end,
+                        timezone_offset=str(record.get("timezone_offset") or ""),
+                        nap=bool(record.get("nap", False)),
+                        score_state=str(record.get("score_state") or ""),
+                        raw_json=record,
+                    )
+                )
+        return sleeps
+
+    async def get_recovery_by_cycle_id(
+        self,
+        integration_id: str,
+        *,
+        cycle_id: int,
+    ) -> object | None:
+        assert integration_id == "integration-1"
+        for record in self.recovery_records:
+            if int(record["cycle_id"]) == cycle_id:
+                score = record.get("score") if isinstance(record.get("score"), dict) else {}
+                return SimpleNamespace(
+                    integration_id="integration-1",
+                    user_id=100500,
+                    cycle_id=cycle_id,
+                    score_state=record.get("score_state"),
+                    recovery_score=score.get("recovery_score"),
+                    hrv_rmssd_milli=score.get("hrv_rmssd_milli"),
+                    resting_heart_rate=score.get("resting_heart_rate"),
+                    raw_json=record,
+                )
+        return None
+
     async def mark_sync_success(self, integration_id: str, *, synced_at: datetime) -> None:
         del integration_id
         self.successes.append(synced_at)
@@ -746,6 +798,37 @@ async def test_whoop_sync_refreshes_rotated_tokens_and_upserts_pending_raw_recor
     assert repository.cycle_records[0]["score_state"] == "SCORED"
     assert repository.successes == [NOW, NOW]
     assert repository.errors == []
+
+
+@pytest.mark.asyncio
+async def test_whoop_sync_success_upserts_sleep_event_from_synced_raw_records() -> None:
+    from app.services.event_items import EventItemService
+
+    cipher = SecretCipher(SecretCipher.generate_key())
+    repository = FakeWhoopRepository(cipher)
+    event_service = EventItemService.in_memory(now_factory=lambda: NOW)
+    service = WhoopSyncService(
+        repository=repository,
+        event_repository=event_service.repository,
+        cipher=cipher,
+        client=FakeWhoopClient(),
+    )
+
+    result = await service.sync_whoop_user("integration-1", now=NOW)
+    repeated = await service.sync_whoop_user("integration-1", now=NOW + timedelta(minutes=5))
+
+    assert result.status == "synced"
+    assert repeated.status == "synced"
+    assert len(event_service.repository.items) == 1
+    event = next(iter(event_service.repository.items.values()))
+    assert event.scope == "personal"
+    assert event.event_type == "whoop_sleep"
+    assert event.source == "whoop"
+    assert event.payload_json["identity_key"] == "whoop_sleep:integration-1:sleep-pending"
+    assert event.payload_json["sleep_id"] == "sleep-pending"
+    assert event.card_json is not None
+    assert event.card_json["type"] == "whoop_sleep"
+    assert "raw_json" not in str(event.card_json)
 
 
 @pytest.mark.asyncio

@@ -184,8 +184,9 @@ Business-переменные optional и нужны только для Telegra
 
 ## Event Inbox и Structured Rich Cards
 
-Stage 1A/2A закладывает foundation Event Center без WHOOP sync. Stage 3 добавляет
-scheduled digest layer поверх `event_items`.
+Stage 1A/2A закладывает foundation Event Center. Stage 3 добавляет
+scheduled digest layer поверх `event_items`. Stage 5 добавляет personal-only
+WHOOP sleep/recovery card из уже синхронизированных raw WHOOP records.
 
 События хранятся в PostgreSQL таблице `event_items` и делятся по scope:
 
@@ -215,13 +216,25 @@ Stage 3 Event Inbox Digests:
 - `/digest` показывает status policies и кнопки `Показать личный`, `Показать рабочий`, `Настройки`;
 - worker job `send_due_digests` запускается cron раз в минуту, использует Redis claim `digest:send:{policy_key}:{local_date}` и обновляет `last_sent_date`/`last_sent_at` только после успешной Telegram отправки;
 - grace window расписания — 30 минут: `06:50` можно отправить до `07:20`, `09:00` до `09:30`; после окна MVP пропускает отправку до следующего дня;
-- WHOOP пока не включён;
+- WHOOP card попадает только в личный дайджест через `scope=personal`, work digest её не включает;
 - HelpDesk migration в `event_items` пока не выполняется.
 
-## WHOOP OAuth и raw sync
+## WHOOP OAuth, raw sync и личная карточка
 
-Stage 4 добавляет только foundation подключения WHOOP через официальный WHOOP Developer API.
-AI-анализ сна, WHOOP card в утреннем дайджесте и запись WHOOP в `event_items` в этом PR не включены.
+Stage 4 добавляет foundation подключения WHOOP через официальный WHOOP Developer API.
+Stage 5 поверх уже синхронизированных raw records создаёт/обновляет личную
+Structured Rich Card:
+
+```text
+scope: personal
+event_type: whoop_sleep
+source: whoop
+```
+
+Карточка отображается в `/inbox` и попадает в personal morning digest через
+обычный Event Inbox механизм. В `/work` и work digest WHOOP не попадает. Это
+только техническая сводка сна и восстановления: No AI analysis, No medical
+advice, без диагнозов и рекомендаций лечения.
 
 Используемые официальные endpoints:
 
@@ -278,13 +291,22 @@ uv run --python 3.12 --extra dev python -c "from app.services.secret_cipher impo
 
 Worker job `sync_whoop_integrations` запускается arq cron каждые 30 минут и пропускает работу, если `WHOOP_ENABLED=false`, config неполный или нет connected integrations. На каждую integration ставится Redis lock `whoop:sync:{integration_id}`; manual sync button ставит тот же job в очередь. `/status` показывает только sanitized WHOOP block: enabled/configured, connected integrations, last sync и last error count. Tokens, client secret, profile email и raw payload в `/status` не выводятся.
 
-Out of scope Stage 4:
+WHOOP card:
+
+- выбирает последний non-nap sleep за последние 72 часа;
+- предпочитает `SCORED`, если он есть; иначе показывает мягкий `PENDING_SCORE`; `UNSCORABLE` не считается ошибкой;
+- связывает recovery по `cycle_id`, если recovery record уже синхронизирован;
+- использует idempotency key `whoop_sleep:<integration_id>:<sleep_id>` в `payload_json.identity_key`, не создаёт дубль при повторном sync;
+- не кладёт raw JSON в `card_json`, `body` или digest rendering.
+
+Out of scope Stage 5:
 
 - AI sleep analysis;
-- WHOOP card в личном утреннем дайджесте;
-- запись WHOOP в `event_items`;
 - private/reverse-engineered WHOOP API;
 - HelpDesk migration.
+
+Stage 6 может добавить optional AI sleep insight отдельным PR после отдельного
+review и safety scope.
 
 ## `/status` и ручная память
 

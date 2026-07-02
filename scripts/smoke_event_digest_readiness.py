@@ -165,7 +165,7 @@ async def run_readiness() -> EventDigestReadinessResult:
                 "Stage 3 Event Inbox Digests",
                 "06:50 Europe/Moscow",
                 "09:00 Europe/Moscow",
-                "WHOOP пока не включён",
+                "WHOOP card попадает только в личный дайджест",
             ]
         )
         else "MISSING"

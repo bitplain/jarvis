@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Protocol
@@ -107,6 +107,26 @@ class EventItemRepositoryProtocol(Protocol):
     async def get(self, event_id: str) -> StoredEventItem | None:
         raise NotImplementedError
 
+    async def get_by_payload_identity(
+        self,
+        *,
+        source: str,
+        event_type: str,
+        user_id: int | None,
+        identity_key: str,
+    ) -> StoredEventItem | None:
+        raise NotImplementedError
+
+    async def update_from_event(
+        self,
+        event_id: str,
+        event: EventItemCreate,
+        *,
+        now: datetime,
+        status: str | None = None,
+    ) -> StoredEventItem | None:
+        raise NotImplementedError
+
     async def set_status(
         self,
         event_id: str,
@@ -136,29 +156,38 @@ class EventItemService:
         return cls(InMemoryEventItemRepository(), now_factory=now_factory)
 
     async def create_event(self, event: EventItemCreate) -> StoredEventItem:
-        normalized = EventItemCreate(
-            user_id=event.user_id,
-            chat_id=event.chat_id,
-            scope=_normalize_value(event.scope, VALID_EVENT_SCOPES, "invalid_event_scope"),
-            event_type=_normalize_value(
-                event.event_type,
-                VALID_EVENT_TYPES,
-                "invalid_event_type",
-            ),
-            title=_required_text(event.title, "event_title_required"),
-            body=" ".join(event.body.strip().split()),
-            source=_required_text(event.source, "event_source_required"),
-            priority=_normalize_value(
-                event.priority,
-                VALID_EVENT_PRIORITIES,
-                "invalid_event_priority",
-            ),
-            status=_normalize_value(event.status, VALID_EVENT_STATUSES, "invalid_event_status"),
-            payload_json=dict(event.payload_json or {}),
-            card_json=_json_object_or_none(event.card_json),
-            due_at=_to_utc_or_none(event.due_at),
-        )
+        normalized = _normalize_event_create(event)
         return await self.repository.create(normalized, now=_to_utc(self.now_factory()))
+
+    async def upsert_event_by_payload_identity(
+        self,
+        event: EventItemCreate,
+        *,
+        identity_key: str,
+    ) -> StoredEventItem:
+        normalized = _normalize_event_create(event)
+        normalized_identity = _required_text(identity_key, "event_identity_required")
+        payload = dict(normalized.payload_json or {})
+        payload["identity_key"] = normalized_identity
+        normalized = replace(normalized, payload_json=payload)
+        now = _to_utc(self.now_factory())
+        existing = await self.repository.get_by_payload_identity(
+            source=normalized.source,
+            event_type=str(normalized.event_type),
+            user_id=normalized.user_id,
+            identity_key=normalized_identity,
+        )
+        if existing is None:
+            return await self.repository.create(normalized, now=now)
+        updated = await self.repository.update_from_event(
+            existing.id,
+            normalized,
+            now=now,
+            status=existing.status,
+        )
+        if updated is None:
+            return await self.repository.create(normalized, now=now)
+        return updated
 
     async def list_for_inbox(
         self,
@@ -290,6 +319,50 @@ class InMemoryEventItemRepository:
     async def get(self, event_id: str) -> StoredEventItem | None:
         return self.items.get(event_id.strip().lower().replace("-", ""))
 
+    async def get_by_payload_identity(
+        self,
+        *,
+        source: str,
+        event_type: str,
+        user_id: int | None,
+        identity_key: str,
+    ) -> StoredEventItem | None:
+        for event in self.items.values():
+            if (
+                event.source == source
+                and event.event_type == event_type
+                and event.user_id == user_id
+                and event.payload_json.get("identity_key") == identity_key
+            ):
+                return event
+        return None
+
+    async def update_from_event(
+        self,
+        event_id: str,
+        event: EventItemCreate,
+        *,
+        now: datetime,
+        status: str | None = None,
+    ) -> StoredEventItem | None:
+        stored = await self.get(event_id)
+        if stored is None:
+            return None
+        stored.user_id = event.user_id
+        stored.chat_id = event.chat_id
+        stored.scope = str(event.scope)
+        stored.event_type = str(event.event_type)
+        stored.title = event.title
+        stored.body = event.body
+        stored.priority = str(event.priority)
+        stored.status = status if status is not None else str(event.status)
+        stored.source = event.source
+        stored.payload_json = dict(event.payload_json or {})
+        stored.card_json = _json_object_or_none(event.card_json)
+        stored.due_at = event.due_at
+        stored.updated_at = now
+        return stored
+
     async def set_status(
         self,
         event_id: str,
@@ -321,6 +394,31 @@ def _normalize_value(value: StrEnum | str, allowed: set[str], error_code: str) -
     if normalized not in allowed:
         raise ValueError(error_code)
     return normalized
+
+
+def _normalize_event_create(event: EventItemCreate) -> EventItemCreate:
+    return EventItemCreate(
+        user_id=event.user_id,
+        chat_id=event.chat_id,
+        scope=_normalize_value(event.scope, VALID_EVENT_SCOPES, "invalid_event_scope"),
+        event_type=_normalize_value(
+            event.event_type,
+            VALID_EVENT_TYPES,
+            "invalid_event_type",
+        ),
+        title=_required_text(event.title, "event_title_required"),
+        body=" ".join(event.body.strip().split()),
+        source=_required_text(event.source, "event_source_required"),
+        priority=_normalize_value(
+            event.priority,
+            VALID_EVENT_PRIORITIES,
+            "invalid_event_priority",
+        ),
+        status=_normalize_value(event.status, VALID_EVENT_STATUSES, "invalid_event_status"),
+        payload_json=dict(event.payload_json or {}),
+        card_json=_json_object_or_none(event.card_json),
+        due_at=_to_utc_or_none(event.due_at),
+    )
 
 
 def _required_text(value: str, error_code: str) -> str:
