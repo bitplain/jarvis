@@ -82,6 +82,19 @@ class FakeCallbackQuery:
         self.answers.append({"text": text, **kwargs})
 
 
+class FakeRedis:
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+        self.expirations: dict[str, int] = {}
+
+    async def set(self, key: str, value: str, *, ex: int, nx: bool = False) -> bool | None:
+        if nx and key in self.values:
+            return None
+        self.values[key] = value
+        self.expirations[key] = ex
+        return True
+
+
 def telegram_bad_request(message: str) -> TelegramBadRequest:
     return TelegramBadRequest(method=DeleteMessage(chat_id=123, message_id=1), message=message)
 
@@ -1285,6 +1298,34 @@ async def test_settings_callback_non_admin_is_denied() -> None:
 
     assert callback.answers == [{"text": "Доступ запрещён.", "show_alert": True}]
     assert FakeRuntimeSettingsService.instances == []
+
+
+@pytest.mark.asyncio
+async def test_whoop_connect_link_disables_preview_to_keep_one_time_token() -> None:
+    redis = FakeRedis()
+    callback = FakeCallbackQuery(commands.SETTINGS_CALLBACK_WHOOP_CONNECT, user_id=100500)
+
+    await commands.handle_settings_callback(
+        callback,  # type: ignore[arg-type]
+        settings=Settings(
+            admin_telegram_ids="100500",
+            public_base_url="https://jarvis.example.com",
+            whoop_enabled=True,
+            whoop_client_id="client-id",
+            whoop_client_secret="client-secret",
+            whoop_redirect_uri="https://jarvis.example.com/integrations/whoop/oauth/callback",
+            whoop_token_encryption_key="cipher-key",
+        ),
+        db_session=object(),
+        redis=redis,
+    )
+
+    assert len(redis.values) == 1
+    assert next(iter(redis.values.values())) == "100500"
+    assert callback.message.answers[0]["text"].startswith(
+        "Ссылка для подключения WHOOP действует 10 минут:\n"
+    )
+    assert callback.message.answers[0]["link_preview_options"].is_disabled is True
 
 
 @pytest.mark.asyncio
