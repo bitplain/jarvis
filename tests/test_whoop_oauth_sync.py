@@ -434,6 +434,46 @@ async def test_whoop_oauth_callback_rejects_bad_state_and_success_hides_tokens()
     assert "whoop:oauth:state:good-state" not in redis.values
 
 
+@pytest.mark.asyncio
+async def test_whoop_oauth_callback_timeout_keeps_state_for_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis = FakeRedis()
+    redis.values["whoop:oauth:state:slow-state"] = "100500"
+    redis.expirations["whoop:oauth:state:slow-state"] = 600
+    app = create_app(
+        settings=Settings(
+            whoop_enabled=True,
+            whoop_client_id="client-id",
+            whoop_client_secret="client-secret",
+            whoop_redirect_uri="https://jarvis.example.com/integrations/whoop/oauth/callback",
+            whoop_token_encryption_key=SecretCipher.generate_key(),
+            redis_url="redis://unused:6379/0",
+        )
+    )
+    app.state.redis_pool = redis
+
+    async def slow_complete(**kwargs: Any) -> None:
+        await asyncio.sleep(1)
+
+    app.state.whoop_oauth_connector = SimpleNamespace(complete=slow_complete)
+
+    from app.api import routes_whoop
+
+    monkeypatch.setattr(routes_whoop, "WHOOP_OAUTH_CALLBACK_TIMEOUT_SECONDS", 0.01)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/integrations/whoop/oauth/callback",
+            params={"state": "slow-state", "code": "secret-code"},
+        )
+
+    assert response.status_code == 504
+    assert "WHOOP не ответил вовремя" in response.text
+    assert "secret-code" not in response.text
+    assert redis.values["whoop:oauth:state:slow-state"] == "100500"
+
+
 class FakeWhoopRepository:
     def __init__(self, cipher: SecretCipher) -> None:
         self.integration = SimpleNamespace(

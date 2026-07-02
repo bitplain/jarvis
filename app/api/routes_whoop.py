@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
+import logging
 import secrets
 from datetime import UTC, datetime
 from typing import Annotated, Any
@@ -18,8 +20,10 @@ from app.services.whoop_client import build_authorization_url, exchange_code_for
 from app.services.whoop_sync import expires_at_from_token
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 WHOOP_OAUTH_STATE_TTL_SECONDS = 600
 WHOOP_OAUTH_START_TTL_SECONDS = 600
+WHOOP_OAUTH_CALLBACK_TIMEOUT_SECONDS = 25.0
 WHOOP_OAUTH_START_PREFIX = "whoop:oauth:start:"
 WHOOP_OAUTH_STATE_PREFIX = "whoop:oauth:state:"
 REDIS_GETDEL_LUA = """
@@ -71,30 +75,42 @@ async def whoop_oauth_callback(
     if not settings.whoop_configured:
         return _error_page("WHOOP не настроен.", status.HTTP_503_SERVICE_UNAVAILABLE)
     redis = await _get_redis_pool(request, settings)
-    telegram_user_id = await _consume_redis_value(redis, f"{WHOOP_OAUTH_STATE_PREFIX}{state}")
+    state_key = f"{WHOOP_OAUTH_STATE_PREFIX}{state}"
+    telegram_user_id = await _read_redis_value(redis, state_key)
     if telegram_user_id is None:
         return _error_page("OAuth state устарел или неверен.")
     connector = getattr(request.app.state, "whoop_oauth_connector", None)
     try:
-        if connector is not None:
-            complete = getattr(connector, "complete", connector)
-            result = complete(
-                telegram_user_id=int(telegram_user_id),
-                code=code,
-                settings=settings,
-            )
-            if inspect.isawaitable(result):
-                await result
-        else:
-            await complete_whoop_oauth_connection(
-                telegram_user_id=int(telegram_user_id),
-                code=code,
-                settings=settings,
-            )
+        async with asyncio.timeout(WHOOP_OAUTH_CALLBACK_TIMEOUT_SECONDS):
+            if connector is not None:
+                complete = getattr(connector, "complete", connector)
+                result = complete(
+                    telegram_user_id=int(telegram_user_id),
+                    code=code,
+                    settings=settings,
+                )
+                if inspect.isawaitable(result):
+                    await result
+            else:
+                await complete_whoop_oauth_connection(
+                    telegram_user_id=int(telegram_user_id),
+                    code=code,
+                    settings=settings,
+                )
+    except TimeoutError:
+        logger.warning("whoop_oauth_callback_timeout")
+        return _error_page(
+            "WHOOP не ответил вовремя. Вернитесь в Telegram и откройте новую ссылку.",
+            status.HTTP_504_GATEWAY_TIMEOUT,
+        )
     except SecretCipherUnavailable:
+        await _consume_redis_value(redis, state_key)
         return _error_page("WHOOP token storage не настроен.", status.HTTP_503_SERVICE_UNAVAILABLE)
-    except Exception:
+    except Exception as exc:
+        await _consume_redis_value(redis, state_key)
+        logger.warning("whoop_oauth_callback_failed", extra={"error_type": type(exc).__name__})
         return _error_page("Не удалось подключить WHOOP. Попробуйте позже.")
+    await _consume_redis_value(redis, state_key)
     return HTMLResponse(
         "<html><body><h1>WHOOP подключён</h1>"
         "<p>Можно закрыть окно и вернуться в Telegram.</p></body></html>"
@@ -142,6 +158,20 @@ async def _get_redis_pool(request: Request, settings: Settings) -> Any:
 
 async def _consume_redis_value(redis: Any, key: str) -> str | None:
     raw = await _atomic_get_delete(redis, key)
+    return _decode_redis_value(raw)
+
+
+async def _read_redis_value(redis: Any, key: str) -> str | None:
+    get = getattr(redis, "get", None)
+    if callable(get):
+        return _decode_redis_value(await get(key))
+    execute_command = getattr(redis, "execute_command", None)
+    if callable(execute_command):
+        return _decode_redis_value(await execute_command("GET", key))
+    raise RuntimeError("redis_read_unavailable")
+
+
+def _decode_redis_value(raw: Any) -> str | None:
     if raw is None:
         return None
     if isinstance(raw, bytes):
