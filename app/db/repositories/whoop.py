@@ -184,7 +184,7 @@ class WhoopIntegrationRepository:
         values = {
             "user_id": integration.user_id,
             "whoop_sleep_id": sleep_id,
-            "cycle_id": int(record["cycle_id"]),
+            "cycle_id": _required_int("cycle_id", record["cycle_id"]),
             "start_at": _parse_datetime(record["start"]),
             "end_at": _parse_datetime(record["end"]),
             "timezone_offset": str(record.get("timezone_offset") or ""),
@@ -205,7 +205,7 @@ class WhoopIntegrationRepository:
         integration = await self._get_model(integration_id)
         if integration is None:
             return
-        cycle_id = int(record["cycle_id"])
+        cycle_id = _required_int("cycle_id", record["cycle_id"])
         result = await self.session.execute(
             select(WhoopRecoveryRecord).where(
                 WhoopRecoveryRecord.integration_id == integration.id,
@@ -241,7 +241,7 @@ class WhoopIntegrationRepository:
         integration = await self._get_model(integration_id)
         if integration is None:
             return
-        cycle_id = int(record.get("id") or record["cycle_id"])
+        cycle_id = _required_int("cycle_id", record.get("id") or record["cycle_id"])
         result = await self.session.execute(
             select(WhoopCycleRecord).where(
                 WhoopCycleRecord.integration_id == integration.id,
@@ -303,6 +303,13 @@ def _parse_datetime(value: object) -> datetime:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=UTC)
     return parsed.astimezone(UTC)
+
+
+def _required_int(field_name: str, value: object) -> int:
+    parsed = _optional_int(value)
+    if parsed is None:
+        raise ValueError(f"{field_name}_invalid")
+    return parsed
 
 
 def _optional_int(value: object) -> int | None:

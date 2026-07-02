@@ -145,6 +145,8 @@ def test_secret_cipher_round_trips_without_plaintext_storage() -> None:
 def test_whoop_repository_optional_numeric_parsers_tolerate_loose_values() -> None:
     from app.db.repositories import whoop as whoop_repository
 
+    assert whoop_repository._required_int("cycle_id", "101.0") == 101
+    assert whoop_repository._required_int("cycle_id", 101.0) == 101
     assert whoop_repository._optional_int("") is None
     assert whoop_repository._optional_int("77.0") == 77
     assert whoop_repository._optional_int(61.0) == 61
@@ -574,6 +576,12 @@ class FakeWhoopRepository:
         self.integration.last_error = error_code
 
 
+class SleepRecordValueErrorRepository(FakeWhoopRepository):
+    async def upsert_sleep_record(self, integration_id: str, record: dict[str, Any]) -> None:
+        del integration_id, record
+        raise ValueError("invalid literal for int() with base 10")
+
+
 class FakeWhoopClient:
     async def refresh_access_token(self, **kwargs: Any) -> object:
         assert kwargs["refresh_token"] == "refresh-1"
@@ -756,6 +764,24 @@ async def test_whoop_sync_tolerates_loose_optional_numeric_fields() -> None:
     assert repository.profile == {"user_id": "", "email": "private@example.com"}
     assert repository.successes == [NOW]
     assert repository.errors == []
+
+
+@pytest.mark.asyncio
+async def test_whoop_sync_reports_sanitized_record_parse_stage() -> None:
+    cipher = SecretCipher(SecretCipher.generate_key())
+    repository = SleepRecordValueErrorRepository(cipher)
+    service = WhoopSyncService(
+        repository=repository,
+        cipher=cipher,
+        client=FakeWhoopClient(),
+    )
+
+    result = await service.sync_whoop_user("integration-1", now=NOW)
+
+    assert result.status == "failed"
+    assert result.error_code == "whoop_sync_sleep_record_invalid"
+    assert repository.errors == ["whoop_sync_sleep_record_invalid"]
+    assert "invalid literal" not in repository.errors[0]
 
 
 @pytest.mark.asyncio

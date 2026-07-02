@@ -39,6 +39,12 @@ class WhoopFetchedData:
     cycle_records: list[dict[str, Any]]
 
 
+class WhoopSyncDataError(RuntimeError):
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
 class WhoopSyncService:
     def __init__(
         self,
@@ -101,16 +107,31 @@ class WhoopSyncService:
                 profile_json=fetched.profile,
             )
             for record in fetched.sleep_records:
-                _validate_score_state(record)
-                await self.repository.upsert_sleep_record(integration_id, record)
+                await self._upsert_record(
+                    integration_id,
+                    record,
+                    error_code="whoop_sync_sleep_record_invalid",
+                    upsert=self.repository.upsert_sleep_record,
+                )
             for record in fetched.recovery_records:
-                _validate_score_state(record)
-                await self.repository.upsert_recovery_record(integration_id, record)
+                await self._upsert_record(
+                    integration_id,
+                    record,
+                    error_code="whoop_sync_recovery_record_invalid",
+                    upsert=self.repository.upsert_recovery_record,
+                )
             for record in fetched.cycle_records:
-                _validate_score_state(record)
-                await self.repository.upsert_cycle_record(integration_id, record)
+                await self._upsert_record(
+                    integration_id,
+                    record,
+                    error_code="whoop_sync_cycle_record_invalid",
+                    upsert=self.repository.upsert_cycle_record,
+                )
             await self.repository.mark_sync_success(integration_id, synced_at=resolved_now)
         except WhoopClientError as exc:
+            await self.repository.mark_sync_error(integration_id, error_code=exc.code)
+            return WhoopSyncResult(status="failed", error_code=exc.code)
+        except WhoopSyncDataError as exc:
             await self.repository.mark_sync_error(integration_id, error_code=exc.code)
             return WhoopSyncResult(status="failed", error_code=exc.code)
         except Exception as exc:
@@ -173,6 +194,20 @@ class WhoopSyncService:
             recovery_records=recovery_records,
             cycle_records=cycle_records,
         )
+
+    async def _upsert_record(
+        self,
+        integration_id: str,
+        record: dict[str, Any],
+        *,
+        error_code: str,
+        upsert: Any,
+    ) -> None:
+        try:
+            _validate_score_state(record)
+            await upsert(integration_id, record)
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            raise WhoopSyncDataError(error_code) from exc
 
 
 async def sync_whoop_user(
