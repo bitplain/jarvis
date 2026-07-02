@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 import redis.asyncio as redis
 from fastapi import FastAPI
 
-from app.api import routes_admin, routes_health, routes_telegram
+from app.api import routes_admin, routes_health, routes_telegram, routes_whoop
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.db.session import ping_postgres
@@ -71,9 +71,11 @@ def create_app(
         startup_migration_runner or default_startup_migration_runner
     )
     app.state.startup_webhook_runner = startup_webhook_runner or default_startup_webhook_runner
+    app.dependency_overrides[get_settings] = lambda: resolved_settings
     app.include_router(routes_health.router)
     app.include_router(routes_admin.router)
     app.include_router(routes_telegram.router)
+    app.include_router(routes_whoop.router)
     return app
 
 

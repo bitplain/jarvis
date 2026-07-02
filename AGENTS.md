@@ -388,6 +388,37 @@
 - WHOOP/OAuth в Stage 3 не включается.
 - HelpDesk migration в `event_items` в Stage 3 не выполняется, если это расширяет scope.
 
+## Stage 4 WHOOP OAuth + Raw Sync
+
+- WHOOP integration по умолчанию выключен: `WHOOP_ENABLED=false`.
+- Используется только официальный WHOOP Developer API; private/reverse-engineered WHOOP endpoints запрещены.
+- OAuth использует authorization code flow:
+  - Authorization URL: `https://api.prod.whoop.com/oauth/oauth2/auth`
+  - Token URL: `https://api.prod.whoop.com/oauth/oauth2/token`
+- Минимальные scopes: `offline read:profile read:sleep read:recovery read:cycles`.
+- `offline` обязателен для refresh token; refresh token ротируется, поэтому sync должен сохранять новый access token и новый refresh token после refresh.
+- Required env/Railway Variables задаются вручную после merge: `WHOOP_ENABLED`, `WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET`, `WHOOP_REDIRECT_URI`, `WHOOP_TOKEN_ENCRYPTION_KEY`.
+- Production redirect URL: `https://jarvis-production-786d.up.railway.app/integrations/whoop/oauth/callback`.
+- `.env`, Railway Variables и реальные WHOOP client secret/token/cipher key нельзя коммитить, печатать в docs, Telegram UI, `/status`, logs или PR.
+- WHOOP access/refresh tokens хранятся только encrypted. Если безопасный cipher key отсутствует или невалиден, OAuth storage должен быть blocked/not configured, но app startup не должен падать.
+- Web OAuth start не должен быть публичным blind connect: ссылка создаётся из admin-only `/settings -> WHOOP`, через one-time Redis token и OAuth `state` с TTL 10 минут.
+- `/settings -> WHOOP` доступен только admin user из `ADMIN_TELEGRAM_IDS`; non-admin не получает ссылку подключения.
+- Действия settings: `Подключить WHOOP`, `Синхронизировать сейчас`, `Отключить`, `Назад`.
+- `Отключить` не удаляет raw records сразу; integration переводится в `revoked`, tokens очищаются.
+- Raw sync хранит только данные в PostgreSQL таблицах `whoop_integrations`, `whoop_sleep_records`, `whoop_recovery_records`, `whoop_cycle_records`.
+- Sync window MVP: последние 48 часов для profile/sleep/recovery/cycle.
+- WHOOP endpoints:
+  - `GET /developer/v2/user/profile/basic`
+  - `GET /developer/v2/activity/sleep`
+  - `GET /developer/v2/recovery`
+  - `GET /developer/v2/cycle`
+- `score_state` может быть `SCORED`, `PENDING_SCORE`, `UNSCORABLE`; `PENDING_SCORE` и `UNSCORABLE` сохраняются как raw data и не считаются ошибкой.
+- Worker job `sync_whoop_integrations` запускается optional cron каждые 30 минут, пропускает работу при disabled/incomplete config/no connected integrations.
+- Worker должен ставить Redis lock `whoop:sync:{integration_id}`, чтобы не было concurrent sync и refresh-token rotation race.
+- 429 WHOOP API не ретраится штормом; 5xx обрабатывается как controlled error. Tokens, response body и Authorization headers не логируются.
+- `/status` показывает только sanitized WHOOP block: enabled/configured, connected integrations, last sync, last error count.
+- Stage 4 WHOOP не создаёт `event_items`, не добавляет WHOOP card в личный утренний дайджест, не отправляет WHOOP digest, не делает AI-анализ сна и не мигрирует HelpDesk.
+
 ## Logging Hygiene
 
 - Normal operational app logs уровня `DEBUG`/`INFO` должны писаться в stdout; реальные warning/error/exception остаются на stderr.

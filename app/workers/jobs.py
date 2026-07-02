@@ -28,6 +28,7 @@ from app.db.repositories.reminders import ReminderRepository
 from app.db.repositories.runtime_settings import RuntimeSettingRepository
 from app.db.repositories.shopping import ShoppingRepository
 from app.db.repositories.web_search_cache import WebSearchCacheRepository
+from app.db.repositories.whoop import WhoopIntegrationRepository
 from app.db.session import SessionLocal
 from app.llm.base import LLMProviderError
 from app.llm.factory import build_llm_provider
@@ -57,6 +58,7 @@ from app.services.runtime_settings_service import (
     RuntimeSettingsService,
     RuntimeSettingsUnavailable,
 )
+from app.services.secret_cipher import SecretCipher, SecretCipherUnavailable
 from app.services.shopping_service import ShoppingService
 from app.services.status_service import record_worker_heartbeat
 from app.services.telegram_formatting import format_daily_brief_html, format_reminder_due_html
@@ -69,12 +71,15 @@ from app.services.web_search.context_builder import (
 from app.services.web_search.factory import build_web_search_service
 from app.services.web_search.service import WEB_SEARCH_NO_RESULTS_MESSAGE
 from app.services.web_search.types import WebSearchRequest, WebSearchStatus
+from app.services.whoop_client import WhoopClient
+from app.services.whoop_sync import WhoopSyncService
 
 logger = logging.getLogger(__name__)
 USER_ERROR_MESSAGE = "Не получилось подготовить ответ. Попробуйте позже."
 DAILY_BRIEF_SEND_CLAIM_TTL_SECONDS = 36 * 60 * 60
 DIGEST_SEND_CLAIM_TTL_SECONDS = 36 * 60 * 60
 HELPDESK_TICKET_REMINDER_CLAIM_TTL_SECONDS = 120
+WHOOP_SYNC_LOCK_TTL_SECONDS = 25 * 60
 
 
 def _mask_int(value: int | str | None) -> str:
@@ -718,6 +723,44 @@ async def check_helpdesk_imap_mailbox(ctx: dict[str, Any]) -> None:
         await bot.session.close()
 
 
+async def sync_whoop_integrations(
+    ctx: dict[str, Any],
+    integration_id: str | None = None,
+) -> None:
+    settings = get_settings()
+    redis = ctx.get("redis") if isinstance(ctx, dict) else None
+    await record_worker_heartbeat(redis)
+    if not settings.whoop_enabled:
+        return
+    if not settings.whoop_configured:
+        logger.warning("whoop_sync_config_incomplete")
+        return
+    try:
+        cipher = SecretCipher(settings.whoop_token_encryption_key)
+    except SecretCipherUnavailable as exc:
+        logger.warning("whoop_sync_cipher_unavailable", extra={"error_type": type(exc).__name__})
+        return
+    async with SessionLocal() as session:
+        repository = WhoopIntegrationRepository(session)
+        if integration_id is not None:
+            target = await repository.get_connected_for_update(integration_id)
+            integrations = [target] if target is not None else []
+        else:
+            integrations = await repository.list_connected()
+        client = WhoopClient(settings)
+        service = WhoopSyncService(repository=repository, cipher=cipher, client=client)
+        for integration in integrations:
+            current_id = str(integration.id)
+            if not await _claim_whoop_sync(redis, integration_id=current_id):
+                continue
+            result = await service.sync_whoop_user(current_id, now=utcnow())
+            if result.status == "failed":
+                logger.warning(
+                    "whoop_sync_failed",
+                    extra={"error_code": result.error_code or "unknown"},
+                )
+
+
 async def _claim_helpdesk_ticket_reminder(redis: Any, *, item_id: str) -> bool:
     if redis is None:
         return True
@@ -735,6 +778,18 @@ async def _claim_helpdesk_ticket_reminder(redis: Any, *, item_id: str) -> bool:
             extra={"error_type": type(exc).__name__},
         )
         return True
+    return bool(claimed)
+
+
+async def _claim_whoop_sync(redis: Any, *, integration_id: str) -> bool:
+    if redis is None:
+        return True
+    key = f"whoop:sync:{integration_id}"
+    try:
+        claimed = await redis.set(key, "1", ex=WHOOP_SYNC_LOCK_TTL_SECONDS, nx=True)
+    except Exception as exc:
+        logger.warning("whoop_sync_lock_unavailable", extra={"error_type": type(exc).__name__})
+        return False
     return bool(claimed)
 
 

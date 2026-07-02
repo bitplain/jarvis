@@ -133,6 +133,13 @@ class EventType(StrEnum):
     DIGEST_ITEM = "digest_item"
 
 
+class WhoopIntegrationStatus(StrEnum):
+    NOT_CONNECTED = "not_connected"
+    CONNECTED = "connected"
+    ERROR = "error"
+    REVOKED = "revoked"
+
+
 class HouseholdMemoryStatus(StrEnum):
     ACTIVE = "active"
     DELETED = "deleted"
@@ -280,6 +287,135 @@ class DigestPolicy(Base):
     target_chat_id: Mapped[int | None] = mapped_column(BigInteger)
     last_sent_date: Mapped[date | None] = mapped_column(Date)
     last_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        onupdate=utcnow,
+    )
+
+
+class WhoopIntegration(Base):
+    __tablename__ = "whoop_integrations"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('not_connected', 'connected', 'error', 'revoked')",
+            name="ck_whoop_integrations_status",
+        ),
+        UniqueConstraint("telegram_user_id", name="uq_whoop_integrations_telegram_user_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default=WhoopIntegrationStatus.NOT_CONNECTED,
+    )
+    scope: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    access_token_encrypted: Mapped[str | None] = mapped_column(Text)
+    refresh_token_encrypted: Mapped[str | None] = mapped_column(Text)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    whoop_user_id: Mapped[int | None] = mapped_column(BigInteger)
+    profile_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        onupdate=utcnow,
+    )
+
+
+class WhoopSleepRecord(Base):
+    __tablename__ = "whoop_sleep_records"
+    __table_args__ = (
+        UniqueConstraint(
+            "integration_id",
+            "whoop_sleep_id",
+            name="uq_whoop_sleep_records_integration_sleep",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    integration_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("whoop_integrations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
+    whoop_sleep_id: Mapped[str] = mapped_column(Text, nullable=False)
+    cycle_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    timezone_offset: Mapped[str] = mapped_column(Text, nullable=False)
+    nap: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    score_state: Mapped[str] = mapped_column(Text, nullable=False)
+    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        onupdate=utcnow,
+    )
+
+
+class WhoopRecoveryRecord(Base):
+    __tablename__ = "whoop_recovery_records"
+    __table_args__ = (
+        UniqueConstraint(
+            "integration_id",
+            "cycle_id",
+            name="uq_whoop_recovery_records_integration_cycle",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    integration_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("whoop_integrations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
+    cycle_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    score_state: Mapped[str | None] = mapped_column(Text)
+    recovery_score: Mapped[int | None] = mapped_column(Integer)
+    hrv_rmssd_milli: Mapped[Decimal | None] = mapped_column(Numeric(12, 6))
+    resting_heart_rate: Mapped[int | None] = mapped_column(Integer)
+    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        onupdate=utcnow,
+    )
+
+
+class WhoopCycleRecord(Base):
+    __tablename__ = "whoop_cycle_records"
+    __table_args__ = (
+        UniqueConstraint(
+            "integration_id",
+            "cycle_id",
+            name="uq_whoop_cycle_records_integration_cycle",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    integration_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("whoop_integrations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
+    cycle_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    end_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    timezone_offset: Mapped[str] = mapped_column(Text, nullable=False)
+    score_state: Mapped[str] = mapped_column(Text, nullable=False)
+    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -734,6 +870,11 @@ Index(
     postgresql_where=DailyBriefSettings.user_id.is_(None),
 )
 Index("ix_web_search_cache_expires_at", WebSearchCache.expires_at)
+Index("ix_whoop_integrations_status", WhoopIntegration.status)
+Index("ix_whoop_integrations_last_sync", WhoopIntegration.last_sync_at)
+Index("ix_whoop_sleep_records_start_at", WhoopSleepRecord.start_at)
+Index("ix_whoop_recovery_records_cycle_id", WhoopRecoveryRecord.cycle_id)
+Index("ix_whoop_cycle_records_start_at", WhoopCycleRecord.start_at)
 Index(
     "uq_helpdesk_email_events_message_id",
     HelpdeskEmailEvent.message_id,

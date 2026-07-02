@@ -74,6 +74,12 @@ class Settings(BaseSettings):
     tavily_api_key: str = ""
     brave_search_api_key: str = ""
 
+    whoop_enabled: bool = False
+    whoop_client_id: str = ""
+    whoop_client_secret: str = ""
+    whoop_redirect_uri: str = ""
+    whoop_token_encryption_key: str = ""
+
     helpdesk_imap_enabled: bool = False
     helpdesk_imap_host: str = ""
     helpdesk_imap_port: int = Field(default=993, ge=1, le=65535)
@@ -142,6 +148,16 @@ class Settings(BaseSettings):
         if self.llm_primary_provider == "openrouter":
             return self.openrouter_model
         return ""
+
+    @property
+    def whoop_configured(self) -> bool:
+        return bool(
+            self.whoop_enabled
+            and self.whoop_client_id
+            and self.whoop_client_secret
+            and self.whoop_redirect_uri
+            and self.whoop_token_encryption_key
+        )
 
 
 @lru_cache

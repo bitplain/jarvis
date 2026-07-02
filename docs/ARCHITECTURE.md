@@ -130,6 +130,53 @@ Scope separation жёсткое: личный дайджест не включа
 Worker claim key: `digest:send:{policy_key}:{local_date}`, TTL 36 часов. Claim ставится до Telegram send; при duplicate claim отправка пропускается, при Telegram send failure claim удаляется и `last_sent_date` не обновляется.
 Grace window — 30 минут: если worker был выключен дольше окна (`06:50 -> 07:20`, `09:00 -> 09:30`), MVP не догоняет старый digest и ждёт следующий локальный день.
 
+## WHOOP OAuth + raw sync foundation
+
+Stage 4 WHOOP добавляет только безопасное подключение, encrypted token storage и raw sync sleep/recovery/cycle через официальный WHOOP Developer API.
+Этот слой намеренно не создаёт `event_items`, не строит digest card и не вызывает LLM/AI-анализ сна.
+
+Кодовые границы:
+
+- `app/api/routes_whoop.py` — FastAPI OAuth start/callback routes.
+- `app/services/whoop_client.py` — официальный WHOOP OAuth/token/profile/sleep/recovery/cycle client.
+- `app/services/whoop_sync.py` — refresh-if-needed, 48h raw sync и controlled failure handling.
+- `app/services/secret_cipher.py` — Fernet wrapper для encrypted token storage.
+- `app/db/repositories/whoop.py` — integration/raw record persistence.
+- `whoop_integrations`, `whoop_sleep_records`, `whoop_recovery_records`, `whoop_cycle_records` — PostgreSQL storage.
+- `/settings -> WHOOP` — admin-only Telegram UI для connect/manual sync/disconnect.
+- `app/workers/jobs.py::sync_whoop_integrations` — arq cron каждые 30 минут.
+
+OAuth использует authorization code flow:
+
+- Authorization URL: `https://api.prod.whoop.com/oauth/oauth2/auth`
+- Token URL: `https://api.prod.whoop.com/oauth/oauth2/token`
+- Scopes: `offline read:profile read:sleep read:recovery read:cycles`
+
+Web start route не является blind public connect. Telegram settings button создаёт Redis one-time token `whoop:oauth:start:{token}` на 10 минут. `/integrations/whoop/oauth/start` consume-ит его, генерирует OAuth `state`, сохраняет `whoop:oauth:state:{state}` на 10 минут и делает redirect в WHOOP. Callback consume-ит state, меняет code на tokens, получает profile и сохраняет integration.
+
+Tokens никогда не пишутся в логи, Telegram UI, `/status`, docs или PR. `access_token` и `refresh_token` сохраняются только как Fernet-encrypted values. Если `WHOOP_TOKEN_ENCRYPTION_KEY` отсутствует или невалиден, WHOOP считается не настроенным, app startup не падает, OAuth storage блокируется безопасной ошибкой.
+
+Raw sync window по умолчанию 48 часов:
+
+- `GET /developer/v2/user/profile/basic`
+- `GET /developer/v2/activity/sleep`
+- `GET /developer/v2/recovery`
+- `GET /developer/v2/cycle`
+
+`PENDING_SCORE` и `UNSCORABLE` для sleep/recovery/cycle сохраняются в raw records и не считаются sync failure. Это нужно, чтобы следующий cron/manual sync мог обновить pending данные, когда WHOOP досчитает score.
+
+Worker safety:
+
+- `WHOOP_ENABLED=false` -> no-op.
+- incomplete client/redirect/cipher config -> no-op/sanitized warning.
+- no connected integrations -> no-op.
+- Redis lock `whoop:sync:{integration_id}` предотвращает concurrent refresh/sync и снижает риск refresh-token rotation race.
+- 429/5xx WHOOP responses превращаются в controlled errors и обновляют `last_error`, без retry storm.
+
+`/status` показывает только compact sanitized block: enabled/configured, connected integrations, last sync, last error count. Он не делает live WHOOP calls.
+
+Stage 5 сможет читать raw tables и строить личную digest card отдельным PR, но Stage 4 не меняет scheduled digest renderer и не добавляет WHOOP в утреннюю сводку.
+
 ## Списки покупок и напоминания
 
 Stage 4G добавляет только явные команды пользователя. Router `app/bot/routers/lists_reminders.py` подключён до generic private/group LLM handlers, поэтому clear intent не создаёт `process_llm_message`, а обычный разговор продолжает идти в LLM.

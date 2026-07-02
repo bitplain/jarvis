@@ -1,4 +1,5 @@
 import logging
+import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -13,6 +14,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.routes_whoop import store_whoop_connect_token
 from app.bot.middlewares.access import is_admin_user
 from app.core.config import Settings
 from app.db.models import BusinessConnection, BusinessConnectionStatus
@@ -29,6 +31,7 @@ from app.db.repositories.reminders import ReminderRepository
 from app.db.repositories.runtime_settings import RuntimeSettingRepository
 from app.db.repositories.shopping import ShoppingRepository
 from app.db.repositories.telegram_access import TelegramAccessRepository
+from app.db.repositories.whoop import WhoopIntegrationRepository
 from app.llm.base import LLMProviderError
 from app.llm.factory import build_llm_provider
 from app.llm.types import LLMMessage
@@ -104,6 +107,10 @@ SETTINGS_CALLBACK_WEB_SEARCH = "settings:web_search"
 SETTINGS_CALLBACK_WEB_SEARCH_TOGGLE = "settings:web_search:toggle"
 SETTINGS_CALLBACK_WEB_SEARCH_PROVIDER = "settings:web_search:provider"
 SETTINGS_CALLBACK_WEB_SEARCH_MAX_RESULTS = "settings:web_search:max_results"
+SETTINGS_CALLBACK_WHOOP = "settings:whoop"
+SETTINGS_CALLBACK_WHOOP_CONNECT = "settings:whoop:connect"
+SETTINGS_CALLBACK_WHOOP_SYNC = "settings:whoop:sync"
+SETTINGS_CALLBACK_WHOOP_DISCONNECT = "settings:whoop:disconnect"
 SETTINGS_CALLBACK_HELPDESK = "settings:helpdesk"
 SETTINGS_CALLBACK_HELPDESK_VACATION_ON = "settings:helpdesk:vacation:on"
 SETTINGS_CALLBACK_HELPDESK_VACATION_OFF = "settings:helpdesk:vacation:off"
@@ -330,6 +337,12 @@ def build_settings_keyboard() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
+                    text="WHOOP",
+                    callback_data=SETTINGS_CALLBACK_WHOOP,
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text="HelpDesk",
                     callback_data=SETTINGS_CALLBACK_HELPDESK,
                 )
@@ -530,6 +543,42 @@ def build_web_search_settings_keyboard(*, enabled: bool) -> InlineKeyboardMarkup
             ],
         ]
     )
+
+
+def build_whoop_settings_keyboard(*, configured: bool, connected: bool) -> InlineKeyboardMarkup:
+    connect_text = "Переподключить WHOOP" if connected else "Подключить WHOOP"
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=connect_text,
+                callback_data=SETTINGS_CALLBACK_WHOOP_CONNECT,
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="Синхронизировать сейчас",
+                callback_data=SETTINGS_CALLBACK_WHOOP_SYNC,
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="Отключить",
+                callback_data=SETTINGS_CALLBACK_WHOOP_DISCONNECT,
+            )
+        ],
+        [
+            InlineKeyboardButton(text="Назад", callback_data=SETTINGS_CALLBACK_REFRESH),
+            InlineKeyboardButton(text="Закрыть", callback_data=SETTINGS_CALLBACK_CLOSE),
+        ],
+    ]
+    if not configured:
+        rows[1] = [
+            InlineKeyboardButton(
+                text="Синхронизация недоступна",
+                callback_data=SETTINGS_CALLBACK_WHOOP_SYNC,
+            )
+        ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def build_helpdesk_settings_keyboard(*, vacation_enabled: bool) -> InlineKeyboardMarkup:
@@ -778,6 +827,7 @@ def render_settings_home_text() -> str:
         "- Сводка дня\n"
         "- Дайджесты\n"
         "- Интернет-поиск\n"
+        "- WHOOP\n"
         "- HelpDesk"
     )
 
@@ -902,6 +952,38 @@ def render_web_search_settings_text(
         "что нового по ...\n\n"
         "Действия:"
         f"{degraded}"
+    )
+
+
+def render_whoop_settings_text(
+    *,
+    enabled: bool,
+    configured: bool,
+    status: str | None,
+    last_sync_at: datetime | None,
+    last_error: str | None,
+    scope: str,
+) -> str:
+    if not enabled or not configured:
+        status_label = "не настроен"
+    elif status == "connected":
+        status_label = "подключён"
+    elif status == "error":
+        status_label = "ошибка"
+    elif status == "revoked":
+        status_label = "отключён"
+    else:
+        status_label = "не подключён"
+    last_sync = last_sync_at.isoformat() if last_sync_at is not None else "never"
+    last_error_text = last_error or "none"
+    scopes = scope or "missing"
+    return (
+        "WHOOP\n\n"
+        f"Статус: {status_label}\n"
+        f"Last sync: {last_sync}\n"
+        f"Last error: {last_error_text}\n"
+        f"Scopes: {scopes}\n\n"
+        "Действия:"
     )
 
 
@@ -1162,6 +1244,51 @@ async def _render_web_search_settings(
         provider_key_available=_web_search_provider_key_available(settings, web_settings.provider),
     )
     return text, build_web_search_settings_keyboard(enabled=web_settings.enabled)
+
+
+async def _render_whoop_settings(
+    session: object,
+    settings: Settings,
+    user_id: int,
+) -> tuple[str, InlineKeyboardMarkup]:
+    if not settings.whoop_configured:
+        text = render_whoop_settings_text(
+            enabled=settings.whoop_enabled,
+            configured=False,
+            status="not_connected",
+            last_sync_at=None,
+            last_error=None,
+            scope="",
+        )
+        return text, build_whoop_settings_keyboard(configured=False, connected=False)
+    try:
+        integration = await WhoopIntegrationRepository(
+            cast(AsyncSession, session)
+        ).get_by_telegram_user_id(user_id)
+    except Exception as exc:
+        logger.warning("whoop_settings_open_failed", extra={"error_type": type(exc).__name__})
+        text = render_whoop_settings_text(
+            enabled=settings.whoop_enabled,
+            configured=True,
+            status="error",
+            last_sync_at=None,
+            last_error="db_unavailable",
+            scope="",
+        )
+        return text, build_whoop_settings_keyboard(configured=True, connected=False)
+    status = str(getattr(integration, "status", "not_connected")) if integration else None
+    text = render_whoop_settings_text(
+        enabled=settings.whoop_enabled,
+        configured=True,
+        status=status,
+        last_sync_at=getattr(integration, "last_sync_at", None) if integration else None,
+        last_error=getattr(integration, "last_error", None) if integration else None,
+        scope=str(getattr(integration, "scope", "") or "") if integration else "",
+    )
+    return text, build_whoop_settings_keyboard(
+        configured=True,
+        connected=status in {"connected", "error"},
+    )
 
 
 async def _render_helpdesk_settings(
@@ -2070,6 +2197,74 @@ async def handle_settings_callback(callback: CallbackQuery, **data: Any) -> None
         )
         if edited:
             await callback.answer("Лимит сохранён.", show_alert=False)
+        return
+    if callback_data == SETTINGS_CALLBACK_WHOOP:
+        text, keyboard = await _render_whoop_settings(session, settings, user_id)
+        edited = await _edit_settings_callback_message(
+            callback,
+            text=text,
+            reply_markup=keyboard,
+        )
+        if edited:
+            await callback.answer()
+        return
+    if callback_data == SETTINGS_CALLBACK_WHOOP_CONNECT:
+        if not settings.whoop_configured:
+            await callback.answer(
+                "WHOOP не настроен: добавьте Railway Variables после merge.",
+                show_alert=True,
+            )
+            return
+        redis = data.get("redis")
+        if redis is None or not hasattr(redis, "set"):
+            await callback.answer("Redis временно недоступен для OAuth state.", show_alert=True)
+            return
+        token = secrets.token_urlsafe(32)
+        await store_whoop_connect_token(redis, token=token, telegram_user_id=user_id)
+        start_url = (
+            f"{settings.public_base_url.rstrip('/')}"
+            f"/integrations/whoop/oauth/start?connect_token={token}"
+        )
+        if callback.message is not None:
+            await callback.message.answer(
+                "Ссылка для подключения WHOOP действует 10 минут:\n" f"{start_url}"
+            )
+        await callback.answer("Ссылка отправлена.", show_alert=False)
+        return
+    if callback_data == SETTINGS_CALLBACK_WHOOP_SYNC:
+        if not settings.whoop_configured:
+            await callback.answer("WHOOP не настроен.", show_alert=True)
+            return
+        integration = await WhoopIntegrationRepository(
+            cast(AsyncSession, session)
+        ).get_by_telegram_user_id(user_id)
+        if integration is None or getattr(integration, "status", "") not in {"connected", "error"}:
+            await callback.answer("WHOOP не подключён.", show_alert=True)
+            return
+        redis = data.get("redis")
+        if redis is None or not hasattr(redis, "enqueue_job"):
+            await callback.answer("Worker queue временно недоступна.", show_alert=True)
+            return
+        integration_id = str(integration.id)
+        await redis.enqueue_job(
+            "sync_whoop_integrations",
+            integration_id,
+            _job_id=f"whoop:sync:manual:{integration_id}",
+        )
+        await callback.answer("Синхронизация запущена.", show_alert=False)
+        return
+    if callback_data == SETTINGS_CALLBACK_WHOOP_DISCONNECT:
+        await WhoopIntegrationRepository(cast(AsyncSession, session)).revoke_for_telegram_user_id(
+            user_id
+        )
+        text, keyboard = await _render_whoop_settings(session, settings, user_id)
+        edited = await _edit_settings_callback_message(
+            callback,
+            text=text,
+            reply_markup=keyboard,
+        )
+        if edited:
+            await callback.answer("WHOOP отключён.", show_alert=False)
         return
     if callback_data == SETTINGS_CALLBACK_HELPDESK:
         try:

@@ -16,6 +16,7 @@ from app.db.models import (
     Reminder,
     RuntimeSetting,
     TelegramAccessEntry,
+    WhoopIntegration,
 )
 from app.db.repositories.runtime_settings import RuntimeSettingRepository
 from app.services.helpdesk_imap.config import HelpdeskImapConfig
@@ -79,6 +80,7 @@ class StatusService:
             "prompt_profiles": await self._prompt_profiles(postgres["ok"]),
             "access_db": await self._access_db(postgres["ok"]),
             "digests": await self._digests(postgres["ok"]),
+            "whoop": await self._whoop(postgres["ok"]),
             "helpdesk_imap": await self._helpdesk_imap(postgres["ok"]),
         }
 
@@ -207,6 +209,44 @@ class StatusService:
                 }
                 for policy in policies
             ],
+        }
+
+    async def _whoop(self, postgres_ok: bool) -> dict[str, Any]:
+        if self.session is None or not postgres_ok:
+            return {
+                "enabled": self.settings.whoop_enabled,
+                "configured": self.settings.whoop_configured,
+                "connected_integrations": None,
+                "last_sync": "unknown",
+                "last_error_count": None,
+            }
+        try:
+            connected = await self.session.execute(
+                select(func.count(WhoopIntegration.id)).where(
+                    WhoopIntegration.status == "connected"
+                )
+            )
+            last_sync = await self.session.execute(select(func.max(WhoopIntegration.last_sync_at)))
+            last_error_count = await self.session.execute(
+                select(func.count(WhoopIntegration.id)).where(
+                    WhoopIntegration.last_error.is_not(None)
+                )
+            )
+        except Exception:
+            await self.session.rollback()
+            return {
+                "enabled": self.settings.whoop_enabled,
+                "configured": self.settings.whoop_configured,
+                "connected_integrations": None,
+                "last_sync": "unknown",
+                "last_error_count": None,
+            }
+        return {
+            "enabled": self.settings.whoop_enabled,
+            "configured": self.settings.whoop_configured,
+            "connected_integrations": int(connected.scalar_one()),
+            "last_sync": _iso_or_never(last_sync.scalar_one()),
+            "last_error_count": int(last_error_count.scalar_one()),
         }
 
     async def _helpdesk_imap(self, postgres_ok: bool) -> dict[str, Any]:
@@ -364,6 +404,7 @@ class StatusService:
 def render_status_html(snapshot: dict[str, Any]) -> str:
     helpdesk = snapshot.get("helpdesk_imap") or {}
     digests = snapshot.get("digests") or {}
+    whoop = snapshot.get("whoop") or {}
     failed_notifications = helpdesk.get("failed_notifications")
     failed_attention = ""
     if _positive_count(failed_notifications):
@@ -412,6 +453,7 @@ def render_status_html(snapshot: dict[str, Any]) -> str:
         f"- vacation last reviewed: {helpdesk.get('vacation_last_reviewed', 'unknown')}\n"
         f"{failed_attention}\n"
         f"{_render_digests_status(digests)}\n"
+        f"{_render_whoop_status(whoop)}\n"
         "Last checks:\n"
         f"- DB latency: {_latency(snapshot['postgres'].get('latency_ms'))}\n"
         f"- Redis latency: {_latency(snapshot['redis'].get('latency_ms'))}\n"
@@ -513,6 +555,16 @@ def _render_digests_status(digests: dict[str, Any]) -> str:
             f"- {key}: {enabled}, {send_time} {timezone}, chat {chat}, "
             f"last sent {last_sent}"
         )
+    return "\n".join(lines)
+
+
+def _render_whoop_status(whoop: dict[str, Any]) -> str:
+    lines = ["WHOOP:"]
+    lines.append(f"- enabled: {_yes_no(bool(whoop.get('enabled', False)))}")
+    lines.append(f"- configured: {_yes_no(bool(whoop.get('configured', False)))}")
+    lines.append(f"- connected integrations: {_count(whoop.get('connected_integrations'))}")
+    lines.append(f"- last sync: {whoop.get('last_sync', 'unknown')}")
+    lines.append(f"- last error count: {_count(whoop.get('last_error_count'))}")
     return "\n".join(lines)
 
 

@@ -143,7 +143,12 @@ async def run_readiness() -> EventDigestReadinessResult:
         )
         else "MISSING"
     )
-    scoped = "\n".join([migration, service, repository, commands, worker])
+    digest_worker = _slice_between(
+        worker,
+        "async def send_due_digests",
+        "async def remind_helpdesk_tickets",
+    )
+    scoped = "\n".join([migration, service, repository, event_items, digest_worker])
     result.statuses["no_whoop_oauth_scope"] = (
         "OK"
         if "OAuth" not in scoped
@@ -176,6 +181,16 @@ def main() -> None:
     print(result.render_sanitized())  # noqa: T201
     if result.verdict != "PASS_EVENT_DIGEST_READINESS":
         raise SystemExit(1)
+
+
+def _slice_between(text: str, start: str, end: str) -> str:
+    start_index = text.find(start)
+    if start_index < 0:
+        return ""
+    end_index = text.find(end, start_index)
+    if end_index < 0:
+        return text[start_index:]
+    return text[start_index:end_index]
 
 
 if __name__ == "__main__":
