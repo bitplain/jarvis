@@ -22,6 +22,13 @@ WHOOP_OAUTH_STATE_TTL_SECONDS = 600
 WHOOP_OAUTH_START_TTL_SECONDS = 600
 WHOOP_OAUTH_START_PREFIX = "whoop:oauth:start:"
 WHOOP_OAUTH_STATE_PREFIX = "whoop:oauth:state:"
+REDIS_GETDEL_LUA = """
+local value = redis.call("GET", KEYS[1])
+if value then
+  redis.call("DEL", KEYS[1])
+end
+return value
+"""
 
 
 @router.get("/integrations/whoop/oauth/start", response_model=None)
@@ -134,13 +141,29 @@ async def _get_redis_pool(request: Request, settings: Settings) -> Any:
 
 
 async def _consume_redis_value(redis: Any, key: str) -> str | None:
-    raw = await redis.get(key)
+    raw = await _atomic_get_delete(redis, key)
     if raw is None:
         return None
-    await redis.delete(key)
     if isinstance(raw, bytes):
         return raw.decode("utf-8", errors="ignore")
     return str(raw)
+
+
+async def _atomic_get_delete(redis: Any, key: str) -> Any:
+    getdel = getattr(redis, "getdel", None)
+    if callable(getdel):
+        try:
+            return await getdel(key)
+        except Exception as exc:
+            if "unknown command" not in str(exc).lower():
+                raise
+    eval_script = getattr(redis, "eval", None)
+    if callable(eval_script):
+        return await eval_script(REDIS_GETDEL_LUA, 1, key)
+    execute_command = getattr(redis, "execute_command", None)
+    if callable(execute_command):
+        return await execute_command("EVAL", REDIS_GETDEL_LUA, 1, key)
+    raise RuntimeError("redis_atomic_consume_unavailable")
 
 
 def _error_page(message: str, status_code: int = status.HTTP_400_BAD_REQUEST) -> HTMLResponse:

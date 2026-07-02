@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
@@ -18,8 +19,10 @@ from app.services.whoop_client import (
     WHOOP_AUTHORIZATION_URL,
     WHOOP_SCOPES,
     WHOOP_TOKEN_URL,
+    WhoopClientError,
     WhoopRateLimitError,
     WhoopServerError,
+    WhoopUnauthorizedError,
     build_authorization_url,
     exchange_code_for_tokens,
     get_sleep_collection,
@@ -306,9 +309,45 @@ class FakeRedis:
     async def get(self, key: str) -> str | None:
         return self.values.get(key)
 
+    async def getdel(self, key: str) -> str | None:
+        return self.values.pop(key, None)
+
     async def delete(self, key: str) -> None:
         self.deleted.append(key)
         self.values.pop(key, None)
+
+
+class RaceyRedis(FakeRedis):
+    async def get(self, key: str) -> str | None:
+        await asyncio.sleep(0)
+        return self.values.get(key)
+
+    async def delete(self, key: str) -> None:
+        await asyncio.sleep(0)
+        await super().delete(key)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key",
+    [
+        "whoop:oauth:start:start-token",
+        "whoop:oauth:state:state-token",
+    ],
+)
+async def test_whoop_oauth_token_consume_is_atomic_under_parallel_access(key: str) -> None:
+    redis = RaceyRedis()
+    redis.values[key] = "100500"
+
+    from app.api.routes_whoop import _consume_redis_value
+
+    results = await asyncio.gather(
+        _consume_redis_value(redis, key),
+        _consume_redis_value(redis, key),
+    )
+
+    assert results.count("100500") == 1
+    assert results.count(None) == 1
 
 
 @pytest.mark.asyncio
@@ -341,7 +380,7 @@ async def test_whoop_oauth_start_uses_one_time_token_and_stores_state() -> None:
     assert len(state_keys) == 1
     assert redis.values[state_keys[0]] == "100500"
     assert redis.expirations[state_keys[0]] == 600
-    assert "whoop:oauth:start:start-token" in redis.deleted
+    assert "whoop:oauth:start:start-token" not in redis.values
 
 
 @pytest.mark.asyncio
@@ -376,13 +415,23 @@ async def test_whoop_oauth_callback_rejects_bad_state_and_success_hides_tokens()
             "/integrations/whoop/oauth/callback",
             params={"state": "good-state", "code": "secret-code"},
         )
+        repeated = await client.get(
+            "/integrations/whoop/oauth/callback",
+            params={"state": "good-state", "code": "secret-code"},
+        )
+        missing = await client.get(
+            "/integrations/whoop/oauth/callback",
+            params={"state": "missing-state", "code": "secret-code"},
+        )
 
     assert bad.status_code == 400
     assert "secret-code" not in bad.text
     assert good.status_code == 200
     assert "WHOOP подключён" in good.text
     assert "secret-code" not in good.text
-    assert "whoop:oauth:state:good-state" in redis.deleted
+    assert repeated.status_code == 400
+    assert missing.status_code == 400
+    assert "whoop:oauth:state:good-state" not in redis.values
 
 
 class FakeWhoopRepository:
@@ -543,6 +592,54 @@ class FakeWhoopClient:
         ]
 
 
+class UnauthorizedThenSuccessWhoopClient:
+    def __init__(self) -> None:
+        self.refresh_calls = 0
+        self.profile_calls: list[str] = []
+
+    async def refresh_access_token(self, **kwargs: Any) -> object:
+        assert kwargs["refresh_token"] == "refresh-1"
+        self.refresh_calls += 1
+        return SimpleNamespace(
+            access_token="access-2",
+            refresh_token="refresh-2",
+            expires_in=3600,
+            scope="offline read:profile read:sleep read:recovery read:cycles",
+        )
+
+    async def get_profile(self, **kwargs: Any) -> dict[str, Any]:
+        access_token = str(kwargs["access_token"])
+        self.profile_calls.append(access_token)
+        if access_token == "stale-access":
+            raise WhoopUnauthorizedError("whoop_unauthorized", status_code=401)
+        return {"user_id": 42}
+
+    async def get_sleep_collection(self, **kwargs: Any) -> list[dict[str, Any]]:
+        assert kwargs["access_token"] == "access-2"
+        return []
+
+    async def get_recovery_collection(self, **kwargs: Any) -> list[dict[str, Any]]:
+        assert kwargs["access_token"] == "access-2"
+        return []
+
+    async def get_cycle_collection(self, **kwargs: Any) -> list[dict[str, Any]]:
+        assert kwargs["access_token"] == "access-2"
+        return []
+
+
+class RefreshFailsWhoopClient(UnauthorizedThenSuccessWhoopClient):
+    async def refresh_access_token(self, **kwargs: Any) -> object:
+        self.refresh_calls += 1
+        raise WhoopClientError("whoop_refresh_failed")
+
+
+class RetryStillUnauthorizedWhoopClient(UnauthorizedThenSuccessWhoopClient):
+    async def get_profile(self, **kwargs: Any) -> dict[str, Any]:
+        access_token = str(kwargs["access_token"])
+        self.profile_calls.append(access_token)
+        raise WhoopUnauthorizedError("whoop_unauthorized", status_code=401)
+
+
 @pytest.mark.asyncio
 async def test_whoop_sync_refreshes_rotated_tokens_and_upserts_pending_raw_records() -> None:
     cipher = SecretCipher(SecretCipher.generate_key())
@@ -570,6 +667,66 @@ async def test_whoop_sync_refreshes_rotated_tokens_and_upserts_pending_raw_recor
     assert repository.cycle_records[0]["score_state"] == "SCORED"
     assert repository.successes == [NOW, NOW]
     assert repository.errors == []
+
+
+@pytest.mark.asyncio
+async def test_whoop_sync_refreshes_once_and_retries_after_401_with_stale_access_token() -> None:
+    cipher = SecretCipher(SecretCipher.generate_key())
+    repository = FakeWhoopRepository(cipher)
+    repository.integration.access_token_encrypted = cipher.encrypt("stale-access")
+    repository.integration.refresh_token_encrypted = cipher.encrypt("refresh-1")
+    repository.integration.expires_at = NOW + timedelta(hours=1)
+    client = UnauthorizedThenSuccessWhoopClient()
+    service = WhoopSyncService(repository=repository, cipher=cipher, client=client)
+
+    result = await service.sync_whoop_user("integration-1", now=NOW)
+
+    assert result.status == "synced"
+    assert client.refresh_calls == 1
+    assert client.profile_calls == ["stale-access", "access-2"]
+    assert cipher.decrypt(repository.integration.access_token_encrypted) == "access-2"
+    assert cipher.decrypt(repository.integration.refresh_token_encrypted) == "refresh-2"
+    assert repository.successes == [NOW]
+    assert repository.errors == []
+
+
+@pytest.mark.asyncio
+async def test_whoop_sync_refresh_failure_after_401_is_controlled_without_token_leak() -> None:
+    cipher = SecretCipher(SecretCipher.generate_key())
+    repository = FakeWhoopRepository(cipher)
+    repository.integration.access_token_encrypted = cipher.encrypt("stale-access")
+    repository.integration.refresh_token_encrypted = cipher.encrypt("refresh-1")
+    repository.integration.expires_at = NOW + timedelta(hours=1)
+    client = RefreshFailsWhoopClient()
+    service = WhoopSyncService(repository=repository, cipher=cipher, client=client)
+
+    result = await service.sync_whoop_user("integration-1", now=NOW)
+
+    assert result.status == "failed"
+    assert result.error_code == "whoop_refresh_failed"
+    assert client.refresh_calls == 1
+    assert repository.errors == ["whoop_refresh_failed"]
+    assert "refresh-1" not in repository.errors[0]
+
+
+@pytest.mark.asyncio
+async def test_whoop_sync_retries_401_only_once_without_loop() -> None:
+    cipher = SecretCipher(SecretCipher.generate_key())
+    repository = FakeWhoopRepository(cipher)
+    repository.integration.access_token_encrypted = cipher.encrypt("stale-access")
+    repository.integration.refresh_token_encrypted = cipher.encrypt("refresh-1")
+    repository.integration.expires_at = NOW + timedelta(hours=1)
+    client = RetryStillUnauthorizedWhoopClient()
+    service = WhoopSyncService(repository=repository, cipher=cipher, client=client)
+
+    result = await service.sync_whoop_user("integration-1", now=NOW)
+
+    assert result.status == "failed"
+    assert result.error_code == "whoop_unauthorized"
+    assert client.refresh_calls == 1
+    assert client.profile_calls == ["stale-access", "access-2"]
+    assert len(repository.updated_tokens) == 1
+    assert repository.errors == ["whoop_unauthorized"]
 
 
 def test_whoop_worker_is_registered() -> None:
