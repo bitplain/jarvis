@@ -963,3 +963,31 @@ async def test_whoop_worker_redis_lock_prevents_concurrent_sync(
     await jobs.sync_whoop_integrations({"redis": redis})
 
     assert FakeWorkerWhoopSyncService.calls == []
+
+
+@pytest.mark.asyncio
+async def test_whoop_worker_manual_force_bypasses_stale_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis = FakeRedis()
+    redis.values["whoop:sync:integration-1"] = "1"
+    FakeWorkerWhoopRepository.integrations = [SimpleNamespace(id="integration-1")]
+    FakeWorkerWhoopSyncService.calls = []
+    monkeypatch.setattr(
+        jobs,
+        "get_settings",
+        lambda: Settings(
+            whoop_enabled=True,
+            whoop_client_id="client-id",
+            whoop_client_secret="client-secret",
+            whoop_redirect_uri="https://jarvis.example.com/integrations/whoop/oauth/callback",
+            whoop_token_encryption_key=SecretCipher.generate_key(),
+        ),
+    )
+    monkeypatch.setattr(jobs, "SessionLocal", FakeWorkerSessionLocal())
+    monkeypatch.setattr(jobs, "WhoopIntegrationRepository", FakeWorkerWhoopRepository)
+    monkeypatch.setattr(jobs, "WhoopSyncService", FakeWorkerWhoopSyncService)
+
+    await jobs.sync_whoop_integrations({"redis": redis}, "integration-1", force=True)
+
+    assert FakeWorkerWhoopSyncService.calls == ["integration-1"]

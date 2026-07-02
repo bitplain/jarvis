@@ -726,6 +726,8 @@ async def check_helpdesk_imap_mailbox(ctx: dict[str, Any]) -> None:
 async def sync_whoop_integrations(
     ctx: dict[str, Any],
     integration_id: str | None = None,
+    *,
+    force: bool = False,
 ) -> None:
     settings = get_settings()
     redis = ctx.get("redis") if isinstance(ctx, dict) else None
@@ -751,7 +753,8 @@ async def sync_whoop_integrations(
         service = WhoopSyncService(repository=repository, cipher=cipher, client=client)
         for integration in integrations:
             current_id = str(integration.id)
-            if not await _claim_whoop_sync(redis, integration_id=current_id):
+            if not force and not await _claim_whoop_sync(redis, integration_id=current_id):
+                logger.info("whoop_sync_skipped_locked")
                 continue
             result = await service.sync_whoop_user(current_id, now=utcnow())
             if result.status == "failed":
