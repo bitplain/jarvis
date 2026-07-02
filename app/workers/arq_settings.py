@@ -10,6 +10,7 @@ from app.workers.jobs import (
     process_llm_message,
     remind_helpdesk_tickets,
     send_due_digests,
+    sync_whoop_integrations,
 )
 
 settings = get_settings()
@@ -28,6 +29,7 @@ class WorkerSettings:
         send_due_digests,
         check_helpdesk_imap_mailbox,
         remind_helpdesk_tickets,
+        sync_whoop_integrations,
     ]
     cron_jobs = [
         cron(deliver_due_reminders, second={0, 30}),
@@ -35,6 +37,7 @@ class WorkerSettings:
         cron(send_due_digests),
         cron(check_helpdesk_imap_mailbox),
         cron(remind_helpdesk_tickets),
+        cron(sync_whoop_integrations, minute={0, 30}),
     ]
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     on_startup = configure_worker_logging
