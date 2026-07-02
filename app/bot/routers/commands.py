@@ -10,7 +10,13 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    LinkPreviewOptions,
+    Message,
+)
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -2227,7 +2233,8 @@ async def handle_settings_callback(callback: CallbackQuery, **data: Any) -> None
         )
         if callback.message is not None:
             await callback.message.answer(
-                "Ссылка для подключения WHOOP действует 10 минут:\n" f"{start_url}"
+                "Ссылка для подключения WHOOP действует 10 минут:\n" f"{start_url}",
+                link_preview_options=LinkPreviewOptions(is_disabled=True),
             )
         await callback.answer("Ссылка отправлена.", show_alert=False)
         return
