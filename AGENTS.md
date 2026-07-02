@@ -366,6 +366,28 @@
 - Default digest timezone зафиксирован как `Europe/Moscow`.
 - Stage 1A/2A не реализует WHOOP OAuth/sync, AI-анализ сна, digest scheduling, production deploy, Railway config changes и HelpDesk migration в `event_items`.
 
+## Stage 3 Event Inbox Digests
+
+- Scheduled digests строятся только из `event_items`.
+- Default policies хранятся в PostgreSQL таблице `digest_policies`.
+- `personal_morning`: `06:50 Europe/Moscow`, scopes `personal`, `household`.
+- `work_start`: `09:00 Europe/Moscow`, scope `work`.
+- Личный дайджест не должен включать `work`, HelpDesk/tickets и `system`.
+- Рабочий дайджест не должен включать `personal`, `household` и `system`.
+- `system` events не включаются по умолчанию.
+- `target_chat_id` не угадывается и не берётся из env secrets; если chat не настроен, policy считается chat missing и worker её не отправляет.
+- Chat для policy задаётся вручную через `/settings -> Дайджесты -> Использовать этот чат` только из личного чата администратора.
+- `/digest` показывает admin-only status policies и кнопки show-now/settings.
+- `/settings -> Дайджесты` доступен только env admin из `ADMIN_TELEGRAM_IDS`.
+- Edit time принимает только `HH:MM`, edit timezone валидируется как IANA timezone через `zoneinfo.ZoneInfo`; `/cancel` очищает FSM input.
+- Worker job `send_due_digests` запускается cron раз в минуту.
+- Worker должен поставить Redis claim `digest:send:{policy_key}:{local_date}` до Telegram send; duplicate claim не отправляет digest.
+- При успешной Telegram отправке worker обновляет `last_sent_date` и `last_sent_at`; при Telegram send failure не mark-ит sent и удаляет claim, чтобы retry был возможен.
+- Grace window расписания — 30 минут: `06:50` можно отправить до `07:20`, `09:00` до `09:30`; после окна MVP пропускает digest до следующего дня и не создаёт backlog flood.
+- Digest renderer использует Telegram HTML, экранирует пользовательский текст через `html.escape`, не показывает raw JSON/payload/secrets и держится в лимите Telegram.
+- WHOOP/OAuth в Stage 3 не включается.
+- HelpDesk migration в `event_items` в Stage 3 не выполняется, если это расширяет scope.
+
 ## Logging Hygiene
 
 - Normal operational app logs уровня `DEBUG`/`INFO` должны писаться в stdout; реальные warning/error/exception остаются на stderr.

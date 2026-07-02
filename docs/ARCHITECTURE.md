@@ -108,6 +108,28 @@ Stage 1A/2A добавляет базу Event Center без WHOOP OAuth/sync, AI
 Сортировка MVP: priority desc, `due_at` asc/nulls last, затем `created_at` desc, лимит 10 событий.
 Callback actions `done`, `snooze`, `details` имеют отдельную access check, потому что message middleware не защищает callback queries. Callback data не содержит пользовательский текст, prompts, JSON, URLs, tokens или env secrets.
 
+### Stage 3 Event Inbox Digests
+
+Stage 3 добавляет scheduled digests поверх `event_items`, не включая WHOOP OAuth/sync и не мигрируя HelpDesk workflow в `event_items`.
+
+Кодовые границы:
+
+- `digest_policies` — PostgreSQL policy table с `key`, `title`, `enabled`, `scope_filter_json`, `send_time`, `timezone`, optional `target_chat_id`, `last_sent_date`, `last_sent_at`;
+- `app/db/repositories/digests.py` — default policies, settings updates, due selection и `mark_sent_if_due`;
+- `app/services/digests.py` — digest builder, scope extraction, 30-minute grace window и Telegram HTML renderer;
+- `app/workers/jobs.py::send_due_digests` — scheduled delivery через arq cron и Redis claim;
+- `/settings -> Дайджесты` и `/digest` — admin-only Telegram UI.
+
+Default policies:
+
+- `personal_morning`: `06:50 Europe/Moscow`, scopes `personal`, `household`;
+- `work_start`: `09:00 Europe/Moscow`, scope `work`.
+
+Scope separation жёсткое: личный дайджест не включает `work` и tickets, рабочий дайджест не включает `personal`/`household`, `system` events не включаются по умолчанию.
+Если `target_chat_id` не задан, scheduled worker не отправляет policy автоматически. Chat задаётся только вручную через `Использовать этот чат` в личном чате администратора; Jarvis не угадывает chat id.
+Worker claim key: `digest:send:{policy_key}:{local_date}`, TTL 36 часов. Claim ставится до Telegram send; при duplicate claim отправка пропускается, при Telegram send failure claim удаляется и `last_sent_date` не обновляется.
+Grace window — 30 минут: если worker был выключен дольше окна (`06:50 -> 07:20`, `09:00 -> 09:30`), MVP не догоняет старый digest и ждёт следующий локальный день.
+
 ## Списки покупок и напоминания
 
 Stage 4G добавляет только явные команды пользователя. Router `app/bot/routers/lists_reminders.py` подключён до generic private/group LLM handlers, поэтому clear intent не создаёт `process_llm_message`, а обычный разговор продолжает идти в LLM.

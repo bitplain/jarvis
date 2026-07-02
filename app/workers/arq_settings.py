@@ -9,6 +9,7 @@ from app.workers.jobs import (
     deliver_due_reminders,
     process_llm_message,
     remind_helpdesk_tickets,
+    send_due_digests,
 )
 
 settings = get_settings()
@@ -24,12 +25,14 @@ class WorkerSettings:
         process_llm_message,
         deliver_due_reminders,
         deliver_daily_briefs,
+        send_due_digests,
         check_helpdesk_imap_mailbox,
         remind_helpdesk_tickets,
     ]
     cron_jobs = [
         cron(deliver_due_reminders, second={0, 30}),
         cron(deliver_daily_briefs),
+        cron(send_due_digests),
         cron(check_helpdesk_imap_mailbox),
         cron(remind_helpdesk_tickets),
     ]

@@ -267,6 +267,27 @@ class EventItem(Base):
     )
 
 
+class DigestPolicy(Base):
+    __tablename__ = "digest_policies"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    key: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    scope_filter_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    send_time: Mapped[str] = mapped_column(Text, nullable=False)
+    timezone: Mapped[str] = mapped_column(Text, nullable=False, default="Europe/Moscow")
+    target_chat_id: Mapped[int | None] = mapped_column(BigInteger)
+    last_sent_date: Mapped[date | None] = mapped_column(Date)
+    last_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        onupdate=utcnow,
+    )
+
+
 class WebSearchCache(Base):
     __tablename__ = "web_search_cache"
     __table_args__ = (

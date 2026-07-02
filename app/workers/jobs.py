@@ -16,6 +16,8 @@ from app.bot.streaming.text_limits import split_telegram_text
 from app.core.config import get_settings
 from app.db.models import MessageRole, utcnow
 from app.db.repositories.daily_brief import DailyBriefSettingsRepository
+from app.db.repositories.digests import DigestPolicyRepository
+from app.db.repositories.event_items import EventItemRepository
 from app.db.repositories.helpdesk_email_events import HelpdeskEmailEventRepository
 from app.db.repositories.helpdesk_imap_mailbox_state import HelpdeskImapMailboxStateRepository
 from app.db.repositories.helpdesk_ticket_work_items import HelpdeskTicketWorkItemRepository
@@ -30,6 +32,7 @@ from app.db.session import SessionLocal
 from app.llm.base import LLMProviderError
 from app.llm.factory import build_llm_provider
 from app.services.daily_brief_service import DailyBriefService
+from app.services.digests import DigestService, render_digest
 from app.services.helpdesk_imap.client import HelpdeskImapClient
 from app.services.helpdesk_imap.config import HelpdeskImapConfig
 from app.services.helpdesk_imap.service import (
@@ -70,6 +73,7 @@ from app.services.web_search.types import WebSearchRequest, WebSearchStatus
 logger = logging.getLogger(__name__)
 USER_ERROR_MESSAGE = "Не получилось подготовить ответ. Попробуйте позже."
 DAILY_BRIEF_SEND_CLAIM_TTL_SECONDS = 36 * 60 * 60
+DIGEST_SEND_CLAIM_TTL_SECONDS = 36 * 60 * 60
 HELPDESK_TICKET_REMINDER_CLAIM_TTL_SECONDS = 120
 
 
@@ -580,6 +584,58 @@ async def deliver_daily_briefs(ctx: dict[str, Any]) -> None:
         await bot.session.close()
 
 
+async def send_due_digests(ctx: dict[str, Any]) -> None:
+    settings = get_settings()
+    bot = Bot(token=settings.telegram_bot_token)
+    try:
+        redis = ctx.get("redis") if isinstance(ctx, dict) else None
+        await record_worker_heartbeat(redis)
+        async with SessionLocal() as session:
+            repository = DigestPolicyRepository(session)
+            now = utcnow()
+            due_policies = await repository.due_for_delivery(now)
+            for policy in due_policies:
+                if policy.target_chat_id is None:
+                    continue
+                timezone = ZoneInfo(policy.timezone)
+                local_date = now.astimezone(timezone).date()
+                if not await _claim_digest_send(
+                    redis,
+                    policy_key=policy.key,
+                    local_date=local_date,
+                ):
+                    continue
+                service = DigestService(
+                    policy_repository=repository,
+                    event_repository=EventItemRepository(session),
+                )
+                digest = await service.build_digest(policy.key, now=now)
+                try:
+                    await bot.send_message(
+                        chat_id=policy.target_chat_id,
+                        text=render_digest(digest),
+                        parse_mode="HTML",
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "digest_send_failed",
+                        extra={"error_type": type(exc).__name__, "policy_key": policy.key},
+                    )
+                    await _release_digest_send_claim(
+                        redis,
+                        policy_key=policy.key,
+                        local_date=local_date,
+                    )
+                    continue
+                await repository.mark_sent_if_due(
+                    policy.key,
+                    local_date,
+                    sent_at=now,
+                )
+    finally:
+        await bot.session.close()
+
+
 async def remind_helpdesk_tickets(ctx: dict[str, Any]) -> None:
     settings = get_settings()
     bot = Bot(token=settings.telegram_bot_token)
@@ -746,6 +802,57 @@ async def _release_daily_brief_send_claim(
 
 def _daily_brief_send_claim_key(*, settings_id: str, local_date: date) -> str:
     return f"daily_brief:send:{settings_id}:{local_date.isoformat()}"
+
+
+async def _claim_digest_send(
+    redis: Any,
+    *,
+    policy_key: str,
+    local_date: date,
+) -> bool:
+    if redis is None:
+        logger.warning("digest_send_claim_unavailable", extra={"error_type": "missing_redis"})
+        return False
+    key = _digest_send_claim_key(policy_key=policy_key, local_date=local_date)
+    try:
+        claimed = await redis.set(
+            key,
+            "1",
+            ex=DIGEST_SEND_CLAIM_TTL_SECONDS,
+            nx=True,
+        )
+    except Exception as exc:
+        logger.warning(
+            "digest_send_claim_unavailable",
+            extra={"error_type": type(exc).__name__},
+        )
+        return False
+    if not claimed:
+        logger.info("digest_duplicate_send_skipped", extra={"policy_key": policy_key})
+        return False
+    return True
+
+
+async def _release_digest_send_claim(
+    redis: Any,
+    *,
+    policy_key: str,
+    local_date: date,
+) -> None:
+    if redis is None:
+        return
+    key = _digest_send_claim_key(policy_key=policy_key, local_date=local_date)
+    try:
+        await redis.delete(key)
+    except Exception as exc:
+        logger.warning(
+            "digest_send_claim_release_failed",
+            extra={"error_type": type(exc).__name__},
+        )
+
+
+def _digest_send_claim_key(*, policy_key: str, local_date: date) -> str:
+    return f"digest:send:{policy_key}:{local_date.isoformat()}"
 
 
 async def _deliver_one_reminder(
