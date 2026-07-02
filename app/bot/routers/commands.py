@@ -2256,7 +2256,8 @@ async def handle_settings_callback(callback: CallbackQuery, **data: Any) -> None
         await redis.enqueue_job(
             "sync_whoop_integrations",
             integration_id,
-            _job_id=f"whoop:sync:manual:{integration_id}",
+            force=True,
+            _job_id=f"whoop:sync:manual:{integration_id}:{secrets.token_urlsafe(8)}",
         )
         await callback.answer("Синхронизация запущена.", show_alert=False)
         return

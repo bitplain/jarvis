@@ -86,6 +86,7 @@ class FakeRedis:
     def __init__(self) -> None:
         self.values: dict[str, str] = {}
         self.expirations: dict[str, int] = {}
+        self.jobs: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
 
     async def set(self, key: str, value: str, *, ex: int, nx: bool = False) -> bool | None:
         if nx and key in self.values:
@@ -93,6 +94,10 @@ class FakeRedis:
         self.values[key] = value
         self.expirations[key] = ex
         return True
+
+    async def enqueue_job(self, name: str, *args: Any, **kwargs: Any) -> object:
+        self.jobs.append((name, args, kwargs))
+        return object()
 
 
 def telegram_bad_request(message: str) -> TelegramBadRequest:
@@ -509,6 +514,18 @@ class FakeTelegramAccessService:
             return AccessMutationResult.NOT_FOUND
         return AccessMutationResult.REMOVED
 
+
+class FakeWhoopIntegrationRepository:
+    integration: Any | None = None
+
+    def __init__(self, session: object) -> None:
+        del session
+
+    async def get_by_telegram_user_id(self, user_id: int) -> Any | None:
+        del user_id
+        return self.__class__.integration
+
+
 class FakeState:
     def __init__(self, state: str | None = None) -> None:
         self.current_state = state
@@ -557,6 +574,7 @@ def patch_settings_service(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(commands, "render_digest", lambda result: f"digest:{result.policy.key}")
     monkeypatch.setattr(commands, "TelegramAccessRepository", lambda session: object())
     monkeypatch.setattr(commands, "TelegramAccessService", FakeTelegramAccessService)
+    FakeWhoopIntegrationRepository.integration = None
 
 
 @pytest.mark.asyncio
@@ -1326,6 +1344,42 @@ async def test_whoop_connect_link_disables_preview_to_keep_one_time_token() -> N
         "Ссылка для подключения WHOOP действует 10 минут:\n"
     )
     assert callback.message.answers[0]["link_preview_options"].is_disabled is True
+
+
+@pytest.mark.asyncio
+async def test_whoop_manual_sync_uses_retryable_unique_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis = FakeRedis()
+    FakeWhoopIntegrationRepository.integration = SimpleNamespace(
+        id="integration-1",
+        status="error",
+    )
+    monkeypatch.setattr(commands, "WhoopIntegrationRepository", FakeWhoopIntegrationRepository)
+
+    for _ in range(2):
+        await commands.handle_settings_callback(
+            FakeCallbackQuery(commands.SETTINGS_CALLBACK_WHOOP_SYNC, user_id=100500),  # type: ignore[arg-type]
+            settings=Settings(
+                admin_telegram_ids="100500",
+                whoop_enabled=True,
+                whoop_client_id="client-id",
+                whoop_client_secret="client-secret",
+                whoop_redirect_uri="https://jarvis.example.com/integrations/whoop/oauth/callback",
+                whoop_token_encryption_key="cipher-key",
+            ),
+            db_session=object(),
+            redis=redis,
+        )
+
+    assert [job[0] for job in redis.jobs] == ["sync_whoop_integrations", "sync_whoop_integrations"]
+    assert [job[1] for job in redis.jobs] == [
+        ("integration-1",),
+        ("integration-1",),
+    ]
+    assert redis.jobs[0][2]["force"] is True
+    assert redis.jobs[1][2]["force"] is True
+    assert redis.jobs[0][2]["_job_id"] != redis.jobs[1][2]["_job_id"]
 
 
 @pytest.mark.asyncio
